@@ -1,0 +1,15 @@
+{
+  "name": "Luprah Trading ERP",
+  "short_name": "Luprah ERP",
+  "description": "Luprah Trading store management",
+  "start_url": "index.php",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f4f6f9",
+  "theme_color": "#3b82f6",
+  "icons": [
+    { "src": "assets/luprah-logo.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "assets/luprah-logo.png", "sizes": "192x192", "type": "image/png", "purpose": "any" }
+  ]
+}

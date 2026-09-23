@@ -2,3 +2,9 @@ config.php
 backups/
 error_log
 *.log
+
+# Live-only uploaded files — never overwritten by deploys, and ignored here
+# too so a repo cloned on top of an already-live erp/ folder isn't seen as
+# "dirty" just because real product images sit in this folder.
+uploads/*
+!uploads/.htaccess

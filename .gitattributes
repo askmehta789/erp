@@ -1,0 +1,12 @@
+# Force consistent LF line endings everywhere, regardless of the OS or editor
+# used to commit — prevents the server's checkout from silently rewriting
+# files and showing up as "uncommitted changes" right after a clone/pull.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary

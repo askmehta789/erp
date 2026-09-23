@@ -1,0 +1,5 @@
+---
+deployment:
+  tasks:
+    - export DEPLOYPATH=$HOME/public_html/erp/
+    - /usr/bin/rsync -rv --exclude='.git' --exclude='.cpanel.yml' --exclude='config.php' --exclude='uploads/' --exclude='backups/' ./ $DEPLOYPATH

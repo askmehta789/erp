@@ -17,6 +17,9 @@ try { q("CREATE TABLE IF NOT EXISTS cod_ledger(
   created_by VARCHAR(80) DEFAULT '',
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"); } catch (Exception $e) {}
 
+try { q("ALTER TABLE cod_ledger ADD COLUMN category VARCHAR(40) DEFAULT ''"); } catch (Exception $e) {}
+$codCats = ['Courier Release','Bank Transfer','Supplier Payment','Salary Advance','Rent','Ads Payment','Refund','Correction','Other'];
+
 $couriers = rows("SELECT id,name FROM couriers ORDER BY name");
 $codThr = (float)setting('cod_alert_threshold', 100000);
 
@@ -67,12 +70,13 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
     $id=(int)($_POST['id'] ?? 0);
     $amt=(float)($_POST['amount'] ?? 0);
     if ($id && $amt>0) {
-      q("UPDATE cod_ledger SET entry_date=?, type=?, courier_id=?, amount=?, method=?, reference=?, note=? WHERE id=?",[
+      q("UPDATE cod_ledger SET entry_date=?, type=?, courier_id=?, amount=?, method=?, category=?, reference=?, note=? WHERE id=?",[
         ($_POST['entry_date'] ?? '') ?: date('Y-m-d'),
         ($_POST['type'] ?? 'in')==='out' ? 'out' : 'in',
         (int)($_POST['courier_id'] ?? 0) ?: null,
         $amt,
         in_array($_POST['method'] ?? '', ['cash','bank','wallet'], true) ? $_POST['method'] : 'cash',
+        trim($_POST['category'] ?? '') ?: (($_POST['type'] ?? 'in')==='out' ? 'Other' : 'Courier Release'),
         trim($_POST['reference'] ?? ''),
         trim($_POST['note'] ?? ''),
         $id]);
@@ -90,12 +94,13 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
     $type = ($_POST['type'] ?? 'in')==='out' ? 'out' : 'in';
     $amt  = (float)($_POST['amount'] ?? 0);
     if ($amt<=0) { flash('Amount must be greater than 0.'); header('Location: cod.php'); exit; }
-    q("INSERT INTO cod_ledger(entry_date,type,courier_id,amount,method,reference,note,created_by) VALUES(?,?,?,?,?,?,?,?)",[
+    q("INSERT INTO cod_ledger(entry_date,type,courier_id,amount,method,category,reference,note,created_by) VALUES(?,?,?,?,?,?,?,?,?)",[
       ($_POST['entry_date'] ?? '') ?: date('Y-m-d'),
       $type,
       (int)($_POST['courier_id'] ?? 0) ?: null,
       $amt,
       in_array($_POST['method'] ?? '', ['cash','bank','wallet'], true) ? $_POST['method'] : 'cash',
+      trim($_POST['category'] ?? '') ?: ($type==='out' ? 'Other' : 'Courier Release'),
       trim($_POST['reference'] ?? ''),
       trim($_POST['note'] ?? ''),
       $u['name'] ?? ''
@@ -129,6 +134,7 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
 $from = $_GET['from'] ?? date('Y-m-01');
 $to   = $_GET['to']   ?? date('Y-m-d');
 $tf   = in_array($_GET['t'] ?? '', ['in','out'], true) ? $_GET['t'] : 'all';
+$cf   = in_array($_GET['cat'] ?? '', $codCats, true) ? $_GET['cat'] : '';
 
 /* ---- all-time reconciliation (couriers pay NET of their charges) ---- */
 $holdings = cod_holdings();   /* per courier: collected, charges, net, released, held */
@@ -149,10 +155,12 @@ $rangeIn  = (float)val("SELECT COALESCE(SUM(amount),0) FROM cod_ledger WHERE typ
 $rangeOut = (float)val("SELECT COALESCE(SUM(amount),0) FROM cod_ledger WHERE type='out' AND entry_date BETWEEN ? AND ?",[$from,$to]);
 $w = "entry_date BETWEEN ? AND ?"; $p=[$from,$to];
 if ($tf!=='all'){ $w.=" AND type=?"; $p[]=$tf; }
+if ($cf!==''){ $w.=" AND category=?"; $p[]=$cf; }
 $ledger = rows("SELECT l.*, c.name AS courier_name, b.name AS acct_name, b.kind AS acct_kind
                 FROM cod_ledger l LEFT JOIN couriers c ON c.id=l.courier_id
                 LEFT JOIN bank_accounts b ON b.id=l.account_id
                 WHERE $w ORDER BY l.entry_date DESC, l.id DESC", $p);
+$catCounts = []; foreach(rows("SELECT category, COUNT(*) n FROM cod_ledger WHERE entry_date BETWEEN ? AND ? GROUP BY category",[$from,$to]) as $r) $catCounts[$r['category']]=(int)$r['n'];
 
 require __DIR__.'/includes/header.php';
 ?>
@@ -204,7 +212,7 @@ require __DIR__.'/includes/header.php';
   <div class="panel-head"><h2>➕ Add Entry</h2><span class="muted" style="font-size:12px">record a COD release from a courier, or money going out</span></div>
   <div class="panel-body"><form method="post" class="fgrid" style="grid-template-columns:repeat(4,1fr);gap:12px">
     <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="add">
-    <div><label>Type</label><select name="type" id="l_type" onchange="document.getElementById('courWrap').style.opacity=this.value==='in'?1:.45">
+    <div><label>Type</label><select name="type" id="l_type" onchange="document.getElementById('courWrap').style.opacity=this.value==='in'?1:.45;document.getElementById('l_category').value=this.value==='in'?'Courier Release':'Other'">
       <option value="in">💰 COD Release (money IN)</option><option value="out">💸 Money OUT</option></select></div>
     <div><label>Date</label><input type="date" name="entry_date" value="<?= date('Y-m-d') ?>"></div>
     <div id="courWrap"><label>Courier (for releases)</label><select name="courier_id"><option value="">—</option>
@@ -218,8 +226,11 @@ require __DIR__.'/includes/header.php';
           <option value="<?= (int)$A['id'] ?>"><?= $A['kind']==='cash'?'💵':'🏦' ?> <?= e($A['name']) ?> — <?= money($acctBal[$A['id']] ?? 0) ?></option>
         <?php endforeach; ?>
       </select></div>
+    <div><label>Category</label><select name="category" id="l_category">
+      <?php foreach($codCats as $cc): ?><option value="<?= e($cc) ?>" <?= $cc==='Courier Release'?'selected':'' ?>><?= e($cc) ?></option><?php endforeach; ?>
+    </select></div>
     <div><label>Reference #</label><input name="reference" placeholder="txn / slip no. (optional)"></div>
-    <div class="full" style="grid-column:span 2"><label>Note</label><input name="note" placeholder="e.g. NCM weekly release / rent payment / supplier advance…"></div>
+    <div class="full" style="grid-column:span 2"><label>Note (optional detail)</label><input name="note" placeholder="e.g. week 12 release, or supplier name…"></div>
     <div style="display:flex;align-items:flex-end"><button class="btn btn-primary" style="width:100%">💾 Save Entry</button></div>
   </form></div>
 </div>
@@ -228,9 +239,13 @@ require __DIR__.'/includes/header.php';
 <div class="panel" style="margin-top:20px">
   <div class="panel-head" style="flex-wrap:wrap;gap:10px"><h2>📒 Ledger</h2>
     <form method="get" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-      <a class="btn btn-sm <?= $tf==='all'?'btn-primary':'' ?>" href="cod.php?from=<?= e($from) ?>&to=<?= e($to) ?>">All</a>
-      <a class="btn btn-sm <?= $tf==='in'?'btn-primary':'' ?>" href="cod.php?t=in&from=<?= e($from) ?>&to=<?= e($to) ?>">IN</a>
-      <a class="btn btn-sm <?= $tf==='out'?'btn-primary':'' ?>" href="cod.php?t=out&from=<?= e($from) ?>&to=<?= e($to) ?>">OUT</a>
+      <a class="btn btn-sm <?= $tf==='all'?'btn-primary':'' ?>" href="cod.php?from=<?= e($from) ?>&to=<?= e($to) ?><?= $cf?'&cat='.urlencode($cf):'' ?>">All</a>
+      <a class="btn btn-sm <?= $tf==='in'?'btn-primary':'' ?>" href="cod.php?t=in&from=<?= e($from) ?>&to=<?= e($to) ?><?= $cf?'&cat='.urlencode($cf):'' ?>">IN</a>
+      <a class="btn btn-sm <?= $tf==='out'?'btn-primary':'' ?>" href="cod.php?t=out&from=<?= e($from) ?>&to=<?= e($to) ?><?= $cf?'&cat='.urlencode($cf):'' ?>">OUT</a>
+      <select name="cat" onchange="this.form.submit()">
+        <option value="">All categories</option>
+        <?php foreach($codCats as $cc): ?><option value="<?= e($cc) ?>" <?= $cf===$cc?'selected':'' ?>><?= e($cc) ?> (<?= (int)($catCounts[$cc]??0) ?>)</option><?php endforeach; ?>
+      </select>
       <input type="date" name="from" value="<?= e($from) ?>"><span class="muted">→</span><input type="date" name="to" value="<?= e($to) ?>">
       <?php if($tf!=='all'): ?><input type="hidden" name="t" value="<?= e($tf) ?>"><?php endif; ?>
       <button class="btn btn-sm">Apply</button>
@@ -243,12 +258,16 @@ require __DIR__.'/includes/header.php';
     <span>Net: <b style="color:<?= ($rangeIn-$rangeOut)>=0?'var(--green)':'var(--red)' ?>"><?= money($rangeIn-$rangeOut) ?></b></span>
   </div>
   <div class="table-wrap"><table class="tbl led-tbl" id="ledTbl"><thead><tr>
-    <th>Date</th><th>Type</th><th>Courier</th><th>Amount</th><th>Method</th><th>Account</th><th>Reference</th><th>Note</th><th>By</th><?php if($isAdmin): ?><th></th><?php endif; ?>
+    <th>Date</th><th>Type</th><th>Category</th><th>Courier</th><th>Amount</th><th>Method</th><th>Account</th><th>Reference</th><th>Note</th><th>By</th><?php if($isAdmin): ?><th></th><?php endif; ?>
   </tr></thead><tbody>
-  <?php foreach($ledger as $l): $in=$l['type']==='in'; ?>
+  <?php
+  $catPill = ['Courier Release'=>'p-green','Bank Transfer'=>'p-blue','Supplier Payment'=>'p-amber','Salary Advance'=>'p-amber',
+              'Rent'=>'p-grey','Ads Payment'=>'p-blue','Refund'=>'p-red','Correction'=>'p-red','Other'=>'p-grey'];
+  foreach($ledger as $l): $in=$l['type']==='in'; $cat=$l['category']?:($in?'Courier Release':'Other'); ?>
     <tr>
       <td><?= e($l['entry_date']) ?></td>
       <td><span class="pill <?= $in?'p-green':'p-red' ?>"><?= $in?'IN · Release':'OUT' ?></span></td>
+      <td><span class="pill <?= $catPill[$cat]??'p-grey' ?>"><?= e($cat) ?></span></td>
       <td><?= e($l['courier_name'] ?: '—') ?></td>
       <td class="led-amt" style="color:<?= $in?'var(--green)':'var(--red)' ?>"><?= ($in?'+':'−').' '.money($l['amount']) ?></td>
       <td><?= e(ucfirst($l['method'])) ?></td>
@@ -260,7 +279,7 @@ require __DIR__.'/includes/header.php';
         <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="del"><input type="hidden" name="id" value="<?= (int)$l['id'] ?>">
         <button class="rowdel" title="Delete">🗑</button></form></td><?php endif; ?>
     </tr>
-  <?php endforeach; if(!$ledger) echo '<tr><td colspan="9"><div class="empty">No entries in this range — record your first COD release above.</div></td></tr>'; ?>
+  <?php endforeach; if(!$ledger) echo '<tr><td colspan="11"><div class="empty">No entries in this range — record your first COD release above.</div></td></tr>'; ?>
   </tbody></table></div>
 </div>
 
@@ -283,6 +302,9 @@ function exportLedger(){
       <?php foreach($couriers as $c): ?><option value="<?= (int)$c['id'] ?>"><?= e($c['name']) ?></option><?php endforeach; ?></select></div>
     <div><label>Amount (Rs.) *</label><input type="number" step="any" min="1" name="amount" id="le_amt" required></div>
     <div><label>Method</label><select name="method" id="le_meth"><option value="cash">Cash</option><option value="bank">Bank</option><option value="wallet">Wallet</option></select></div>
+    <div><label>Category</label><select name="category" id="le_category">
+      <?php foreach($codCats as $cc): ?><option value="<?= e($cc) ?>"><?= e($cc) ?></option><?php endforeach; ?>
+    </select></div>
     <div><label>Account (Bank page)</label>
       <select name="account_id" id="le_acct">
         <option value="0">⏳ — not banked yet —</option>
@@ -304,6 +326,7 @@ function editLed(l){
   document.getElementById('le_cour').value=l.courier_id||'';
   document.getElementById('le_amt').value=l.amount||'';
   document.getElementById('le_meth').value=l.method||'cash';
+  document.getElementById('le_category').value=l.category||(l.type==='out'?'Other':'Courier Release');
   document.getElementById('le_acct').value=l.account_id||0;
   document.getElementById('le_ref').value=l.reference||'';
   document.getElementById('le_note').value=l.note||'';

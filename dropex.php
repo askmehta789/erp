@@ -148,6 +148,7 @@ if (count($custAgg)) { $repeatN=0; foreach($custAgg as $c) if($c['orders']>=2) $
 $initial = function($name){ $name=trim((string)$name); return $name!=='' ? mb_strtoupper(mb_substr($name,0,1)) : '?'; };
 
 require __DIR__.'/includes/header.php';
+echo delivery_disabled_banner('dropex.php');
 ?>
 <style>
 .dx-hero{background:linear-gradient(120deg,#0369a1,#0c4a6e);border-radius:22px;padding:22px 26px;color:#fff;margin-bottom:14px;box-shadow:0 18px 40px rgba(3,74,110,.28)}

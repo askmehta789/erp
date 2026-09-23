@@ -85,6 +85,7 @@ $mNet=$mGross-$mAds;
 $mRoas=$mAds>0?round($mRev/$mAds,2):null;
 
 require __DIR__.'/includes/header.php';
+echo delivery_disabled_banner('daraz.php');
 ?>
 <div class="page-head">
   <div><h1>🛍 Daraz</h1><p>Channel dashboard — orders come from Sales with Courier = <b>Daraz</b> · Daraz Order ID goes in Remarks</p></div>

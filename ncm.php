@@ -410,6 +410,7 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
 }
 
 require __DIR__.'/includes/header.php';
+echo delivery_disabled_banner('ncm.php');
 
 /* ---- connection + branches (for dropdowns only, not shown as a table) ---- */
 $connected=false; $connErr=''; $branches=[];

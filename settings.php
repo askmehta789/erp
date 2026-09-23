@@ -23,6 +23,7 @@ $groups = [
     'opening_cash'  => ['Opening Cash Balance (Rs.)','number'],
     'opening_bank'  => ['Opening Bank Balance (Rs.)','number'],
     'cancel_charge' => ['Default Cancel/Return Charge (Rs.)','number'],
+    'product_overhead_per_pc' => ['Per-Piece Overhead (Rs.) — avg Ads + Delivery + Office + Returns, deducted from Margin/pc on Products','number'],
   ],
   'Orders & Sales Defaults' => [
     'order_prefix'          => ['Order Code Prefix','text'],
@@ -55,18 +56,29 @@ $groups = [
     'gdrive_client_secret' => ['Google Drive — Client Secret','text'],
   ],
   'AI Assistant (works free; key = smarter)' => [
-    'ai_api_key'    => ['AI API Key (Anthropic) — optional','text'],
+    'gemini_api_key' => ['Google Gemini API Key — powers the AI Assistant chat page','text'],
+    'gemini_model'   => ['Gemini Model (default gemini-2.0-flash)','text'],
+    'ai_api_key'    => ['AI API Key (Anthropic) — optional, used if no Gemini key is set','text'],
     'ai_model'      => ['AI Model (default claude-3-5-haiku-20241022)','text'],
     'ai_auto_reply' => ['Auto-post AI replies to NCM','select',['no','yes']],
   ],
-  'Appearance & Notifications' => [
+  'Appearance' => [
     'brand_color'    => ['Brand Colour (hex, e.g. #3b82f6)','text'],
     'default_theme'  => ['Default Theme','select',['light','dark']],
-    'enable_toasts'  => ['Pop-up Notifications','select',['yes','no']],
+  ],
+  'Notifications' => [
+    'notifications_enabled' => ['Enable Notifications','select',['yes','no']],
+    'enable_toasts'  => ['Pop-up Toasts (top-right)','select',['yes','no']],
   ],
   'Categories (comma-separated suggestions)' => [
     'product_categories' => ['Product Categories','text'],
     'expense_categories' => ['Expense Categories','text'],
+  ],
+  'Lunch Management' => [
+    'lunch_leave_days'  => ['Standard Leave Days / month','number'],
+    'lunch_month_days'  => ['Standard Month Days','number'],
+    'lunch_pay_unused'  => ['Pay unused Rs.150 when no lunch is ordered','select',['yes','no']],
+    'lunch_over_allowance' => ['When lunch exceeds the allowance','select',['review','ignore']],
   ],
 ];
 
@@ -87,6 +99,24 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
       flash("Removed $n empty order(s).");
     } catch (Exception $e) { flash('Error: '.$e->getMessage()); }
     header('Location: settings.php'); exit;
+  }
+
+  if ($act === 'save_notif_types') {
+    $enabled = array_map('strval', (array)($_POST['enabled_types'] ?? []));
+    $all = array_keys(notification_types());
+    $disabled = array_values(array_diff($all, $enabled));
+    q("INSERT INTO settings(skey,svalue) VALUES('disabled_notif_types',?) ON DUPLICATE KEY UPDATE svalue=VALUES(svalue)", [implode(',', $disabled)]);
+    log_activity('Updated notification type preferences','Settings'); flash('Notification preferences updated.');
+    header('Location: settings.php#notifications'); exit;
+  }
+
+  if ($act === 'save_delivery_pages') {
+    $enabled = array_map('strval', (array)($_POST['enabled_pages'] ?? []));
+    $all = array_keys(delivery_partner_pages());
+    $disabled = array_values(array_diff($all, $enabled));
+    q("INSERT INTO settings(skey,svalue) VALUES('disabled_delivery_pages',?) ON DUPLICATE KEY UPDATE svalue=VALUES(svalue)", [implode(',', $disabled)]);
+    log_activity('Updated delivery partner menu visibility','Settings'); flash('Delivery partner menu updated.');
+    header('Location: settings.php#delivery-partners'); exit;
   }
 
   if ($act === 'gdrive_disconnect') {
@@ -130,7 +160,7 @@ if (trim((string)setting('cron_token','')) === '') {
 $PAGE_TITLE='Settings'; require __DIR__.'/includes/header.php';
 
 /* which fields render full-width */
-$fullFields = ['store_name','store_address','store_tagline','ncm_api_key','ai_api_key','product_categories','expense_categories','gdrive_client_id','gdrive_client_secret'];
+$fullFields = ['store_name','store_address','store_tagline','ncm_api_key','ai_api_key','gemini_api_key','product_categories','expense_categories','gdrive_client_id','gdrive_client_secret'];
 ?>
 <div class="page-head"><div><h1>⚙️ Settings</h1><p>Configure your store, finances, courier, AI and appearance</p></div></div>
 <?php if($fl=flash()) echo '<div class="flash">'.e($fl).'</div>'; ?>
@@ -138,7 +168,7 @@ $fullFields = ['store_name','store_address','store_tagline','ncm_api_key','ai_ap
 <form method="post">
 <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="save">
 <?php foreach($groups as $title=>$fields): ?>
-  <div class="panel" style="margin-bottom:18px">
+  <div class="panel" style="margin-bottom:18px;scroll-margin-top:18px"<?= str_starts_with($title,'AI Assistant')?' id="ai-assistant"':(($title==='Notifications')?' id="notifications"':'') ?>>
     <div class="panel-head"><h2><?= e($title) ?></h2></div>
     <div class="panel-body">
       <div class="form-grid" style="grid-template-columns:1fr 1fr">
@@ -164,6 +194,47 @@ $fullFields = ['store_name','store_address','store_tagline','ncm_api_key','ai_ap
 <?php endforeach; ?>
   <button class="btn btn-primary" style="margin-bottom:24px">💾 Save All Settings</button>
 </form>
+
+
+<div class="panel" id="delivery-partners" style="margin-bottom:18px;scroll-margin-top:18px">
+  <div class="panel-head"><h2>🚚 Delivery Partners</h2></div>
+  <div class="panel-body">
+    <p class="muted" style="margin-bottom:12px">Untick a courier you've stopped using to hide its page from the sidebar — its historical orders and data stay exactly as they are, and you can re-enable it any time. <b>All Couriers</b> (the general courier manager) always stays visible; use it to mark a specific courier record inactive too.</p>
+    <form method="post">
+      <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="save_delivery_pages">
+      <div class="form-grid" style="grid-template-columns:1fr 1fr">
+        <?php foreach(delivery_partner_pages() as $page=>[$icon,$label]): $on=delivery_page_enabled($page); ?>
+          <label style="display:flex;align-items:center;gap:8px;font-size:13.5px;font-weight:600;padding:8px 10px;border:1px solid var(--border);border-radius:9px">
+            <input type="checkbox" name="enabled_pages[]" value="<?= e($page) ?>" <?= $on?'checked':'' ?> style="width:auto">
+            <span><?= $icon ?> <?= e($label) ?></span>
+            <?php if(!$on): ?><span class="pill p-red" style="font-size:9.5px;margin-left:auto">hidden</span><?php endif; ?>
+          </label>
+        <?php endforeach; ?>
+      </div>
+      <button class="btn btn-primary" style="margin-top:14px">💾 Save Delivery Menu</button>
+    </form>
+  </div>
+</div>
+
+<div class="panel" id="notification-types" style="margin-bottom:18px;scroll-margin-top:18px">
+  <div class="panel-head"><h2>🔔 Notification Types</h2></div>
+  <div class="panel-body">
+    <p class="muted" style="margin-bottom:12px">Untick a category to stop it from creating notifications (bell, panel, and pop-up toasts) — it has no effect on your data, only on what gets flagged. The master <b>Enable Notifications</b> switch above turns all of these off at once regardless of what's ticked here.</p>
+    <form method="post">
+      <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="save_notif_types">
+      <div class="form-grid" style="grid-template-columns:1fr 1fr">
+        <?php $disabledTypes=disabled_notif_types(); foreach(notification_types() as $type=>[$icon,$label]): $on=!in_array($type,$disabledTypes,true); ?>
+          <label style="display:flex;align-items:center;gap:8px;font-size:13.5px;font-weight:600;padding:8px 10px;border:1px solid var(--border);border-radius:9px">
+            <input type="checkbox" name="enabled_types[]" value="<?= e($type) ?>" <?= $on?'checked':'' ?> style="width:auto">
+            <span><?= $icon ?> <?= e($label) ?></span>
+            <?php if(!$on): ?><span class="pill p-red" style="font-size:9.5px;margin-left:auto">off</span><?php endif; ?>
+          </label>
+        <?php endforeach; ?>
+      </div>
+      <button class="btn btn-primary" style="margin-top:14px">💾 Save Notification Types</button>
+    </form>
+  </div>
+</div>
 
 <div class="grid cols-2" style="align-items:start">
   <div class="panel"><div class="panel-head"><h2>👤 Your Account</h2></div><div class="panel-body">

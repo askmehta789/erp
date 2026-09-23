@@ -59,9 +59,9 @@ function all_access_pages() {
     'accounting.php'=>['📒','Accounting','Money'], 'analytics.php'=>['📈','Analytics','Money'],
     'expenses.php'=>['💸','Expenses','Money'], 'reports.php'=>['📊','Reports (classic)','Money'],
     'invoice.php'=>['🧾','Invoices','Core'], 'ncm_comments.php'=>['💬','NCM Comment Center','Delivery'],
-    'products.php'=>['🏷️','Products','Inventory'], 'purchases.php'=>['🛍️','Purchasing','Inventory'],
-    'inventory.php'=>['📦','Stock Batches','Inventory'], 'suppliers.php'=>['🏭','Suppliers','Inventory'],
-    'customers.php'=>['👥','Customers','People'], 'salary.php'=>['💵','Staff & Salary','People'], 'hrm.php'=>['🧑‍💼','HRM','People'],
+    'products.php'=>['🏷️','Products','Inventory'], 'vendor_purchases.php'=>['🏭','Vendor Purchases','Inventory'],
+    'inventory.php'=>['📦','Stock Batches','Inventory'],
+    'customers.php'=>['👥','Customer Insights','People'], 'salary.php'=>['💵','Staff & Salary','People'], 'lunch_management.php'=>['🍱','Lunch Management','People'], 'hrm.php'=>['🧑‍💼','HRM','People'],
     'settings.php'=>['⚙️','Settings','System'], 'activity.php'=>['📜','Activity Logs','System'], 'labels.php'=>['🏷','Labels','System'],
   ];
 }

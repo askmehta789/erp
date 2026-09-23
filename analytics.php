@@ -36,7 +36,7 @@ foreach($orders as $o){
   $periods[$k]['oqty']+=$q; $periods[$k]['ordval']+=$line;
   if(isset($Q[$o['status']])) $Q[$o['status']]+=$q;
   $dn=$o['product_name']?:'(none)';
-  if(!isset($deep[$dn])) $deep[$dn]=['orders'=>0,'oq'=>0,'dq'=>0,'pq'=>0,'rq'=>0,'rev'=>0,'cogs'=>0,'prof'=>0];
+  if(!isset($deep[$dn])) $deep[$dn]=['orders'=>0,'oq'=>0,'dq'=>0,'pq'=>0,'rq'=>0,'rev'=>0,'cogs'=>0,'prof'=>0,'ads'=>0];
   $deep[$dn]['orders']++; $deep[$dn]['oq']+=$q;
   if($o['status']==='delivered'){
     $deep[$dn]['dq']+=$q; $deep[$dn]['rev']+=$line;
@@ -71,6 +71,9 @@ $adFits=function($e) use($pid,$pName){
 $adsUntagged=0;
 foreach($adRows as $e){ $cat=strtolower((string)$e['category']); $isAd=false; foreach($adKw as $kw){ if(strpos($cat,$kw)!==false){$isAd=true;break;} }
   if(!$isAd) continue;
+  /* attribute ad spend to whichever product it's tagged with, for a true net profit per product */
+  $ep=trim((string)$e['product']);
+  if($ep!==''){ foreach($deep as $dn=>&$dd){ if(strcasecmp($dn,$ep)===0){ $dd['ads']+=(float)$e['amount']; break; } } unset($dd); }
   if(!$adFits($e)){ $adsUntagged+=(float)$e['amount']; continue; }
   $k=pkey($e['expense_date'],$g); $ensure($periods,$k); $periods[$k]['ads']+=(float)$e['amount']; }
 ksort($periods);
@@ -315,11 +318,14 @@ function tblCsvX(id,name){
 <!-- product performance -->
 <div class="panel" style="margin-top:20px"><div class="panel-head"><h2>🏷️ Product Performance</h2><button class="btn btn-sm" onclick="exportProducts()">⬇ CSV</button></div>
 <div class="table-wrap"><table class="tbl num-tbl" id="prodTbl"><thead><tr>
-  <th>Product</th><th class="right">Orders</th><th class="right">Qty Ordered</th><th class="right">Delivered</th><th class="right">Pending</th><th class="right">Returned</th><th class="right">Revenue</th><th class="right">COGS</th><th class="right">Profit</th><th class="right">Margin</th><th class="right">% of Revenue</th>
+  <th>Product</th><th class="right">Orders</th><th class="right">Qty Ordered</th><th class="right">Delivered</th><th class="right">Pending</th><th class="right">Returned</th><th class="right">Revenue</th><th class="right">COGS</th><th class="right">Profit (no Ads)</th><th class="right">Ads Spend</th><th class="right">Net Profit</th><th class="right">Net Margin</th><th class="right">% of Revenue</th>
 </tr></thead><tbody>
 <?php uasort($deep, fn($x,$y)=>$y['rev']<=>$x['rev']);
+$dT=['orders'=>0,'oq'=>0,'dq'=>0,'pq'=>0,'rq'=>0,'rev'=>0,'cogs'=>0,'prof'=>0,'ads'=>0];
 foreach($deep as $n=>$pd): $share=$T['revenue']>0?round($pd['rev']/$T['revenue']*100,1):0;
-  $mar=$pd['rev']>0?round($pd['prof']/$pd['rev']*100,1):0; ?>
+  $netProf=$pd['prof']-$pd['ads'];
+  $netMar=$pd['rev']>0?round($netProf/$pd['rev']*100,1):0;
+  foreach($dT as $k=>$v) $dT[$k]+=$pd[$k]; ?>
   <tr>
     <td><b><?= e($n) ?></b></td>
     <td class="num right"><?= (int)$pd['orders'] ?></td>
@@ -329,12 +335,32 @@ foreach($deep as $n=>$pd): $share=$T['revenue']>0?round($pd['rev']/$T['revenue']
     <td class="num right" style="color:var(--red)"><?= number_format($pd['rq']) ?></td>
     <td class="num right"><?= money($pd['rev']) ?></td>
     <td class="num right muted"><?= money($pd['cogs']) ?></td>
-    <td class="num right" style="font-weight:700;color:<?= $pd['prof']>=0?'var(--green)':'var(--red)' ?>"><?= money($pd['prof']) ?></td>
-    <td class="num right"><?= $mar ?>%</td>
+    <td class="num right"><?= money($pd['prof']) ?></td>
+    <td class="num right" style="color:var(--red)"><?= $pd['ads']>0?money($pd['ads']):'—' ?></td>
+    <td class="num right" style="font-weight:700;color:<?= $netProf>=0?'var(--green)':'var(--red)' ?>"><?= money($netProf) ?></td>
+    <td class="num right"><?= $netMar ?>%</td>
     <td class="num right"><?= $share ?>%</td>
   </tr>
-<?php endforeach; if(!$deep) echo '<tr><td colspan="11"><div class="empty">No orders in this range.</div></td></tr>'; ?>
-</tbody></table></div></div>
+<?php endforeach; if(!$deep) echo '<tr><td colspan="13"><div class="empty">No orders in this range.</div></td></tr>'; ?>
+</tbody>
+<?php if($deep): $dNetProf=$dT['prof']-$dT['ads']; $dNetMar=$dT['rev']>0?round($dNetProf/$dT['rev']*100,1):0; ?>
+<tfoot><tr style="font-weight:800;background:var(--surface-2)">
+  <td>Total</td>
+  <td class="num right"><?= number_format($dT['orders']) ?></td>
+  <td class="num right"><?= number_format($dT['oq']) ?></td>
+  <td class="num right" style="color:var(--green)"><?= number_format($dT['dq']) ?></td>
+  <td class="num right" style="color:var(--amber)"><?= number_format($dT['pq']) ?></td>
+  <td class="num right" style="color:var(--red)"><?= number_format($dT['rq']) ?></td>
+  <td class="num right"><?= money($dT['rev']) ?></td>
+  <td class="num right"><?= money($dT['cogs']) ?></td>
+  <td class="num right"><?= money($dT['prof']) ?></td>
+  <td class="num right" style="color:var(--red)"><?= money($dT['ads']) ?></td>
+  <td class="num right" style="color:<?= $dNetProf>=0?'var(--green)':'var(--red)' ?>"><?= money($dNetProf) ?></td>
+  <td class="num right"><?= $dNetMar ?>%</td>
+  <td class="num right">100%</td>
+</tr></tfoot>
+<?php endif; ?>
+</table></div></div>
 
 <script>
 var CH_GRID=(getComputedStyle(document.body).getPropertyValue('--border')||'#e9edf3').trim();

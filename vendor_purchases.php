@@ -9,6 +9,9 @@ try { q("CREATE TABLE IF NOT EXISTS suppliers (
 try { q("ALTER TABLE stock_batches ADD COLUMN IF NOT EXISTS supplier_id INT NULL"); } catch (Exception $e) {}
 $PAGE_TITLE='Vendor Purchases';
 
+/* embedded Suppliers directory — add/edit vendor name, contact, balance */
+if (($_POST['_entity'] ?? '') === 'suppliers') handle_crud('suppliers');
+
 if ($_SERVER['REQUEST_METHOD']==='POST' && ($_POST['_action'] ?? '')==='assign_vendor') {
   check_csrf();
   $supplierId = (int)($_POST['supplier_id'] ?? 0);
@@ -208,4 +211,8 @@ document.getElementById('assignForm').addEventListener('submit', function(e){
 </div>
 
 <?php endif; ?>
+
+<div id="suppliers"></div>
+<?php render_crud('suppliers','🏭 Suppliers','vendor directory — contact info & payable balance','embed'); ?>
+
 <?php require __DIR__.'/includes/footer.php'; ?>

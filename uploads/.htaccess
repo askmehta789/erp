@@ -1,0 +1,6 @@
+# Uploaded files only — never execute scripts from here, even if one
+# somehow got past the PNG-content validation in handle_image_field_upload().
+<FilesMatch "\.(php|php\d|phtml|pl|py|cgi|sh)$">
+  Require all denied
+</FilesMatch>
+Options -ExecCGI -Indexes

@@ -179,6 +179,7 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
 }
 
 require __DIR__.'/includes/header.php';
+echo delivery_disabled_banner('ncm_command.php');
 
 $connected=false; $branchNames=[]; $branchPhones=[];
 if (ncm()->configured()) { try { $bs=ncm()->branches(); $connected=is_array($bs); foreach($bs as $b) if(!empty($b['name'])) $branchNames[]=$b['name']; sort($branchNames); $branchPhones=cc_branch_phones(); } catch (Exception $e) {} }

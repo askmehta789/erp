@@ -12,6 +12,7 @@ try { q("CREATE TABLE IF NOT EXISTS suppliers (
   status ENUM('active','inactive') NOT NULL DEFAULT 'active', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 )"); } catch (Exception $e) {}
 try { q("ALTER TABLE stock_batches ADD COLUMN IF NOT EXISTS supplier_id INT NULL"); } catch (Exception $e) {}
+try { q("ALTER TABLE products ADD COLUMN IF NOT EXISTS image VARCHAR(255) NULL"); } catch (Exception $e) {}
 if ($_SERVER['REQUEST_METHOD']==='POST' && in_array($_POST['_action'] ?? '', ['restock','setstock'], true)) {
   check_csrf();
   $pid=(int)($_POST['id'] ?? 0);
@@ -190,13 +191,17 @@ foreach($weeklyRows as $r){
   $spark[$pid][5-$wk] += (int)$r['qty'];   // index 0 = oldest, 5 = most recent, for left-to-right chart order
 }
 
-/* ---- best margin / most-returned flags (only among products with real activity) ---- */
+/* ---- best margin / most-returned flags (only among products with real activity) ----
+   "Margin / pc" is NET, not just price-cost — it also deducts a flat per-piece
+   overhead (Ads + Delivery + Office + Returns, editable in Settings → Finance & Tax)
+   so it reflects what a unit actually earns, not an optimistic sticker number. */
+$overheadPerPc = (float)setting('product_overhead_per_pc', 650);
 $bestMarginPid=null; $bestMarginVal=-1;
 $worstReturnPid=null; $worstReturnVal=-1;
 foreach($products as $__p){
   $__a=$agg[$__p['id']]??['sold'=>0,'orders'=>0,'returned'=>0];
   if((float)$__p['price']>0){
-    $__m=round(((float)$__p['price']-(float)$__p['cost'])/(float)$__p['price']*100);
+    $__m=round(((float)$__p['price']-(float)$__p['cost']-$overheadPerPc)/(float)$__p['price']*100);
     if($__a['sold']>0 && $__m>$bestMarginVal){ $bestMarginVal=$__m; $bestMarginPid=(int)$__p['id']; }
   }
   if($__a['orders']>=5){   // minimum sample size so one unlucky order doesn't look like a crisis
@@ -231,66 +236,81 @@ foreach($products as $__p){
 require __DIR__.'/includes/header.php';
 ?>
 <style>
-.pd3-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:9px;margin-bottom:14px}
-.pd3-tile{background:rgba(255,255,255,.85);backdrop-filter:blur(16px);border-radius:13px;padding:11px 13px;box-shadow:0 5px 14px rgba(30,41,80,.06);border-top:3px solid #ddd}
-.pd3-tile b{font-size:15px;font-weight:900;display:block;overflow-wrap:anywhere}
-.pd3-tile span{font-size:8.5px;color:#8a93a8;font-weight:700;text-transform:uppercase}
+.pd3-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:10px;margin-bottom:16px}
+.pd3-tile{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:13px 15px;box-shadow:0 5px 14px rgba(30,41,80,.05);border-top:3px solid #ddd;transition:transform .15s ease}
+.pd3-tile:hover{transform:translateY(-2px)}
+.pd3-tile b{font-size:17px;font-weight:900;display:block;overflow-wrap:anywhere;color:var(--ink);font-variant-numeric:tabular-nums}
+.pd3-tile span{font-size:9.5px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.02em}
 .pd3-tile.b{border-top-color:#0369a1}.pd3-tile.g{border-top-color:#16a34a}.pd3-tile.a{border-top-color:#d97706}.pd3-tile.p{border-top-color:#7c3aed}.pd3-tile.t{border-top-color:#0d9488}.pd3-tile.r{border-top-color:#dc2626}
 
-.pd3-reocard{background:#fff7ed;border:1px solid #fed7aa;border-radius:14px;padding:12px 15px;margin-bottom:12px}
-.pd3-reocard h3{font-size:11.5px;font-weight:900;color:#9a3412;margin-bottom:7px}
-.pd3-reorow{display:flex;align-items:center;gap:10px;padding:4px 0;flex-wrap:wrap;font-size:12px}
-.pd3-reorow b{flex:1;color:#334;font-weight:700;min-width:160px}
-.pd3-cp{background:#c2410c;color:#fff;border:0;border-radius:7px;padding:5px 11px;font-size:10px;font-weight:800;cursor:pointer;white-space:nowrap}
+.pd3-reocard{background:var(--amber-bg,#fff7ed);border:1px solid #fed7aa;border-radius:14px;padding:14px 16px;margin-bottom:14px}
+.pd3-reocard h3{font-size:12.5px;font-weight:900;color:#9a3412;margin-bottom:9px}
+.pd3-reorow{display:flex;align-items:center;gap:10px;padding:5px 0;flex-wrap:wrap;font-size:12.5px}
+.pd3-reorow b{flex:1;color:var(--ink);font-weight:700;min-width:160px}
+.pd3-cp{background:#c2410c;color:#fff;border:0;border-radius:7px;padding:6px 12px;font-size:10.5px;font-weight:800;cursor:pointer;white-space:nowrap}
 
-.pd3-flagrow{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}
-.pd3-flag{border-radius:13px;padding:11px 15px;color:#fff}
+.pd3-flagrow{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px}
+.pd3-flag{border-radius:14px;padding:13px 16px;color:#fff}
 .pd3-flag.best{background:linear-gradient(120deg,#16a34a,#15803d)}
 .pd3-flag.worst{background:linear-gradient(120deg,#dc2626,#991b1b)}
-.pd3-flag .l{font-size:9px;opacity:.85;font-weight:800;text-transform:uppercase}
-.pd3-flag .v{font-size:13px;font-weight:900;margin-top:2px}
+.pd3-flag .l{font-size:10px;opacity:.85;font-weight:800;text-transform:uppercase}
+.pd3-flag .v{font-size:14px;font-weight:900;margin-top:3px}
 
-.pd3-toolbar{background:#fff;border-radius:13px;padding:11px 15px;box-shadow:0 5px 14px rgba(30,41,80,.06);margin-bottom:10px;display:flex;gap:10px;align-items:center}
-.pd3-toolbar input{flex:1;border:0;background:#f8fafc;border-radius:9px;padding:8px 13px;font-size:12px;font:inherit}
-.pd3-filterbar{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
-.pd3-fchip{background:#fff;border-radius:99px;padding:5px 12px;font-size:10.5px;font-weight:700;color:#334;box-shadow:0 3px 8px rgba(30,41,80,.05);cursor:pointer;border:0}
-.pd3-fchip.on{background:#0369a1;color:#fff}
+.pd3-toolbar{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:12px 16px;box-shadow:0 5px 14px rgba(30,41,80,.05);margin-bottom:10px;display:flex;gap:10px;align-items:center}
+.pd3-toolbar input{flex:1;border:0;background:var(--surface-2);color:var(--ink);border-radius:9px;padding:9px 14px;font-size:13px;font:inherit}
+.pd3-filterbar{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:14px}
+.pd3-fchip{background:var(--surface);border:1px solid var(--border);color:var(--ink);border-radius:99px;padding:6px 13px;font-size:11.5px;font-weight:700;box-shadow:0 3px 8px rgba(30,41,80,.04);cursor:pointer}
+.pd3-fchip.on{background:#0369a1;border-color:#0369a1;color:#fff}
 
-.pd3-bulkbar{display:none;background:#eefdf4;border:1px solid #86efac;border-radius:11px;padding:9px 15px;font-size:11.5px;font-weight:700;color:#15803d;margin-bottom:12px;align-items:center;gap:10px;flex-wrap:wrap}
+.pd3-bulkbar{display:none;background:var(--green-bg,#eefdf4);border:1px solid #86efac;border-radius:11px;padding:10px 16px;font-size:12.5px;font-weight:700;color:#15803d;margin-bottom:14px;align-items:center;gap:10px;flex-wrap:wrap}
 .pd3-bulkbar.show{display:flex}
-.pd3-bulkbar button{background:#16a34a;color:#fff;border:0;border-radius:7px;padding:5px 12px;font-size:10.5px;font-weight:800;cursor:pointer}
+.pd3-bulkbar button{background:#16a34a;color:#fff;border:0;border-radius:7px;padding:6px 13px;font-size:11px;font-weight:800;cursor:pointer}
 .pd3-bulkbar button.clear{background:#64748b}
 
-.pd3-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px}
-.pd3-card{background:#fff;border-radius:17px;box-shadow:0 8px 22px rgba(30,41,80,.08);overflow:hidden;position:relative}
-.pd3-card.warn{box-shadow:0 8px 22px rgba(220,38,38,.12);border:1px solid #fecaca}
-.pd3-chk{position:absolute;top:10px;left:10px;z-index:2;width:16px;height:16px}
-.pd3-imgband{height:72px;display:flex;align-items:center;justify-content:center;font-size:26px;position:relative;color:#fff;font-weight:900}
-.pd3-imgband .stockdot{position:absolute;top:8px;right:8px;font-size:8.5px;font-weight:800;background:rgba(255,255,255,.94);color:#334;border-radius:99px;padding:2px 8px}
-.pd3-imgband .flags{position:absolute;bottom:8px;left:10px;display:flex;gap:4px;flex-wrap:wrap}
-.pd3-fbadge{font-size:8px;font-weight:800;border-radius:99px;padding:2px 7px;background:rgba(255,255,255,.94)}
-.pd3-body{padding:12px 14px}
-.pd3-nm{font-weight:900;font-size:13px}
-.pd3-sku{font-size:9.5px;color:#8a93a8;margin-bottom:8px}
-.pd3-statrow{display:flex;justify-content:space-between;font-size:10.5px;padding:5px 0;border-top:1px solid #f6f7fa}
+.pd3-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:16px}
+.pd3-card{background:var(--surface);border:1px solid var(--border);border-radius:18px;box-shadow:0 8px 22px rgba(30,41,80,.07);overflow:hidden;position:relative;transition:transform .15s ease,box-shadow .15s ease}
+.pd3-card:hover{transform:translateY(-2px);box-shadow:0 14px 30px rgba(30,41,80,.12)}
+.pd3-card.warn{box-shadow:0 8px 22px rgba(220,38,38,.14);border-color:#fca5a5}
+.pd3-chk{position:absolute;top:10px;left:10px;z-index:2;width:17px;height:17px}
+.pd3-imgband{height:130px;display:flex;align-items:center;justify-content:center;font-size:30px;position:relative;color:#fff;font-weight:900;overflow:hidden}
+.pd3-imgband.has-photo{background:var(--surface-2) !important}
+.pd3-imgband img{width:100%;height:100%;object-fit:contain;padding:10px;box-sizing:border-box}
+.pd3-imgband .flags{position:absolute;bottom:9px;left:10px;display:flex;gap:4px;flex-wrap:wrap;z-index:1}
+.pd3-fbadge{font-size:9px;font-weight:800;border-radius:99px;padding:3px 8px;background:rgba(255,255,255,.94)}
+.pd3-body{padding:14px 16px}
+.pd3-nm{font-weight:900;font-size:14.5px;color:var(--ink);overflow-wrap:anywhere}
+.pd3-sku{font-size:10.5px;color:var(--muted);margin-bottom:10px;font-weight:600}
+
+.pd3-stockbadge{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:800;border-radius:9px;padding:6px 11px;margin-bottom:11px;width:100%;box-sizing:border-box}
+.pd3-stockbadge.ok{background:var(--green-bg,#dcfce7);color:#15803d}
+.pd3-stockbadge.low{background:var(--amber-bg,#fef3c7);color:#b45309}
+.pd3-stockbadge.out{background:var(--red-bg,#fee2e2);color:#c0392b}
+
+.pd3-statrow{display:flex;justify-content:space-between;align-items:center;font-size:12px;padding:6px 0;border-top:1px solid var(--border)}
 .pd3-statrow:first-of-type{border-top:0}
-.pd3-statrow b{font-weight:800}
-.pd3-spark{display:flex;align-items:flex-end;gap:2px;height:16px;width:60px}
+.pd3-statrow span{color:var(--muted);font-weight:600}
+.pd3-statrow b{font-weight:800;color:var(--ink);font-variant-numeric:tabular-nums}
+.pd3-spark{display:flex;align-items:flex-end;gap:2px;height:18px;width:64px}
 .pd3-spark div{flex:1;background:#93c5fd;border-radius:1px;min-height:2px}
 .pd3-spark.down div{background:#fca5a5}
-.pd3-chipsrow{display:flex;gap:5px;flex-wrap:wrap;margin:8px 0}
-.pd3-chip{font-size:8.5px;background:#f1f4fa;color:#5a6580;border-radius:99px;padding:2px 7px;font-weight:700}
-.pd3-chip.ok{background:#dcfce7;color:#16a34a}.pd3-chip.out{background:#fee2e2;color:#c0392b}
-.pd3-stockbar{height:5px;border-radius:99px;background:#f1f4f9;overflow:hidden;display:flex;margin:8px 0 4px}
+.pd3-chipsrow{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}
+.pd3-chip{font-size:9.5px;background:var(--surface-2);color:var(--muted);border-radius:99px;padding:3px 9px;font-weight:700}
+.pd3-chip.ok{background:var(--green-bg,#dcfce7);color:#16a34a}.pd3-chip.out{background:var(--red-bg,#fee2e2);color:#c0392b}
+
+.pd3-stockbar{height:8px;border-radius:99px;background:var(--surface-2);overflow:hidden;display:flex;margin:4px 0 8px}
 .pd3-stockbar i{display:block}
-.pd3-legend{font-size:8.5px;color:#8a93a8}
-.pd3-verdict{font-size:9px;font-weight:800;border-radius:8px;padding:4px 8px;margin-top:8px}
-.pd3-verdict.stop{background:#fee2e2;color:#c0392b}
-.pd3-verdict.watch{background:#fef3c7;color:#b45309}
-.pd3-foot{display:flex;gap:6px;margin-top:11px}
-.pd3-foot button,.pd3-foot a{flex:1;background:#f1f4fa;border:0;border-radius:8px;padding:7px;font-size:9.5px;font-weight:800;color:#334;cursor:pointer;text-align:center;text-decoration:none;display:block}
-.pd3-foot a.view{background:#eff6ff;color:#0369a1}
-.pd3-empty{padding:26px 18px;text-align:center;color:#8a93a8;font-size:12px;background:#fff;border-radius:16px}
+.pd3-legend2{display:flex;flex-wrap:wrap;gap:8px 12px;font-size:10.5px;color:var(--muted);font-weight:700;margin-bottom:2px}
+.pd3-legend2 span{display:inline-flex;align-items:center;gap:4px}
+.pd3-legend2 i{width:8px;height:8px;border-radius:2px;display:inline-block;flex:none}
+
+.pd3-verdict{font-size:10.5px;font-weight:800;border-radius:8px;padding:6px 10px;margin-top:10px}
+.pd3-verdict.stop{background:var(--red-bg,#fee2e2);color:#c0392b}
+.pd3-verdict.watch{background:var(--amber-bg,#fef3c7);color:#b45309}
+.pd3-foot{display:flex;gap:7px;margin-top:12px}
+.pd3-foot button,.pd3-foot a{flex:1;background:var(--surface-2);border:0;border-radius:9px;padding:8px;font-size:10.5px;font-weight:800;color:var(--ink);cursor:pointer;text-align:center;text-decoration:none;display:block}
+.pd3-foot a.view{background:#dbeafe;color:#0369a1}
+body.dark .pd3-foot a.view{background:rgba(59,130,246,.18);color:#7dd3fc}
+.pd3-empty{padding:30px 18px;text-align:center;color:var(--muted);font-size:13px;background:var(--surface);border:1px solid var(--border);border-radius:16px}
 </style>
 
 <div class="page-head"><div><h1>🏷️ Products &amp; Stock</h1><p>Catalogue, FIFO batches, profit/loss — one place</p></div>
@@ -364,7 +384,8 @@ require __DIR__.'/includes/header.php';
   $sp=$stockPos($p); $st=$sp['hand'];
   $isOut=$st<=0; $isLow=!$isOut && $st<=(int)$p['low_stock'];
   $spTotal=max(1,$sp['hand']+$sp['out']+$sp['hh']+$sp['dx']);
-  $margin=$p['price']>0?round(($p['price']-$p['cost'])/$p['price']*100):0;
+  $marginRs=(float)$p['price']-(float)$p['cost']-$overheadPerPc;
+  $margin=$p['price']>0?round($marginRs/$p['price']*100):0;
   $adsP=$adsFor($p); $gross=$a['profit']; $prof=$gross-$adsP;
   $roas=$adsP>0 ? round($a['rev']/$adsP,2) : null;
   $adsVerdict=$adsVerdicts[$p['id']]['verdict'] ?? null;
@@ -380,22 +401,38 @@ require __DIR__.'/includes/header.php';
 ?>
 <div class="pd3-card <?= $cardCls ?>" data-name="<?= e(mb_strtolower($p['name'].' '.$p['sku'])) ?>" data-stock="<?= $stockFilter ?>" data-profit="<?= $profitFilter ?>">
   <input type="checkbox" class="pd3-chk pd3-sel" value="<?= (int)$p['id'] ?>">
-  <div class="pd3-imgband" style="background:linear-gradient(135deg,<?= $hueBg[0] ?>,<?= $hueBg[1] ?>)">
-    <?= e($initial) ?>
-    <span class="stockdot"><?= $isOut?'Out of stock':number_format($st).' in stock' ?></span>
-    <?php if($bestMarginPid===(int)$p['id'] || ($worstReturnPid===(int)$p['id'] && $worstReturnVal>0) || $isLow): ?>
+  <div class="pd3-imgband<?= $p['image']?' has-photo':'' ?>" style="<?= $p['image']?'':'background:linear-gradient(135deg,'.$hueBg[0].','.$hueBg[1].')' ?>">
+    <?php if($p['image']): ?><img src="<?= e($p['image']) ?>" alt="<?= e($p['name']) ?>" loading="lazy">
+    <?php else: ?><?= e($initial) ?><?php endif; ?>
+    <?php if($bestMarginPid===(int)$p['id'] || ($worstReturnPid===(int)$p['id'] && $worstReturnVal>0)): ?>
     <div class="flags">
       <?php if($bestMarginPid===(int)$p['id']): ?><span class="pd3-fbadge" style="color:#16a34a">🏆 Best Margin</span><?php endif; ?>
       <?php if($worstReturnPid===(int)$p['id'] && $worstReturnVal>0): ?><span class="pd3-fbadge" style="color:#dc2626">⚠️ Most Returned</span><?php endif; ?>
-      <?php if($isLow): ?><span class="pd3-fbadge" style="color:#b45309">🟡 Low Stock</span><?php endif; ?>
     </div>
     <?php endif; ?>
   </div>
   <div class="pd3-body">
     <div class="pd3-nm"><?= e($p['name']) ?></div>
     <div class="pd3-sku"><?= e($p['sku']) ?><?= $p['category']?' · '.e($p['category']):'' ?></div>
+
+    <div class="pd3-stockbadge <?= $isOut?'out':($isLow?'low':'ok') ?>">
+      <?= $isOut ? '🔴 Out of Stock' : ($isLow ? '🟡 Low Stock — '.number_format($st).' left' : '🟢 In Stock — '.number_format($st)) ?>
+    </div>
+
+    <div class="pd3-stockbar" title="green = shelf · amber = courier · purple = Hungry Hunter · blue = Dropex">
+      <?php if($sp['hand']+$sp['out']+$sp['hh']+$sp['dx']<=0): ?><i style="width:100%;background:#fecaca"></i>
+      <?php else: ?><i style="width:<?= round($sp['hand']/$spTotal*100,1) ?>%;background:#16a34a"></i><i style="width:<?= round($sp['out']/$spTotal*100,1) ?>%;background:#d97706"></i><i style="width:<?= round($sp['hh']/$spTotal*100,1) ?>%;background:#7c3aed"></i><i style="width:<?= round($sp['dx']/$spTotal*100,1) ?>%;background:#0369a1"></i><?php endif; ?>
+    </div>
+    <div class="pd3-legend2">
+      <span><i style="background:#16a34a"></i><?= $st ?> shelf</span>
+      <?php if($sp['out']): ?><span><i style="background:#d97706"></i><?= $sp['out'] ?> courier</span><?php endif; ?>
+      <?php if($sp['hh']): ?><span><i style="background:#7c3aed"></i><?= $sp['hh'] ?> HH</span><?php endif; ?>
+      <?php if($sp['dx']): ?><span><i style="background:#0369a1"></i><?= $sp['dx'] ?> Dropex</span><?php endif; ?>
+      <?php if($sp['res']): ?><span>· <?= $sp['res'] ?> reserved</span><?php endif; ?>
+    </div>
+
     <div class="pd3-statrow"><span>Price</span><b><?= money($p['price']) ?></b></div>
-    <div class="pd3-statrow"><span>Margin</span><b><?= $margin ?>%</b></div>
+    <div class="pd3-statrow"><span title="Price − Cost − Rs <?= $overheadPerPc ?> overhead (Ads + Delivery + Office + Returns) — edit in Settings → Finance &amp; Tax">Margin / pc</span><b style="color:<?= $marginRs>=0?'var(--green)':'var(--red)' ?>"><?= money($marginRs) ?> <span style="font-weight:600;color:var(--muted);font-size:10.5px">(<?= $margin ?>%)</span></b></div>
     <div class="pd3-statrow"><span>Profit</span><b style="color:<?= $prof>=0?'var(--green)':'var(--red)' ?>"><?= money($prof) ?></b></div>
     <?php if(array_sum($spk)>0): ?>
     <div class="pd3-statrow"><span>Trend</span><div class="pd3-spark<?= $spkTrend<0?' down':'' ?>" title="units sold, last 6 weeks"><?php foreach($spk as $wv): ?><div style="height:<?= max(8,round($wv/$spkMax*100)) ?>%"></div><?php endforeach; ?></div></div>
@@ -405,11 +442,6 @@ require __DIR__.'/includes/header.php';
       <?php if($roas!==null): ?><span class="pd3-chip <?= $roas>=2?'ok':'out' ?>"><?= $roas ?>× ROAS</span><?php endif; ?>
       <?php if(isset($reoMap[$p['id']])): ?><span class="pd3-chip out">🛒 ~<?= $reoMap[$p['id']]['cover_days'] ?>d cover</span><?php endif; ?>
     </div>
-    <div class="pd3-stockbar" title="green = shelf · amber = courier · purple = Hungry Hunter · blue = Dropex">
-      <?php if($sp['hand']+$sp['out']+$sp['hh']+$sp['dx']<=0): ?><i style="width:100%;background:#fecaca"></i>
-      <?php else: ?><i style="width:<?= round($sp['hand']/$spTotal*100,1) ?>%;background:#16a34a"></i><i style="width:<?= round($sp['out']/$spTotal*100,1) ?>%;background:#d97706"></i><i style="width:<?= round($sp['hh']/$spTotal*100,1) ?>%;background:#7c3aed"></i><i style="width:<?= round($sp['dx']/$spTotal*100,1) ?>%;background:#0369a1"></i><?php endif; ?>
-    </div>
-    <div class="pd3-legend"><?= $st ?> shelf<?= $sp['out']?' · '.$sp['out'].' courier':'' ?><?= $sp['hh']?' · '.$sp['hh'].' at HH':'' ?><?= $sp['dx']?' · '.$sp['dx'].' at Dropex':'' ?></div>
     <?php if($adsVerdict==='stop'): ?><div class="pd3-verdict stop">🔴 Stop ads suggested</div>
     <?php elseif($adsVerdict==='watch'): ?><div class="pd3-verdict watch">🟡 Watch ad spend</div><?php endif; ?>
     <div class="pd3-foot">
@@ -434,7 +466,7 @@ require __DIR__.'/includes/header.php';
         <option value="">— select vendor —</option>
         <?php foreach($vendorList as $v): ?><option value="<?= (int)$v['id'] ?>"><?= e($v['name']) ?></option><?php endforeach; ?>
       </select>
-      <a href="purchases.php" target="_blank" style="font-size:10.5px;color:#0369a1;font-weight:700">+ New vendor not in the list? Add one →</a></div>
+      <a href="vendor_purchases.php#suppliers" target="_blank" style="font-size:10.5px;color:#0369a1;font-weight:700">+ New vendor not in the list? Add one →</a></div>
       <div><label>Purchase Date</label><input type="date" name="pdate" value="<?= date('Y-m-d') ?>"></div>
       <div><label>Quantity (pcs) *</label><input type="number" name="qty" id="sm_qty" min="1" required placeholder="1000"></div>
       <div><label>Rate per pc (Rs.) *</label><input type="number" step="any" name="unit_cost" id="sm_cost" required placeholder="190"></div>

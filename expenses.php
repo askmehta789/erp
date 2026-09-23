@@ -1,27 +1,7 @@
 <?php
 require_once __DIR__.'/functions.php'; require_login(); require_page_access();
 ensure_banks();
-try { q("ALTER TABLE expenses ADD COLUMN IF NOT EXISTS account_id INT NULL"); } catch (Exception $e) {}
-try { q("ALTER TABLE expenses ADD COLUMN IF NOT EXISTS bank_txn_id INT NULL"); } catch (Exception $e) {}
-/* create/refresh/remove the linked bank transaction for one expense — same proven
-   pattern as cod_bank_sync() in cod.php, so paying an expense from a bank account
-   never needs entering the money-out a second time on the Bank page. */
-if (!function_exists('expense_bank_sync')) {
-function expense_bank_sync(array $e, ?int $accountId): ?int {
-  $old=(int)($e['bank_txn_id'] ?? 0);
-  if(!$accountId){ if($old) q("DELETE FROM bank_txns WHERE id=?",[$old]); return null; }
-  $cat = 'Expense — '.($e['category']??'Other');
-  $rem = trim((string)($e['description']??''));
-  if($old){
-    q("UPDATE bank_txns SET account_id=?, txn_date=?, direction='out', amount=?, category=?, remarks=? WHERE id=?",
-      [$accountId,$e['expense_date'],(float)$e['amount'],$cat,$rem,$old]);
-    return $old;
-  }
-  q("INSERT INTO bank_txns(account_id,txn_date,direction,amount,category,remarks) VALUES(?,?,'out',?,?,?)",
-    [$accountId,$e['expense_date'],(float)$e['amount'],$cat,$rem]);
-  return (int)db()->lastInsertId();
-}
-}
+ensure_expense_bank_columns();
 /* keep the auto-billed "due" entry (created by ads_autobill on add) in sync when an
    expense is edited — updates it if still an Ads expense, removes it if the category
    changed away from Ads, creates it if the category changed TO Ads. Never touches
@@ -129,13 +109,64 @@ $byCat=[]; foreach($ex as $e){ $byCat[$e['category']]=($byCat[$e['category']]??0
 $catMax=$byCat?max($byCat):1;
 $adsByProd=[]; foreach($ex as $e){ if($e['category']==='Ads'&&$e['product']) $adsByProd[$e['product']]=($adsByProd[$e['product']]??0)+$e['amount']; } arsort($adsByProd);
 $cats=['Ads','Office','Rent','Utilities','Delivery','Other','Stock Purchase'];
+$allCats = rows("SELECT DISTINCT category FROM expenses WHERE category IS NOT NULL AND category<>'' ORDER BY category");
+$allCats = array_values(array_unique(array_merge($cats, array_column($allCats,'category'))));
+
+/* ===== Expense History: search / filter / sort / paginate (separate from the
+   dashboard KPIs above, which always reflect ALL expenses) ===== */
+$hq    = trim($_GET['hq'] ?? '');
+$hcat  = trim($_GET['hcat'] ?? '');
+$hpay  = in_array($_GET['hpay'] ?? '', ['cash','bank'], true) ? $_GET['hpay'] : '';
+$hprod = trim($_GET['hprod'] ?? '');
+$hcur  = in_array($_GET['hcur'] ?? '', ['Rs','USD'], true) ? $_GET['hcur'] : '';
+$hfrom = preg_match('/^\d{4}-\d{2}-\d{2}$/', $_GET['hfrom'] ?? '') ? $_GET['hfrom'] : '';
+$hto   = preg_match('/^\d{4}-\d{2}-\d{2}$/', $_GET['hto']   ?? '') ? $_GET['hto']   : '';
+$hsort = $_GET['hsort'] ?? 'date_desc';
+$hper  = in_array($_GET['hper'] ?? '25', ['25','50','100','200'], true) ? (int)($_GET['hper'] ?? 25) : 25;
+$hpage = max(1, (int)($_GET['hpage'] ?? 1));
+
+$hWhere=[]; $hParams=[];
+if ($hq!=='')    { $hWhere[]="(description LIKE ? OR product LIKE ? OR category LIKE ?)"; $like='%'.$hq.'%'; array_push($hParams,$like,$like,$like); }
+if ($hcat!=='')  { $hWhere[]="category=?"; $hParams[]=$hcat; }
+if ($hpay!=='')  { $hWhere[]="pay_from=?"; $hParams[]=$hpay; }
+if ($hprod!=='') { $hWhere[]="product=?"; $hParams[]=$hprod; }
+if ($hcur!=='')  { $hWhere[]="currency=?"; $hParams[]=$hcur; }
+if ($hfrom!=='') { $hWhere[]="expense_date>=?"; $hParams[]=$hfrom; }
+if ($hto!=='')   { $hWhere[]="expense_date<=?"; $hParams[]=$hto; }
+$hWhereSql = $hWhere ? ('WHERE '.implode(' AND ',$hWhere)) : '';
+
+$hSortMap = ['date_desc'=>'expense_date DESC, id DESC','date_asc'=>'expense_date ASC, id ASC',
+             'amount_desc'=>'amount DESC, id DESC','amount_asc'=>'amount ASC, id DESC'];
+$hOrderSql = $hSortMap[$hsort] ?? $hSortMap['date_desc'];
+
+$hCount = (int)val("SELECT COUNT(*) FROM expenses $hWhereSql", $hParams);
+$hSum   = (float)val("SELECT COALESCE(SUM(amount),0) FROM expenses $hWhereSql", $hParams);
+$hPages = max(1, (int)ceil($hCount / $hper));
+if ($hpage > $hPages) $hpage = $hPages;
+$hOffset = ($hpage-1) * $hper;
+$hRows  = rows("SELECT * FROM expenses $hWhereSql ORDER BY $hOrderSql LIMIT $hper OFFSET $hOffset", $hParams);
+$hCatCounts = []; foreach($ex as $e){ $hCatCounts[$e['category']] = ($hCatCounts[$e['category']]??0)+1; }
+$hHasFilter = ($hq!=='' || $hcat!=='' || $hpay!=='' || $hprod!=='' || $hcur!=='' || $hfrom!=='' || $hto!=='');
+
+/* build a querystring preserving current history filters, overriding given keys */
+function hqs($overrides=[]) {
+  $base = ['hq'=>$_GET['hq']??'','hcat'=>$_GET['hcat']??'','hpay'=>$_GET['hpay']??'','hprod'=>$_GET['hprod']??'',
+           'hcur'=>$_GET['hcur']??'','hfrom'=>$_GET['hfrom']??'','hto'=>$_GET['hto']??'','hsort'=>$_GET['hsort']??'',
+           'hper'=>$_GET['hper']??'','hpage'=>$_GET['hpage']??''];
+  $merged = array_filter(array_merge($base,$overrides), fn($v)=>$v!=='' && $v!==null);
+  return '?'.http_build_query($merged).'#expense-history';
+}
 ?>
 <div class="page-head"><div><h1>Expenses</h1><p>Track cash, bank & ad spend</p></div></div>
 <?php if($fl=flash()) echo '<div class="flash">'.e($fl).'</div>'; ?>
-<?php $oldSalaryExp = (int)val("SELECT COUNT(*) FROM expenses WHERE category='Salary'");
-if($oldSalaryExp>0): $oldSalaryAmt=(float)val("SELECT COALESCE(SUM(amount),0) FROM expenses WHERE category='Salary'"); ?>
+<?php /* only flag Salary-category rows NOT linked from a Staff & Salary entry —
+   linked ones are auto-synced from there (see salary_expense_sync() in salary.php)
+   and are meant to be here; only truly-orphaned manual ones need cleanup. */
+$orphanSalaryExp = rows("SELECT e.id,e.amount FROM expenses e WHERE e.category='Salary'
+  AND NOT EXISTS (SELECT 1 FROM salary_entries s WHERE s.expense_id=e.id)");
+if($orphanSalaryExp): $oldSalaryAmt=array_sum(array_column($orphanSalaryExp,'amount')); ?>
 <div class="flash" style="background:var(--amber-bg,#fef3c7);color:#8a5a00">
-  ⚠️ <b><?= $oldSalaryExp ?></b> old expense(s) totaling <b><?= money($oldSalaryAmt) ?></b> are still categorized "Salary" — that category has been removed since <a href="salary.php" style="color:#8a5a00;font-weight:800;text-decoration:underline">Staff &amp; Salary</a> is now the one place for this, and having both was double-counting on the Money Dashboard. These old entries are excluded from dashboard totals, but consider deleting them if they duplicate something already in Staff &amp; Salary.
+  ⚠️ <b><?= count($orphanSalaryExp) ?></b> old expense(s) totaling <b><?= money($oldSalaryAmt) ?></b> are categorized "Salary" but aren't linked to any <a href="salary.php" style="color:#8a5a00;font-weight:800;text-decoration:underline">Staff &amp; Salary</a> entry — likely added here manually before that page auto-synced its own. Check whether they duplicate something already in Staff &amp; Salary, and delete them if so.
 </div>
 <?php endif; ?>
 <div class="kgrid">
@@ -172,13 +203,13 @@ $adExParams = [$amS,$amE];
 if ($prodFilter !== '') { $adExSql .= " AND product=?"; $adExParams[] = $prodFilter; }
 $adEx = rows($adExSql, $adExParams);
 $AD=[];   /* product => [mRs,mUsd,tRs,tUsd] */
-$today=date('Y-m-d');
+$yesterday=date('Y-m-d',strtotime('-1 day'));
 foreach($adEx as $e){
   $p=$e['product']!==''?$e['product']:'(untagged)';
   if(!isset($AD[$p])) $AD[$p]=['mRs'=>0,'mUsd'=>0,'tRs'=>0,'tUsd'=>0];
   $usd=(float)$e['usd']>0?(float)$e['usd']:((float)$e['amount']/max(1,$RATE));
   $AD[$p]['mRs']+=(float)$e['amount']; $AD[$p]['mUsd']+=$usd;
-  if($e['expense_date']===$today){ $AD[$p]['tRs']+=(float)$e['amount']; $AD[$p]['tUsd']+=$usd; }
+  if($e['expense_date']===$yesterday){ $AD[$p]['tRs']+=(float)$e['amount']; $AD[$p]['tUsd']+=$usd; }
 }
 /* delivered revenue per product in the same range */
 $REV=[];
@@ -213,7 +244,7 @@ $rangeLabel = ($amS===$amE) ? date('d M Y',strtotime($amS)) : date('d M Y',strto
   <?php endif; ?>
 
   <div class="table-wrap"><table class="tbl num-tbl"><thead><tr>
-    <th>Product</th><th class="right">Today (Rs.)</th><th class="right">Today ($)</th><th class="right">Range (Rs.)</th><th class="right">Range ($)</th><th class="right">Sales (delivered)</th><th class="right">ROAS</th><th class="right">Ads % of Sales</th>
+    <th>Product</th><th class="right">Yesterday (Rs.)</th><th class="right">Yesterday ($)</th><th class="right">Range (Rs.)</th><th class="right">Range ($)</th><th class="right">Sales (delivered)</th><th class="right">ROAS</th><th class="right">Ads % of Sales</th>
   </tr></thead><tbody>
   <?php foreach($AD as $p=>$v): $rev=$REV[$p]??0; $roas=$v['mRs']>0?$rev/$v['mRs']:0; $pct=$rev>0?$v['mRs']/$rev*100:0;
     $sumRs+=$v['mRs'];$sumUsd+=$v['mUsd'];$sumRev+=$rev; ?>
@@ -261,24 +292,97 @@ $rangeLabel = ($amS===$amE) ? date('d M Y',strtotime($amS)) : date('d M Y',strto
 </div>
 <div id="stockWarn" style="display:none;margin-top:12px;background:var(--amber-bg,#fef3c7);border:1px solid #f0c040;color:#8a5a00;border-radius:12px;padding:12px 14px;font-size:12.5px;line-height:1.6">
   ⚠️ <b>Heads up — this can double-count your cost.</b><br>
-  If you're buying stock to sell (like VitiGO from a vendor), record it in <a href="purchases.php" style="color:#8a5a00;font-weight:800;text-decoration:underline">Purchasing / Restock</a> instead. That builds the cost into each product automatically, so it's subtracted once as you sell.<br>
+  If you're buying stock to sell (like VitiGO from a vendor), record it as a <a href="products.php" style="color:#8a5a00;font-weight:800;text-decoration:underline">Restock</a> instead. That builds the cost into each product automatically, so it's subtracted once as you sell.<br>
   Logging it here <b>as well</b> would subtract the same money twice and can make your <b>Net Profit show a fake loss</b>. Only use this category for stock you are <b>not</b> tracking as a batch.
 </div>
 <button class="btn btn-primary" style="margin-top:14px;width:100%;justify-content:center">Add Expense</button>
 </form></div>
-<div class="card" style="margin-top:18px"><div class="panel-head"><h2>All Expenses</h2><span class="muted">· <?= count($ex) ?> entries · Total <?= money($total) ?></span></div>
-<div class="table-wrap"><table class="tbl"><thead><tr><th>Date</th><th>Description</th><th>Category</th><th>Paid From</th><th class="right">Amount</th><th></th></tr></thead><tbody>
-<?php foreach($ex as $e): ?>
+<div class="card" id="expense-history" style="margin-top:18px;scroll-margin-top:18px">
+  <div class="panel-head" style="flex-wrap:wrap;gap:10px">
+    <h2>🧾 Expense History</h2>
+    <span class="muted">· <?= $hCount ?> of <?= count($ex) ?> entries · Total <?= money($hSum) ?><?= $hHasFilter?' (filtered)':'' ?></span>
+  </div>
+
+  <form method="get" id="histForm" style="padding:0 18px 12px">
+    <input type="hidden" name="am" value="<?= e($_GET['am']??'') ?>">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <input class="search-in" type="text" name="hq" value="<?= e($hq) ?>" placeholder="🔍 Search description, category, product…" style="max-width:280px">
+      <button class="btn btn-sm" type="submit">Search</button>
+      <button type="button" class="btn btn-sm" id="histAdvBtn" onclick="toggleHistAdv()">⚙ Filters<span id="histAdvCount" class="advc" style="display:none">0</span></button>
+      <select name="hsort" class="search-in" style="max-width:170px;flex:none" onchange="document.getElementById('histForm').submit()">
+        <option value="date_desc"   <?= $hsort==='date_desc'?'selected':'' ?>>Newest first</option>
+        <option value="date_asc"    <?= $hsort==='date_asc'?'selected':'' ?>>Oldest first</option>
+        <option value="amount_desc" <?= $hsort==='amount_desc'?'selected':'' ?>>Amount: high → low</option>
+        <option value="amount_asc"  <?= $hsort==='amount_asc'?'selected':'' ?>>Amount: low → high</option>
+      </select>
+      <select name="hper" class="search-in" style="max-width:110px;flex:none" onchange="document.getElementById('histForm').submit()">
+        <?php foreach([25,50,100,200] as $pp): ?><option value="<?= $pp ?>" <?= $hper===$pp?'selected':'' ?>><?= $pp ?>/page</option><?php endforeach; ?>
+      </select>
+      <?php if($hHasFilter): ?><a class="btn btn-sm" href="<?= e(hqs(['hq'=>'','hcat'=>'','hpay'=>'','hprod'=>'','hcur'=>'','hfrom'=>'','hto'=>'','hpage'=>''])) ?>">↺ Reset</a><?php endif; ?>
+    </div>
+
+    <div class="chips" style="margin-top:10px">
+      <a class="chip <?= $hcat===''?'on':'' ?>" href="<?= e(hqs(['hcat'=>'','hpage'=>''])) ?>">All <b><?= count($ex) ?></b></a>
+      <?php foreach($allCats as $c): ?>
+        <a class="chip <?= $hcat===$c?'on':'' ?>" href="<?= e(hqs(['hcat'=>$c,'hpage'=>''])) ?>"><?= e($c) ?> <b><?= (int)($hCatCounts[$c]??0) ?></b></a>
+      <?php endforeach; ?>
+    </div>
+
+    <div class="advpanel" id="histAdvPanel" style="display:<?= ($hpay!==''||$hprod!==''||$hcur!==''||$hfrom!==''||$hto!=='')?'block':'none' ?>">
+      <div class="advgrid">
+        <div class="advf"><label>Paid From</label>
+          <select name="hpay" onchange="document.getElementById('histForm').submit()">
+            <option value="">Any</option>
+            <option value="cash" <?= $hpay==='cash'?'selected':'' ?>>💰 Cash</option>
+            <option value="bank" <?= $hpay==='bank'?'selected':'' ?>>🏦 Bank</option>
+          </select></div>
+        <div class="advf"><label>Product</label>
+          <select name="hprod" onchange="document.getElementById('histForm').submit()">
+            <option value="">Any</option>
+            <?php foreach($products as $p): ?><option value="<?= e($p['name']) ?>" <?= $hprod===$p['name']?'selected':'' ?>><?= e($p['name']) ?></option><?php endforeach; ?>
+          </select></div>
+        <div class="advf"><label>Currency</label>
+          <select name="hcur" onchange="document.getElementById('histForm').submit()">
+            <option value="">Any</option>
+            <option value="Rs" <?= $hcur==='Rs'?'selected':'' ?>>Rs. (NPR)</option>
+            <option value="USD" <?= $hcur==='USD'?'selected':'' ?>>USD ($)</option>
+          </select></div>
+        <div class="advf advf-daterange"><label>Date from → to</label>
+          <div class="advrange"><input type="date" name="hfrom" value="<?= e($hfrom) ?>"><span>→</span><input type="date" name="hto" value="<?= e($hto) ?>"></div></div>
+      </div>
+      <div class="advfoot">
+        <button type="submit" class="btn btn-sm btn-primary">Apply</button>
+      </div>
+    </div>
+  </form>
+
+  <div class="table-wrap"><table class="tbl"><thead><tr><th>Date</th><th>Description</th><th>Category</th><th>Paid From</th><th class="right">Amount</th><th></th></tr></thead><tbody>
+<?php foreach($hRows as $e): ?>
 <tr><td class="num"><?= e($e['expense_date']) ?></td>
 <td><?= e($e['description']) ?><?php if($e['product']) echo ' <span class="pill p-grey">📦 '.e($e['product']).'</span>'; if($e['currency']==='USD') echo ' <span class="pill p-blue">$'.e($e['usd_amount']).'</span>'; ?></td>
 <td><span class="pill p-grey"><?= e($e['category']) ?></span></td><td><?= $e['pay_from']==='cash'?'💰 Cash':'🏦 Bank' ?><?php if(!empty($e['account_id'])): $an=(string)val("SELECT name FROM bank_accounts WHERE id=?",[$e['account_id']]); ?> <span class="pill p-blue" style="font-size:9.5px" title="Synced to Bank page — no separate entry needed there">🔗 <?= e($an) ?></span><?php endif; ?></td>
 <td class="num right"><b><?= money($e['amount']) ?></b></td>
 <td class="right">
+  <button class="iact" title="View details" onclick='openViewExp(<?= json_encode($e, JSON_HEX_APOS|JSON_HEX_QUOT) ?>)'>👁</button>
   <button class="iact" title="Edit" onclick='openEditExp(<?= json_encode($e, JSON_HEX_APOS|JSON_HEX_QUOT) ?>)'>✏️</button>
   <form method="post" style="display:inline" onsubmit="return confirm('Delete this expense?')"><input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="delete"><input type="hidden" name="id" value="<?= $e['id'] ?>"><button class="iact del">🗑</button></form>
 </td></tr>
-<?php endforeach; if(!$ex) echo '<tr><td colspan="6"><div class="empty">No expenses yet.</div></td></tr>'; ?>
-</tbody></table></div></div>
+<?php endforeach; if(!$hRows) echo '<tr><td colspan="6"><div class="empty">No expenses match these filters.</div></td></tr>'; ?>
+</tbody></table></div>
+
+<?php if($hCount>0): $hShowFrom=$hOffset+1; $hShowTo=min($hCount,$hOffset+$hper); ?>
+<div class="pager">
+  <span class="pg-info muted">Showing <?= $hShowFrom ?>–<?= $hShowTo ?> of <?= $hCount ?></span>
+  <span class="pg-btns">
+    <a class="btn btn-sm" href="<?= e(hqs(['hpage'=>1])) ?>" <?= $hpage<=1?'style="pointer-events:none;opacity:.4"':'' ?>>« First</a>
+    <a class="btn btn-sm" href="<?= e(hqs(['hpage'=>max(1,$hpage-1)])) ?>" <?= $hpage<=1?'style="pointer-events:none;opacity:.4"':'' ?>>‹ Prev</a>
+    <span class="muted" style="padding:0 8px">Page <?= $hpage ?> / <?= $hPages ?></span>
+    <a class="btn btn-sm" href="<?= e(hqs(['hpage'=>min($hPages,$hpage+1)])) ?>" <?= $hpage>=$hPages?'style="pointer-events:none;opacity:.4"':'' ?>>Next ›</a>
+    <a class="btn btn-sm" href="<?= e(hqs(['hpage'=>$hPages])) ?>" <?= $hpage>=$hPages?'style="pointer-events:none;opacity:.4"':'' ?>>Last »</a>
+  </span>
+</div>
+<?php endif; ?>
+</div>
 
 <!-- edit expense modal -->
 <div class="modal-bg" id="editExpModal" style="z-index:99990">
@@ -324,6 +428,60 @@ function openEditExp(e){
 }
 function closeEditExp(){ document.getElementById('editExpModal').classList.remove('open'); }
 document.getElementById('editExpModal').addEventListener('click',function(ev){ if(ev.target===this) closeEditExp(); });
+</script>
+
+<!-- view expense details modal -->
+<div class="modal-bg" id="viewExpModal" style="z-index:99990">
+  <div class="modal" style="width:460px;max-width:94vw">
+    <div class="modal-head"><span>🧾 Expense Details</span><span class="mx" onclick="closeViewExp()">✕</span></div>
+    <div style="padding:20px 22px" id="ve_body">
+      <div class="dl-row"><span class="dl-k">Date</span><span class="dl-v" id="ve_date"></span></div>
+      <div class="dl-row"><span class="dl-k">Amount</span><span class="dl-v" id="ve_amount"></span></div>
+      <div class="dl-row"><span class="dl-k">Category</span><span class="dl-v" id="ve_category"></span></div>
+      <div class="dl-row"><span class="dl-k">Description</span><span class="dl-v" id="ve_desc"></span></div>
+      <div class="dl-row" id="ve_prod_row"><span class="dl-k">Product</span><span class="dl-v" id="ve_prod"></span></div>
+      <div class="dl-row"><span class="dl-k">Paid From</span><span class="dl-v" id="ve_payfrom"></span></div>
+      <div class="dl-row" id="ve_acct_row"><span class="dl-k">Linked Account</span><span class="dl-v" id="ve_acct"></span></div>
+      <div class="dl-row"><span class="dl-k">Expense ID</span><span class="dl-v muted" id="ve_id"></span></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="closeViewExp()">Close</button>
+      <button class="btn btn-primary" id="ve_editBtn">✏️ Edit</button>
+    </div>
+  </div>
+</div>
+<style>
+.dl-row{display:flex;justify-content:space-between;gap:14px;padding:8px 0;border-bottom:1px solid var(--border);font-size:13.5px}
+.dl-row:last-child{border-bottom:none}
+.dl-k{color:var(--muted);font-weight:700}
+.dl-v{text-align:right;font-weight:600}
+</style>
+<script>
+var ACCOUNTS=<?= json_encode(array_column($linkAccounts,'name','id')) ?>;
+var VE_CURRENT=null;
+function openViewExp(e){
+  VE_CURRENT=e;
+  document.getElementById('ve_date').textContent=e.expense_date||'';
+  var amt = e.currency==='USD' ? ('$'+e.usd_amount+'  ('+fmtRs(e.amount)+')') : fmtRs(e.amount);
+  document.getElementById('ve_amount').textContent=amt;
+  document.getElementById('ve_category').textContent=e.category||'';
+  document.getElementById('ve_desc').textContent=e.description||'—';
+  var pr=document.getElementById('ve_prod_row');
+  if(e.product){ pr.style.display='flex'; document.getElementById('ve_prod').textContent=e.product; } else { pr.style.display='none'; }
+  document.getElementById('ve_payfrom').textContent=e.pay_from==='cash'?'💰 Cash':'🏦 Bank';
+  var ar=document.getElementById('ve_acct_row');
+  if(e.account_id && ACCOUNTS[e.account_id]){ ar.style.display='flex'; document.getElementById('ve_acct').textContent='🔗 '+ACCOUNTS[e.account_id]; } else { ar.style.display='none'; }
+  document.getElementById('ve_id').textContent='#'+e.id;
+  document.getElementById('viewExpModal').classList.add('open');
+}
+function fmtRs(n){ return '<?= addslashes(CURRENCY) ?> '+Number(parseFloat(n)||0).toLocaleString('en-IN',{maximumFractionDigits:0}); }
+function closeViewExp(){ document.getElementById('viewExpModal').classList.remove('open'); }
+document.getElementById('viewExpModal').addEventListener('click',function(ev){ if(ev.target===this) closeViewExp(); });
+document.getElementById('ve_editBtn').addEventListener('click',function(){ if(VE_CURRENT){ closeViewExp(); openEditExp(VE_CURRENT); } });
+function toggleHistAdv(){
+  var p=document.getElementById('histAdvPanel');
+  p.style.display = (p.style.display==='none'||!p.style.display) ? 'block' : 'none';
+}
 </script>
 
 <script>

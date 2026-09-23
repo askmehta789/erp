@@ -19,6 +19,9 @@ if ($given === '' || !hash_equals($want, $given)) { http_response_code(403); die
 
 function csay($m){ echo '['.date('H:i:s')."] $m\n"; }
 function cnotify($msg,$type='info',$link='',$dedupe=12){
+  if (strtolower((string)setting('notifications_enabled','yes')) === 'no') return;
+  $disabled = array_filter(array_map('trim', explode(',', (string)setting('disabled_notif_types',''))));
+  if (in_array($type, $disabled, true)) return;
   try{
     q("CREATE TABLE IF NOT EXISTS notifications(id INT AUTO_INCREMENT PRIMARY KEY,type VARCHAR(30) DEFAULT 'info',message VARCHAR(255) NOT NULL,link VARCHAR(120) DEFAULT '',is_read TINYINT(1) DEFAULT 0,created_at DATETIME DEFAULT CURRENT_TIMESTAMP)");
     if($dedupe>0 && (int)val("SELECT COUNT(*) FROM notifications WHERE message=? AND created_at>=DATE_SUB(NOW(),INTERVAL ? HOUR)",[$msg,$dedupe])) return;

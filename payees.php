@@ -125,8 +125,13 @@ usort($payees, function($a,$b){
   if(abs(abs($ra)-abs($rb))>0.5) return abs($rb)<=>abs($ra);
   return strcmp($a['name'],$b['name']);
 });
-$grandPaid=0; $grandRemain=0;
-foreach($payees as $p){ $grandPaid+=(float)$p['tpaid']; $grandRemain+=max(0,(float)$p['tdue']-(float)$p['tpaid']); }
+$grandPaid=0; $grandRemain=0; $cntDue=0; $cntAdv=0; $cntSettled=0;
+foreach($payees as $p){
+  $rem=(float)$p['tdue']-(float)$p['tpaid'];
+  $grandPaid+=(float)$p['tpaid']; $grandRemain+=max(0,$rem);
+  if($rem>0.5)$cntDue++; elseif($rem<-0.5)$cntAdv++; else $cntSettled++;
+}
+$tMonthPaid = array_sum(array_column($payees,'mpaid'));
 
 $view = (int)($_GET['id'] ?? 0);
 $linkAccounts = rows("SELECT * FROM bank_accounts WHERE archived=0 ORDER BY kind='cash' DESC, name");
@@ -137,13 +142,83 @@ foreach($linkAccounts as $A){
   $acctBal[$A['id']]=(float)$A['opening']+$in-$out;
 }
 $vp = $view ? row("SELECT * FROM payees WHERE id=?",[$view]) : null;
-$vm = preg_match('/^\d{4}-\d{2}$/', $_GET['m'] ?? '') ? $_GET['m'] : '';
+
+/* Product resolver for the ledger — prefer the linked expense's real product
+   (set for Ads dues via ref_expense_id), else sniff a known product name out of
+   the free-text label ("Ads — Nabhi Oil ($6)", "Heel Guard Plus X 50 pc @ Rs.170"),
+   checked longest name first so "Nabhi Oil Plus" never loses to "Nabhi Oil". */
+function payee_resolve_product($label, $expProduct, $productNames) {
+  if ($expProduct) return $expProduct;
+  $label = trim((string)$label);
+  if ($label === '') return null;
+  $labelLower = strtolower($label);
+  foreach ($productNames as $pn) {
+    if ($pn !== '' && strpos($labelLower, strtolower($pn)) === 0) return $pn;
+  }
+  if (strpos($label, '—') !== false) {
+    $p = trim(preg_replace('/\(\$[\d.,]+\)\s*$/', '', trim(substr($label, strrpos($label,'—')+3))));
+    if ($p !== '') return $p;
+  }
+  return null;
+}
+
 if ($vp) {
-  $w = "payee_id=?"; $args=[$view];
-  if ($vm){ $w.=" AND DATE_FORMAT(entry_date,'%Y-%m')=?"; $args[]=$vm; }
-  $ledger = rows("SELECT * FROM payee_ledger WHERE $w ORDER BY entry_date DESC, id DESC LIMIT 500",$args);
-  $vDue=(float)val("SELECT COALESCE(SUM(amount),0) FROM payee_ledger WHERE payee_id=? AND type='due'",[$view]);
-  $vPaid=(float)val("SELECT COALESCE(SUM(amount),0) FROM payee_ledger WHERE payee_id=? AND type='paid'",[$view]);
+  $productNames = array_column(rows("SELECT name FROM products ORDER BY CHAR_LENGTH(name) DESC"), 'name');
+
+  /* full unfiltered history — the true running-remaining balance and the product
+     filter's dropdown both need the whole story, not just what's on screen */
+  $fullHistory = rows("SELECT pl.*, e.product AS exp_product
+                        FROM payee_ledger pl LEFT JOIN expenses e ON e.id=pl.ref_expense_id
+                        WHERE pl.payee_id=? ORDER BY pl.entry_date ASC, pl.id ASC", [$view]);
+  $run = 0; $runMap = []; $productSet = [];
+  foreach ($fullHistory as &$l) {
+    $l['product_name'] = payee_resolve_product($l['label'], $l['exp_product'], $productNames);
+    $run += $l['type']==='due' ? (float)$l['amount'] : -(float)$l['amount'];
+    $runMap[$l['id']] = $run;
+    if ($l['product_name']) $productSet[$l['product_name']] = true;
+  }
+  unset($l);
+  ksort($productSet);
+
+  $vDue  = array_sum(array_map(fn($l)=>$l['type']==='due'  ? (float)$l['amount'] : 0, $fullHistory));
+  $vPaid = array_sum(array_map(fn($l)=>$l['type']==='paid' ? (float)$l['amount'] : 0, $fullHistory));
+
+  /* filters — type, product, date range, keyword — all via GET so links/bookmarks work */
+  $fType = in_array($_GET['type'] ?? '', ['due','paid'], true) ? $_GET['type'] : '';
+  $fFrom = preg_match('/^\d{4}-\d{2}-\d{2}$/', $_GET['from'] ?? '') ? $_GET['from'] : '';
+  $fTo   = preg_match('/^\d{4}-\d{2}-\d{2}$/', $_GET['to'] ?? '')   ? $_GET['to']   : '';
+  $fKw   = trim($_GET['kw'] ?? '');
+  $fProd = trim($_GET['product'] ?? '');
+
+  $matches = function($l) use ($fType,$fFrom,$fTo,$fKw) {
+    if ($fType && $l['type']!==$fType) return false;
+    if ($fFrom && $l['entry_date']<$fFrom) return false;
+    if ($fTo && $l['entry_date']>$fTo) return false;
+    if ($fKw && stripos($l['label'],$fKw)===false) return false;
+    return true;
+  };
+
+  /* spend-by-product — respects type/date/keyword but not the product pick itself,
+     so the breakdown always lists every product to choose from */
+  $byProduct = [];
+  foreach ($fullHistory as $l) {
+    if (!$matches($l)) continue;
+    $pn = $l['product_name'] ?: 'Other / General';
+    if (!isset($byProduct[$pn])) $byProduct[$pn] = ['due'=>0,'paid'=>0,'n'=>0];
+    $byProduct[$pn][$l['type']] += (float)$l['amount'];
+    $byProduct[$pn]['n']++;
+  }
+  uasort($byProduct, function($a,$b){ return ($b['due']-$b['paid']) <=> ($a['due']-$a['paid']); });
+
+  /* the line-item list — every filter applied, newest first, capped for the page */
+  $ledger = array_values(array_filter($fullHistory, function($l) use ($matches,$fProd) {
+    if (!$matches($l)) return false;
+    if ($fProd !== '' && ($l['product_name'] ?: 'Other / General') !== $fProd) return false;
+    return true;
+  }));
+  $ledger = array_reverse($ledger);
+  $ledgerTotal = count($ledger);
+  $ledger = array_slice($ledger, 0, 500);
 }
 require __DIR__.'/includes/header.php';
 ?>
@@ -160,81 +235,150 @@ require __DIR__.'/includes/header.php';
 <div class="mgrid">
   <div class="metric blue"><div><div class="mv" style="font-size:19px"><?= money($grandPaid) ?></div><div class="ml">Total Paid Out</div><div class="ms">all payees, all time</div></div><div class="mi">🏦</div></div>
   <div class="metric <?= $grandRemain>0.5?'amber':'green' ?>"><div><div class="mv" style="font-size:19px"><?= money($grandRemain) ?></div><div class="ml">Remaining to Pay</div><div class="ms">total outstanding</div></div><div class="mi">⏳</div></div>
+  <div class="metric teal"><div><div class="mv" style="font-size:19px"><?= money($tMonthPaid) ?></div><div class="ml">Paid This Month</div><div class="ms"><?= e(date('F Y')) ?></div></div><div class="mi">📅</div></div>
   <div class="metric purple"><div><div class="mv"><?= count($payees) ?></div><div class="ml">Payees</div><div class="ms">people & vendors</div></div><div class="mi">👥</div></div>
 </div>
 
-<div class="panel" style="margin-top:18px">
-  <?php $adsPid=(int)setting('ads_payee_id',0); ?>
-  <div class="panel-head" style="flex-wrap:wrap;gap:10px"><h2>👥 Payee Summary</h2>
-    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-      <span class="muted" style="font-size:11.5px"><?= $adsPid?'⚡ Ads auto-bill: ON':'⚡ tap the lightning on a payee to auto-bill new Ads expenses to them' ?></span>
-      <?php if($isAdmin && $adsPid): ?><form method="post" style="display:inline" onsubmit="return confirm('Import ALL past Ads expenses as dues to the ads payee? Safe to run twice — never duplicates.')">
+<?php $adsPid=(int)setting('ads_payee_id',0); ?>
+<div class="dash-sec" style="margin:22px 0 10px">Payee Summary</div>
+<div class="panel" style="padding:14px 16px 4px;margin-bottom:14px">
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+    <span class="muted" style="font-size:11.5px"><?= $adsPid?'⚡ Ads auto-bill: ON':'⚡ tap the lightning on a payee to auto-bill new Ads expenses to them' ?></span>
+    <?php if($isAdmin && $adsPid): ?><div style="display:flex;gap:8px;flex-wrap:wrap">
+      <form method="post" style="display:inline" onsubmit="return confirm('Import ALL past Ads expenses as dues to the ads payee? Safe to run twice — never duplicates.')">
         <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="backfill_ads">
         <button class="btn btn-sm">⚡ Import past Ads expenses</button></form>
-        <form method="post" style="display:inline" title="Re-sync ad dues to their rupee amount — fixes dollars shown as Rs.">
-          <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="repair_ads">
-          <button class="btn btn-sm">🔧 Fix $→Rs on Ads dues</button></form><?php endif; ?>
-    </div></div>
-  <div style="padding:10px 14px 0"><input id="paySearch" type="search" placeholder="🔍 Search payee…" style="width:100%;max-width:340px;border:1px solid #dfe4f2;border-radius:10px;padding:8px 12px;font:inherit" oninput="payFilter(this.value)"></div>
-  <div class="table-wrap"><table class="tbl num-tbl" id="payTbl"><thead><tr>
-    <th>Name</th><th>Status</th><th class="right">Total</th><th class="right">Total Paid</th><th class="right">Remaining</th><th class="right">This Month</th><th>Last Payment</th><th></th>
-  </tr></thead><tbody>
-  <?php foreach($payees as $p): $rem=(float)$p['tdue']-(float)$p['tpaid'];
-        $days = $p['lastpay'] ? (int)floor((time()-strtotime($p['lastpay']))/86400) : null; ?>
-    <tr class="payrow" data-name="<?= e(mb_strtolower($p['name'].' '.$p['note'])) ?>">
-      <td><a href="payees.php?id=<?= (int)$p['id'] ?>" style="font-weight:800"><?= e($p['name']) ?></a><?= ((int)$p['id']===$adsPid)?' <span class="pill p-amber" style="font-size:9px">⚡ ADS PAYEE</span>':'' ?><?= $p['note']?'<div class="muted" style="font-size:11px">'.e($p['note']).'</div>':'' ?>
-        <div class="muted" style="font-size:10.5px"><?= (int)$p['nentries'] ?> entries</div></td>
-      <td><?php if($rem>0.5): ?><span class="pill p-amber">🟠 Due</span><?php elseif($rem<-0.5): ?><span class="pill p-blue">🔵 Advance</span><?php else: ?><span class="pill p-green">🟢 Settled</span><?php endif; ?></td>
-      <td class="num right"><?= money($p['tdue']) ?></td>
-      <td class="num right" style="color:var(--green)"><?= money($p['tpaid']) ?></td>
-      <td class="num right" style="font-weight:800;color:<?= $rem>0.5?'var(--amber)':($rem< -0.5?'var(--blue)':'var(--green)') ?>">
-        <?= $rem>0.5?money($rem):($rem< -0.5?money(-$rem).' advance':'✓ settled') ?></td>
-      <td class="num right" title="paid to them this month"><?= (float)$p['mpaid']>0?money($p['mpaid']):'—' ?></td>
-      <td><?php if($p['lastpay']): ?><span style="font-size:12px"><?= e(date('d M',strtotime($p['lastpay']))) ?></span>
-            <span class="muted" style="font-size:10.5px;<?= ($rem>0.5 && $days>30)?'color:var(--red);font-weight:800':'' ?>"><?= $days===0?'today':$days.'d ago' ?></span>
-          <?php else: ?><span class="muted">never</span><?php endif; ?></td>
-      <td class="right nowrap">
-        <button class="pbtn pbtn-pay" onclick="payQuick(<?= (int)$p['id'] ?>,'paid')" title="Record a payment to this payee">💸 Pay</button>
-        <button class="pbtn pbtn-due" onclick="payQuick(<?= (int)$p['id'] ?>,'due')" title="Record a new due/bill">🧾 Due</button>
-        <a class="pbtn pbtn-ghost" href="payees.php?id=<?= (int)$p['id'] ?>">📜 Ledger</a>
-        <?php if($isAdmin && (int)$p['id']!==$adsPid): ?><form method="post" style="display:inline"><input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="set_ads_payee"><input type="hidden" name="id" value="<?= (int)$p['id'] ?>"><button class="iact" title="Auto-bill new Ads expenses to this payee">⚡</button></form><?php endif; ?>
-        <?php if($isAdmin): ?><form method="post" style="display:inline" onsubmit="return confirm('Delete this payee AND all their entries?')"><input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="del_payee"><input type="hidden" name="id" value="<?= (int)$p['id'] ?>"><button class="iact del">🗑</button></form><?php endif; ?></td>
-    </tr>
-  <?php endforeach; if(!$payees) echo '<tr><td colspan="8"><div class="empty">No payees yet — add Rohit, Raushan, Vedas Store… then record dues & payments.</div></td></tr>'; ?>
-  </tbody></table></div>
+      <form method="post" style="display:inline" title="Re-sync ad dues to their rupee amount — fixes dollars shown as Rs.">
+        <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="repair_ads">
+        <button class="btn btn-sm">🔧 Fix $→Rs on Ads dues</button></form>
+    </div><?php endif; ?>
+  </div>
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding-bottom:14px">
+    <div class="chips" id="payChips" style="margin:0">
+      <button class="chip on" data-f="all" onclick="payChipFilter('all',this)">All <b><?= count($payees) ?></b></button>
+      <button class="chip" data-f="due" onclick="payChipFilter('due',this)">🟠 Due <b><?= $cntDue ?></b></button>
+      <button class="chip" data-f="advance" onclick="payChipFilter('advance',this)">🔵 Advance <b><?= $cntAdv ?></b></button>
+      <button class="chip" data-f="settled" onclick="payChipFilter('settled',this)">🟢 Settled <b><?= $cntSettled ?></b></button>
+    </div>
+    <input id="paySearch" type="search" placeholder="🔍 Search payee…" class="search-in" style="width:100%;max-width:260px" oninput="payFilter(this.value)">
+  </div>
 </div>
 
+<div class="cour-cards" id="payCards">
+<?php foreach($payees as $p): $rem=(float)$p['tdue']-(float)$p['tpaid'];
+      $status = $rem>0.5?'due':($rem<-0.5?'advance':'settled');
+      $col = $status==='due'?'#f59e0b':($status==='advance'?'#3b82f6':'#10b981');
+      $days = $p['lastpay'] ? (int)floor((time()-strtotime($p['lastpay']))/86400) : null;
+      $pct = $p['tdue']>0.5 ? min(100, round((float)$p['tpaid']/(float)$p['tdue']*100)) : 100;
+?>
+  <div class="ccard payee-card" data-status="<?= $status ?>" data-name="<?= e(mb_strtolower($p['name'].' '.$p['note'])) ?>" style="--ccol:<?= $col ?>">
+    <div class="ccard-top">
+      <div>
+        <div class="ccard-name"><?= e($p['name']) ?> <?= ((int)$p['id']===$adsPid)?' <span class="pill p-yellow" style="font-size:9px">⚡ ADS PAYEE</span>':'' ?></div>
+        <div class="ccard-sub"><?= $p['note']?e($p['note']).' · ':'' ?><?= (int)$p['nentries'] ?> entries</div>
+      </div>
+      <?php if($status==='due'): ?><span class="pill p-yellow">🟠 Due</span>
+      <?php elseif($status==='advance'): ?><span class="pill p-blue">🔵 Advance</span>
+      <?php else: ?><span class="pill p-green">🟢 Settled</span><?php endif; ?>
+    </div>
+    <div class="ccard-bar"><i style="width:<?= $pct ?>%"></i></div>
+    <div class="ccard-chips">
+      <?php if($p['lastpay']): ?><span title="last payment date">🕓 last paid <?= e(date('d M',strtotime($p['lastpay']))) ?> · <?= $days===0?'today':$days.'d ago' ?></span>
+      <?php else: ?><span>🕓 never paid</span><?php endif; ?>
+    </div>
+    <div class="ccard-grid">
+      <div class="cb cb-b"><div class="cbl">📋 Total Billed</div><div class="cbv" style="font-size:14px"><?= money($p['tdue']) ?></div></div>
+      <div class="cb cb-g"><div class="cbl">💸 Total Paid</div><div class="cbv" style="font-size:14px"><?= money($p['tpaid']) ?></div></div>
+      <div class="cb <?= $status==='due'?'cb-y':'cb-g' ?>"><div class="cbl">⏳ Remaining</div><div class="cbv" style="font-size:14px"><?= $rem>0.5?money($rem):($rem< -0.5?money(-$rem):'✓') ?></div></div>
+      <div class="cb cb-r"><div class="cbl">📅 This Month</div><div class="cbv" style="font-size:14px"><?= (float)$p['mpaid']>0?money($p['mpaid']):'—' ?></div></div>
+    </div>
+    <div class="ccard-foot">
+      <button class="pbtn pbtn-pay" onclick="payQuick(<?= (int)$p['id'] ?>,'paid')" title="Record a payment to this payee">💸 Pay</button>
+      <button class="pbtn pbtn-due" onclick="payQuick(<?= (int)$p['id'] ?>,'due')" title="Record a new due/bill">🧾 Due</button>
+      <a class="pbtn pbtn-ghost" href="payees.php?id=<?= (int)$p['id'] ?>">📜 Ledger</a>
+      <div style="margin-left:auto;display:flex;gap:6px">
+        <?php if($isAdmin && (int)$p['id']!==$adsPid): ?><form method="post" style="display:inline"><input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="set_ads_payee"><input type="hidden" name="id" value="<?= (int)$p['id'] ?>"><button class="iact" title="Auto-bill new Ads expenses to this payee">⚡</button></form><?php endif; ?>
+        <?php if($isAdmin): ?><form method="post" style="display:inline" onsubmit="return confirm('Delete this payee AND all their entries?')"><input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="del_payee"><input type="hidden" name="id" value="<?= (int)$p['id'] ?>"><button class="iact del">🗑</button></form><?php endif; ?>
+      </div>
+    </div>
+  </div>
+<?php endforeach; if(!$payees): ?>
+  <div class="panel" style="grid-column:1/-1"><div class="empty">No payees yet — add Rohit, Raushan, Vedas Store… then record dues &amp; payments.</div></div>
+<?php endif; ?>
+</div>
+<div class="empty" id="payNoMatch" style="display:none">No payees match this filter.</div>
+
 <?php if($vp): ?>
-<div class="panel" style="margin-top:18px">
+<div class="dash-sec" style="margin:22px 0 10px">📜 <?= e($vp['name']) ?> — Ledger</div>
+<div class="panel">
   <div class="panel-head" style="flex-wrap:wrap;gap:10px">
-    <h2>📜 <?= e($vp['name']) ?> — Ledger</h2>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       <span class="pill p-blue">Total <?= money($vDue) ?></span>
       <span class="pill p-green">Paid <?= money($vPaid) ?></span>
-      <span class="pill <?= ($vDue-$vPaid)>0.5?'p-amber':'p-green' ?>" style="font-weight:800">Remaining <?= money(max(0,$vDue-$vPaid)) ?></span>
-      <form method="get" style="display:flex;gap:6px"><input type="hidden" name="id" value="<?= $view ?>"><input type="month" name="m" value="<?= e($vm) ?>"><button class="btn btn-sm">Filter</button><?= $vm?'<a class="btn btn-sm" href="payees.php?id='.$view.'">✕</a>':'' ?></form>
+      <span class="pill <?= ($vDue-$vPaid)>0.5?'p-yellow':'p-green' ?>" style="font-weight:800">Remaining <?= money(max(0,$vDue-$vPaid)) ?></span>
     </div>
+    <a class="btn btn-sm" href="payees.php">← All Payees</a>
   </div>
+
+  <form method="get" class="advpanel" style="margin:12px 14px;box-shadow:none;border-style:dashed">
+    <input type="hidden" name="id" value="<?= $view ?>">
+    <div class="advgrid">
+      <div class="advf"><label>Type</label><select name="type">
+        <option value="">Any</option>
+        <option value="due"  <?= $fType==='due'?'selected':'' ?>>🧾 Due</option>
+        <option value="paid" <?= $fType==='paid'?'selected':'' ?>>💸 Paid</option>
+      </select></div>
+      <div class="advf"><label>Product</label><select name="product">
+        <option value="">Any product</option>
+        <?php foreach(array_keys($productSet) as $pn): ?><option value="<?= e($pn) ?>" <?= $fProd===$pn?'selected':'' ?>><?= e($pn) ?></option><?php endforeach; ?>
+        <option value="Other / General" <?= $fProd==='Other / General'?'selected':'' ?>>Other / General</option>
+      </select></div>
+      <div class="advf advf-daterange"><label>Date from → to</label><div class="advrange"><input type="date" name="from" value="<?= e($fFrom) ?>"><span>→</span><input type="date" name="to" value="<?= e($fTo) ?>"></div></div>
+      <div class="advf"><label>Keyword</label><input type="text" name="kw" value="<?= e($fKw) ?>" placeholder="search note…"></div>
+    </div>
+    <div class="advfoot">
+      <span class="muted" id="ledgerSummary"><?= $ledgerTotal ?> entr<?= $ledgerTotal===1?'y':'ies' ?> match<?= $ledgerTotal>500?' — showing latest 500':'' ?></span>
+      <a class="btn btn-sm" href="payees.php?id=<?= $view ?>">↺ Reset</a>
+      <button class="btn btn-sm btn-primary">Apply</button>
+    </div>
+  </form>
+
+  <?php if($byProduct): ?>
+  <div class="panel-head" style="border-top:1px solid var(--border)"><h2>🏷️ Spend by Product</h2><span class="muted" style="font-size:11.5px"><?= count($byProduct) ?> product<?= count($byProduct)===1?'':'s' ?> · matches current type/date/keyword filters</span></div>
   <div class="table-wrap"><table class="tbl num-tbl"><thead><tr>
-    <th>Date</th><th>Type</th><th>Expense / Note</th><th class="right">Amount</th><th class="right">Running Remaining</th><th></th>
+    <th>Product</th><th class="right">Due</th><th class="right">Paid</th><th class="right">Remaining</th><th class="right">Entries</th><th></th>
   </tr></thead><tbody>
-  <?php
-    /* running balance computed oldest→newest, displayed newest-first */
-    $asc=array_reverse($ledger); $run=0; $runMap=[];
-    /* if month filter on, seed with balance before the month */
-    if($vm){ $run=(float)val("SELECT COALESCE(SUM(CASE WHEN type='due' THEN amount ELSE -amount END),0) FROM payee_ledger WHERE payee_id=? AND DATE_FORMAT(entry_date,'%Y-%m')<?",[$view,$vm]); }
-    foreach($asc as $l){ $run += $l['type']==='due' ? (float)$l['amount'] : -(float)$l['amount']; $runMap[$l['id']]=$run; }
-  ?>
+  <?php foreach($byProduct as $pn=>$s): $prem=$s['due']-$s['paid']; $isPicked=$fProd===$pn; ?>
+    <tr<?= $isPicked?' style="background:var(--brand-soft)"':'' ?>>
+      <td style="font-weight:700"><?= e($pn) ?></td>
+      <td class="num right"><?= money($s['due']) ?></td>
+      <td class="num right" style="color:var(--green)"><?= money($s['paid']) ?></td>
+      <td class="num right" style="font-weight:800;color:<?= $prem>0.5?'var(--amber)':'var(--green)' ?>"><?= $prem>0.5?money($prem):'✓ settled' ?></td>
+      <td class="num right"><?= (int)$s['n'] ?></td>
+      <td class="right">
+        <?php if($isPicked): ?><a class="btn btn-sm" href="?<?= e(http_build_query(array_diff_key($_GET,['product'=>1]))) ?>">✕ Clear</a>
+        <?php else: ?><a class="btn btn-sm" href="?<?= e(http_build_query(array_merge($_GET,['product'=>$pn]))) ?>">🔍 View</a><?php endif; ?>
+      </td>
+    </tr>
+  <?php endforeach; ?>
+  </tbody></table></div>
+  <?php endif; ?>
+
+  <div class="panel-head" style="border-top:1px solid var(--border)"><h2>Entries</h2></div>
+  <div class="table-wrap"><table class="tbl num-tbl"><thead><tr>
+    <th>Date</th><th>Type</th><th>Product</th><th>Note</th><th class="right">Amount</th><th class="right">Running Remaining</th><th></th>
+  </tr></thead><tbody>
   <?php foreach($ledger as $l): ?>
     <tr>
       <td class="num"><?= e($l['entry_date']) ?></td>
       <td><?= $l['type']==='due' ? '<span class="pill p-blue">🧾 Due</span>' : '<span class="pill p-green">💸 Paid</span>' ?></td>
+      <td><?= $l['product_name'] ? '<span class="pill p-grey" style="font-size:10px">'.e($l['product_name']).'</span>' : '<span class="muted">—</span>' ?></td>
       <td><?= e($l['label'] ?: '—') ?></td>
       <td class="num right" style="font-weight:700;color:<?= $l['type']==='due'?'var(--ink)':'var(--green)' ?>"><?= money($l['amount']) ?></td>
       <td class="num right" style="color:<?= $runMap[$l['id']]>0.5?'var(--amber)':'var(--green)' ?>"><?= money(max(0,$runMap[$l['id']])) ?></td>
       <td class="right"><?php if($isAdmin): ?><form method="post" style="display:inline" onsubmit="return confirm('Delete entry?')"><input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="del_entry"><input type="hidden" name="id" value="<?= (int)$l['id'] ?>"><input type="hidden" name="pid" value="<?= $view ?>"><button class="iact del">🗑</button></form><?php endif; ?></td>
     </tr>
-  <?php endforeach; if(!$ledger) echo '<tr><td colspan="6"><div class="empty">No entries'.($vm?' in this month':'').'.</div></td></tr>'; ?>
+  <?php endforeach; if(!$ledger) echo '<tr><td colspan="7"><div class="empty">No entries match these filters.</div></td></tr>'; ?>
   </tbody></table></div>
 </div>
 <?php endif; ?>
@@ -297,11 +441,24 @@ function openEntry(t){
   document.getElementById('enBg').classList.add('open');document.body.classList.add('modal-open');
 }
 function closeM(id){document.getElementById(id).classList.remove('open');document.body.classList.remove('modal-open');}
-function payFilter(q){
-  q=(q||'').toLowerCase();
-  document.querySelectorAll('#payTbl tbody tr.payrow').forEach(function(tr){
-    tr.style.display = (!q || (tr.dataset.name||'').indexOf(q)!==-1) ? '' : 'none';
+var payChip='all', payQ='';
+function payChipFilter(f,btn){
+  payChip=f;
+  document.querySelectorAll('#payChips .chip').forEach(function(c){c.classList.remove('on');});
+  btn.classList.add('on');
+  applyPayFilters();
+}
+function payFilter(q){ payQ=(q||'').toLowerCase(); applyPayFilters(); }
+function applyPayFilters(){
+  var shown=0;
+  document.querySelectorAll('#payCards .payee-card').forEach(function(c){
+    var okStatus = payChip==='all' || c.dataset.status===payChip;
+    var okSearch = !payQ || (c.dataset.name||'').indexOf(payQ)!==-1;
+    var vis = okStatus && okSearch;
+    c.style.display = vis ? '' : 'none';
+    if(vis) shown++;
   });
+  var nm=document.getElementById('payNoMatch'); if(nm) nm.style.display = shown ? 'none' : '';
 }
 function payQuick(pid,type){
   openEntry(type);

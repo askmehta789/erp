@@ -9,6 +9,9 @@ require_once __DIR__.'/functions.php';
 require_login(); require_page_access();
 repair_zero_cost_profit();   /* auto-fix orders saved with Rs.0 cost so profit is honest everywhere */
 ensure_order_group();
+try { q("ALTER TABLE orders ADD COLUMN IF NOT EXISTS sales_person_id INT NULL AFTER code"); } catch (Exception $e) {}
+try { q("ALTER TABLE orders ADD INDEX idx_sales_person_id (sales_person_id)"); } catch (Exception $e) {}
+ensure_company_salesperson();
 
 /* ---------------------------------------------------------------------
    AJAX ENDPOINT  (same file)   sales.php?ajax=1
@@ -24,8 +27,7 @@ if (isset($_GET['ajax'])) {
     /* build a clean field set from POST, looking up cost + defaults */
     $build = function() {
         $pid  = (int)($_POST['product_id'] ?? 0) ?: null;
-        $prod = $pid ? row("SELECT cost FROM products WHERE id=?", [$pid]) : null;
-        $cost = $prod ? fifo_current_cost((int)$prod['id']) : (float)($_POST['cost_price'] ?? 0);   /* FIFO: oldest open batch, not latest rate */
+        $cost = $pid ? fifo_current_cost($pid) : (float)($_POST['cost_price'] ?? 0);   /* FIFO: oldest open batch, not latest rate */
 
         $zone     = strtolower(trim($_POST['zone'] ?? 'inside')) === 'outside' ? 'outside' : 'inside';
         /* delivery charge is YOUR courier cost, entered manually per order (customer gets free delivery) */
@@ -49,6 +51,7 @@ if (isset($_GET['ajax'])) {
             'customer'        => trim($_POST['customer']  ?? ''),
             'phone'           => trim($_POST['phone']     ?? ''),
             'address'         => trim($_POST['address']   ?? ''),
+            'sales_person_id' => (int)($_POST['sales_person_id'] ?? 0) ?: null,
             'product_id'      => $pid,
             'qty'             => max(1, (int)($_POST['qty'] ?? 1)),
             'sell_price'      => (float)($_POST['sell_price'] ?? 0),
@@ -66,10 +69,11 @@ if (isset($_GET['ajax'])) {
     };
 
     $fullRow = function($id) {
-        $r = row("SELECT o.*, p.name AS product_name, c.name AS courier_name
+        $r = row("SELECT o.*, p.name AS product_name, c.name AS courier_name, sp.name AS sales_person_name
                   FROM orders o
                   LEFT JOIN products p ON p.id=o.product_id
                   LEFT JOIN couriers c ON c.id=o.courier_id
+                  LEFT JOIN employees sp ON sp.id=o.sales_person_id
                   WHERE o.id=?", [$id]);
         if ($r) { $r['revenue']=order_revenue($r); $r['profit']=order_profit($r); }
         return $r ?: null;
@@ -84,6 +88,7 @@ if (isset($_GET['ajax'])) {
             $grp = 'G'.date('ymdHis').substr((string)mt_rand(100,999),0,3);
             // shared customer fields
             $cust=trim($_POST['customer']??''); $phone=trim($_POST['phone']??''); $addr=trim($_POST['address']??'');
+            $spid=(int)($_POST['sales_person_id']??0)?:null;
             $zone=strtolower(trim($_POST['zone']??'inside'))==='outside'?'outside':'inside';
             $status=$_POST['status']??'pending';
             $ps_in=strtolower(trim($_POST['payment_status']??''));
@@ -107,6 +112,7 @@ if (isset($_GET['ajax'])) {
                 $code=$pref.str_pad($nextNum(),4,'0',STR_PAD_LEFT);
                 $f=[
                   'code'=>$code,'order_date'=>$odate,'customer'=>$cust,'phone'=>$phone,'address'=>$addr,
+                  'sales_person_id'=>$spid,
                   'product_id'=>$pid,'qty'=>max(1,(int)($it['qty']??1)),'sell_price'=>(float)($it['sell_price']??0),
                   'cost_price'=>$cost,'delivery_charge'=>($first?$totalDelivery:0.0),'cancel_charge'=>0.0,
                   'zone'=>$zone,'payment_type'=>$ptype,'payment_status'=>$pay_status,'status'=>$status,
@@ -177,6 +183,23 @@ if (isset($_GET['ajax'])) {
             echo json_encode(['ok'=>true,'deleted'=>$id]); exit;
         }
 
+        if ($op === 'assign_unassigned_to_company') {
+            /* manual cleanup button on the Sales Team dashboard — bulk-tags every
+               order with no sales person as "Luprah" (company sales), optionally
+               scoped to a date range so it matches whatever the banner is showing */
+            ensure_company_salesperson();
+            $spid = (int)val("SELECT id FROM employees WHERE is_company=1 LIMIT 1");
+            if (!$spid) { echo json_encode(['ok'=>false,'error'=>'Company sales person not found']); exit; }
+            $from = trim($_POST['from'] ?? ''); $to = trim($_POST['to'] ?? '');
+            $ranged = ($from !== '' && $to !== '');
+            $where  = "sales_person_id IS NULL".($ranged ? " AND order_date BETWEEN ? AND ?" : "");
+            $params = $ranged ? [$from,$to] : [];
+            $n = (int)val("SELECT COUNT(*) FROM orders WHERE $where", $params);
+            if ($n > 0) q("UPDATE orders SET sales_person_id=? WHERE $where", array_merge([$spid], $params));
+            log_activity("Assigned $n unassigned order(s) to Luprah (company sales)",'Sales');
+            echo json_encode(['ok'=>true,'updated'=>$n]); exit;
+        }
+
         echo json_encode(['ok'=>false,'error'=>'Unknown operation']); exit;
 
     } catch (Exception $ex) {
@@ -192,11 +215,13 @@ $products = rows("SELECT id,name,sku,price,cost,stock,low_stock FROM products OR
 foreach ($products as &$pp) { $pp['cost'] = fifo_current_cost((int)$pp['id']); } unset($pp);
 try { q("ALTER TABLE couriers ADD COLUMN IF NOT EXISTS default_delivery DECIMAL(10,2) DEFAULT 0"); q("ALTER TABLE couriers ADD COLUMN IF NOT EXISTS cancel_charge DECIMAL(10,2) DEFAULT 100"); } catch (Exception $e) {}
 $couriers = rows("SELECT id,name,COALESCE(default_delivery,0) AS default_delivery,COALESCE(cancel_charge,100) AS cancel_charge FROM couriers WHERE status='active' ORDER BY name");
+$salespersons = rows("SELECT id,name FROM employees WHERE department='Sales' AND status='active' ORDER BY name");
 $orders   = rows("
-    SELECT o.*, p.name AS product_name, c.name AS courier_name
+    SELECT o.*, p.name AS product_name, c.name AS courier_name, sp.name AS sales_person_name
     FROM   orders o
     LEFT JOIN products p ON p.id = o.product_id
     LEFT JOIN couriers c ON c.id = o.courier_id
+    LEFT JOIN employees sp ON sp.id = o.sales_person_id
     ORDER  BY o.order_date ASC,
              COALESCE((SELECT MIN(g.id) FROM orders g WHERE g.order_group=o.order_group AND o.order_group IS NOT NULL AND o.order_group<>''), o.id) ASC,
              o.id ASC");
@@ -266,6 +291,7 @@ require __DIR__.'/includes/header.php';
       <div class="colpanel" id="colPanel"></div>
     </div>
     <button class="btn" id="importBtn">📋 Paste Import</button>
+    <button class="btn" id="assignLuprahBtn" title="Bulk-tag every order with no sales person as Luprah (company sales)">🏢 Unassigned → Luprah</button>
     <a class="btn" href="labels.php" target="_blank">🏷 Print Labels</a>
     <button class="btn" id="csvBtn">⬇ Export CSV</button>
     <button class="btn" id="addRowBtn">＋ Add Row</button>
@@ -312,6 +338,7 @@ require __DIR__.'/includes/header.php';
       <div class="advf"><label>Zone</label><select id="af_zone"><option value="">Any</option><option>Inside</option><option>Outside</option></select></div>
       <div class="advf"><label>Payment</label><select id="af_pay"><option value="">Any</option></select></div>
       <div class="advf"><label>Courier</label><select id="af_cour"><option value="">Any</option></select></div>
+      <div class="advf"><label>Sales Person</label><select id="af_sp"><option value="">Any</option><option value="__unassigned__">— Unassigned —</option></select></div>
       <div class="advf advf-daterange"><label>Date from → to</label><div class="advrange"><input type="date" id="af_from"><span>→</span><input type="date" id="af_to"></div></div>
       <div class="advf"><label>Amount Rs. (revenue)</label><div class="advrange"><input type="number" id="af_amin" placeholder="min"><span>–</span><input type="number" id="af_amax" placeholder="max"></div></div>
       <div class="advf"><label>Quantity</label><div class="advrange"><input type="number" id="af_qmin" placeholder="min"><span>–</span><input type="number" id="af_qmax" placeholder="max"></div></div>
@@ -400,6 +427,7 @@ require __DIR__.'/includes/header.php';
         <div><label>Customer Name *</label><input id="f_customer" placeholder="e.g. Ramesh Shrestha"></div>
         <div><label>Phone</label><input id="f_phone" placeholder="98XXXXXXXX"><span id="fPhoneHint" style="font-size:11px;font-weight:700"></span></div>
         <div class="full"><label>Address</label><input id="f_address" placeholder="City / Tole, landmark…"></div>
+        <div><label>Sales Person</label><select id="f_salesperson"><option value="">—</option><?php foreach($salespersons as $sp): ?><option value="<?= (int)$sp['id'] ?>"><?= e($sp['name']) ?></option><?php endforeach; ?></select></div>
         <div class="full"><label>Products *</label>
           <div id="prodLines"></div>
           <button type="button" class="btn btn-sm" style="margin-top:6px" onclick="addProdLine()">＋ Add another product</button>
@@ -431,7 +459,7 @@ require __DIR__.'/includes/header.php';
       <p class="muted" style="font-size:12px;margin:0 0 8px">One order per line, columns separated by <b>Tab</b> (paste from Excel) or comma.<br>
       <b>Any column order works</b> — just make the first line a header, e.g. <code>Product, Customer, Phone, Address, Qty, Price</code>.<br>
       No header? The default order is used: <code>Customer, Phone, Address, Product, Qty, Price, Delivery</code>.<br>
-      <span style="font-size:11px">Understood names: customer/name · phone/mobile/contact · address/city/location · product/item · qty/quantity/pcs · price/rate/amount · delivery/shipping/charge</span></p>
+      <span style="font-size:11px">Understood names: customer/name · phone/mobile/contact · address/city/location · sales person/salesperson/agent/sold by · product/item · qty/quantity/pcs · price/rate/amount · delivery/shipping/charge</span></p>
       <textarea id="impText" rows="8" style="width:100%;font-family:monospace;font-size:12px" placeholder="Product, Customer, Phone, Address, Qty, Price&#10;Heel Guard Plus, Ramesh Shrestha, 9841234567, Banepa-8, 1, 1000&#10;Smart Watch, Sunita Rai, 9812345678, Pokhara-9, 1, 4500" oninput="impPreview()"></textarea>
       <div id="impMap" class="muted" style="font-size:11.5px;margin-top:8px;line-height:1.7"></div>
       <div id="impStatus" style="font-size:12.5px;font-weight:700;margin-top:8px;color:var(--brand)"></div>
@@ -451,13 +479,15 @@ var CUSTSTAT=<?= json_encode($custStat) ?>, CUSTINFO=<?= json_encode($custInfo) 
 var COMMON_DELIV=<?= json_encode($commonDeliv) ?>, AGING_DAYS=<?= (int)$agingDays ?>;
 var TODAY='<?= date('Y-m-d') ?>';
 var COURIERS=<?= json_encode(array_values($couriers)) ?>;
+var SALESPERSONS=<?= json_encode(array_values($salespersons)) ?>;
 var ORDERS  =<?= json_encode(array_values($orders)) ?>;
 
 var prodNames = PRODUCTS.map(function(p){return p.name;});
 var courNames = [''].concat(COURIERS.map(function(c){return c.name;}));
+var spNames   = [''].concat(SALESPERSONS.map(function(s){return s.name;}));
 var STATUSES=['pending','processing','shipped','delivered','cancelled','returned'];
 var PAY_TYPES=['COD','Prepaid'];
-window.prodNames=prodNames; window.courNames=courNames.filter(Boolean); window.PAY_TYPES=PAY_TYPES;
+window.prodNames=prodNames; window.courNames=courNames.filter(Boolean); window.spNames=spNames.filter(Boolean); window.PAY_TYPES=PAY_TYPES;
 var TRK_TPL=<?= json_encode(setting('wa_tracking_template','https://nepalcanmove.com/tracking?id={id}')) ?>;
 var DEF_PAY_UI=(String(DEF_PAY||'').toLowerCase()==='prepaid')?'Prepaid':'COD';   /* COD is the primary default */
 var PAY_STATS=['unpaid','paid','partial','refunded'];
@@ -465,9 +495,10 @@ var PAY_RCV=['Paid','Unpaid'];
 var ZONES=['Inside','Outside'];
 
 function pnorm(x){return String(x==null?'':x).trim().toLowerCase().replace(/\s+/g,' ');}
-var PRODMAP={}, COURMAP={};
+var PRODMAP={}, COURMAP={}, SPMAP={};
 (function(){ try{ (PRODUCTS||[]).forEach(function(p){PRODMAP[String(p.name).toLowerCase()]=p;}); }catch(e){}
-             try{ (COURIERS||[]).forEach(function(c){COURMAP[String(c.name).toLowerCase()]=c;}); }catch(e){} })();
+             try{ (COURIERS||[]).forEach(function(c){COURMAP[String(c.name).toLowerCase()]=c;}); }catch(e){}
+             try{ (SALESPERSONS||[]).forEach(function(s){SPMAP[String(s.name).toLowerCase()]=s;}); }catch(e){} })();
 function prodByName(n){
   if(n==null||String(n).trim()==='')return null;
   var fast=PRODMAP[String(n).toLowerCase()];                                  /* 0. O(1) exact (renderers hit this) */
@@ -494,15 +525,18 @@ function prodSuggest(n){
   return bs>=3?best:'';
 }
 function courByName(n){return COURMAP[String(n||'').toLowerCase()]||null;}
+function spByName(n){return SPMAP[String(n||'').toLowerCase()]||null;}
 function prodById(id){return PRODUCTS.find(function(p){return p.id==id;})||null;}
 function courById(id){return COURIERS.find(function(c){return c.id==id;})||null;}
+function spById(id){return SALESPERSONS.find(function(s){return s.id==id;})||null;}
 function fmt(n){return CURRENCY+' '+Number(parseFloat(n)||0).toLocaleString('en-IN',{maximumFractionDigits:0});}
 
 function toRow(o){
-  var prod=prodById(o.product_id), cour=courById(o.courier_id);
+  var prod=prodById(o.product_id), cour=courById(o.courier_id), sp=spById(o.sales_person_id);
   return {
     _id:o.id, cost_price:parseFloat(o.cost_price)||0, cancel_charge:parseFloat(o.cancel_charge)||0,
     code:o.code||'', order_date:o.order_date||'', customer:o.customer||'', phone:o.phone||'',
+    sales_person_name:sp?sp.name:(o.sales_person_name||''),
     address:o.address||'', product_name:prod?prod.name:(o.product_name||''),
     qty:parseInt(o.qty)||1, sell_price:parseFloat(o.sell_price)||0,
     delivery_charge:parseFloat(o.delivery_charge)||0, zone:(String(o.zone||'').toLowerCase()==='outside')?'Outside':'Inside',
@@ -720,6 +754,7 @@ function profitR(inst,td,r,c,prop,val){
 var COLS=[
   {data:'_sel',title:'✓',width:36,type:'checkbox',className:'htCenter'},
   {data:'code',title:'Order',width:104,readOnly:true,renderer:codeR},
+  {data:'sales_person_name',title:'Sales Person',width:130,type:'dropdown',source:spNames,className:'nowrapcell'},
   {data:'product_name',title:'Product',width:150,type:'dropdown',source:prodNames,renderer:prodR},
   {data:'order_date',title:'Date',width:104,type:'date',dateFormat:'YYYY-MM-DD',correctFormat:true},
   {data:'customer',title:'Customer',width:138,renderer:custR},
@@ -740,7 +775,7 @@ var COLS=[
   {data:'_del',title:'',width:100,readOnly:true,renderer:delR}
 ];
 /* column show/hide (view-level; CSV export unaffected) */
-var HIDEABLE={'phone':'Phone','address':'Address','zone':'Zone','delivery_charge':'Delivery','cancel_charge':'Cancel Chg','revenue':'Revenue','payment_type':'Payment Type','payment_status':'Payment Received','courier_name':'Courier','remarks':'Remarks'};
+var HIDEABLE={'phone':'Phone','address':'Address','zone':'Zone','delivery_charge':'Delivery','cancel_charge':'Cancel Chg','revenue':'Revenue','payment_type':'Payment Type','payment_status':'Payment Received','courier_name':'Courier','sales_person_name':'Sales Person','remarks':'Remarks'};
 var hiddenCols={}; try{hiddenCols=JSON.parse(localStorage.getItem('sales_hidden_cols')||'{}');}catch(e){}
 function visibleCols(){return COLS.filter(function(c){return !hiddenCols[c.data];});}
 
@@ -779,10 +814,11 @@ function post(params, cb){
 }
 
 function payload(row){
-  var prod=prodByName(row.product_name), cour=courByName(row.courier_name);
+  var prod=prodByName(row.product_name), cour=courByName(row.courier_name), sp=spByName(row.sales_person_name);
   return {
     op:'update', id:row._id,
     order_date:row.order_date, customer:row.customer, phone:row.phone, address:row.address,
+    sales_person_id:sp?sp.id:'',
     product_id:prod?prod.id:'', qty:row.qty, sell_price:row.sell_price,
     delivery_charge:row.delivery_charge, zone:row.zone, payment_type:row.payment_type,
     payment_status:row.payment_status, status:row.status, courier_id:cour?cour.id:'',
@@ -811,13 +847,15 @@ function currentView(){
     default:          return DATA;
   }
 }
-var ADV={prod:'',zone:'',pay:'',cour:'',from:'',to:'',amin:'',amax:'',qmin:'',qmax:'',kw:''};
+var ADV={prod:'',zone:'',pay:'',cour:'',sp:'',from:'',to:'',amin:'',amax:'',qmin:'',qmax:'',kw:''};
 function advActiveCount(){var n=0;for(var k in ADV)if(ADV[k]!=='')n++;return n;}
 function advMatch(o){
   if(ADV.prod && String(o.product_name)!==ADV.prod) return false;
   if(ADV.zone && String(o.zone).toLowerCase()!==ADV.zone.toLowerCase()) return false;
   if(ADV.pay && String(o.payment_type)!==ADV.pay) return false;
   if(ADV.cour && String(o.courier_name)!==ADV.cour) return false;
+  if(ADV.sp==='__unassigned__'){ if(String(o.sales_person_name||'')!=='') return false; }
+  else if(ADV.sp && String(o.sales_person_name)!==ADV.sp) return false;
   if(ADV.from && String(o.order_date).slice(0,10) < ADV.from) return false;
   if(ADV.to && String(o.order_date).slice(0,10) > ADV.to) return false;
   var rev=parseFloat(o.revenue)||0;
@@ -861,16 +899,17 @@ function fillAdvSources(){
   var ps=document.getElementById('af_prod'); if(ps && ps.options.length<=1){ (window.prodNames||[]).forEach(function(n){var o=document.createElement('option');o.textContent=n;ps.appendChild(o);}); }
   var pay=document.getElementById('af_pay'); if(pay && pay.options.length<=1){ (window.PAY_TYPES||['COD','Prepaid']).forEach(function(n){var o=document.createElement('option');o.textContent=n;pay.appendChild(o);}); }
   var cs=document.getElementById('af_cour'); if(cs && cs.options.length<=1){ (window.courNames||[]).forEach(function(n){var o=document.createElement('option');o.textContent=n;cs.appendChild(o);}); }
+  var sp=document.getElementById('af_sp'); if(sp && sp.options.length<=2){ (window.spNames||[]).forEach(function(n){var o=document.createElement('option');o.textContent=n;o.value=n;sp.appendChild(o);}); }
 }
 function readAdv(){
-  ADV.prod=val('af_prod');ADV.zone=val('af_zone');ADV.pay=val('af_pay');ADV.cour=val('af_cour');
+  ADV.prod=val('af_prod');ADV.zone=val('af_zone');ADV.pay=val('af_pay');ADV.cour=val('af_cour');ADV.sp=val('af_sp');
   ADV.from=val('af_from');ADV.to=val('af_to');ADV.amin=val('af_amin');ADV.amax=val('af_amax');
   ADV.qmin=val('af_qmin');ADV.qmax=val('af_qmax');ADV.kw=val('af_kw');
   function val(id){var e=document.getElementById(id);return e?e.value.trim():'';}
 }
 function applyAdv(){readAdv();refreshView();updateStats();}
-function resetAdv(){for(var k in ADV)ADV[k]='';['af_prod','af_zone','af_pay','af_cour','af_from','af_to','af_amin','af_amax','af_qmin','af_qmax','af_kw'].forEach(function(id){var e=document.getElementById(id);if(e)e.value='';});refreshView();updateStats();}
-function dropAdv(k){ADV[k]='';var map={prod:'af_prod',zone:'af_zone',pay:'af_pay',cour:'af_cour',from:'af_from',to:'af_to',amin:'af_amin',amax:'af_amax',qmin:'af_qmin',qmax:'af_qmax',kw:'af_kw'};var e=document.getElementById(map[k]);if(e)e.value='';refreshView();updateStats();}
+function resetAdv(){for(var k in ADV)ADV[k]='';['af_prod','af_zone','af_pay','af_cour','af_sp','af_from','af_to','af_amin','af_amax','af_qmin','af_qmax','af_kw'].forEach(function(id){var e=document.getElementById(id);if(e)e.value='';});refreshView();updateStats();}
+function dropAdv(k){ADV[k]='';var map={prod:'af_prod',zone:'af_zone',pay:'af_pay',cour:'af_cour',sp:'af_sp',from:'af_from',to:'af_to',amin:'af_amin',amax:'af_amax',qmin:'af_qmin',qmax:'af_qmax',kw:'af_kw'};var e=document.getElementById(map[k]);if(e)e.value='';refreshView();updateStats();}
 function updateAdvUI(){
   var n=advActiveCount(); var badge=document.getElementById('advCount');
   if(badge){badge.style.display=n?'inline-block':'none';badge.textContent=n;}
@@ -878,8 +917,8 @@ function updateAdvUI(){
   var act=document.getElementById('advActive'); if(!act)return;
   if(!n){act.style.display='none';act.innerHTML='';}
   else{
-    var lbl={prod:'Product',zone:'Zone',pay:'Payment',cour:'Courier',from:'From',to:'To',amin:'Amount ≥',amax:'Amount ≤',qmin:'Qty ≥',qmax:'Qty ≤',kw:'Search'};
-    var html='';for(var k in ADV){if(ADV[k]!=='')html+='<span class="apill">'+lbl[k]+': '+esc(ADV[k])+' <span class="x" onclick="dropAdv(\''+k+'\')">✕</span></span>';}
+    var lbl={prod:'Product',zone:'Zone',pay:'Payment',cour:'Courier',sp:'Sales Person',from:'From',to:'To',amin:'Amount ≥',amax:'Amount ≤',qmin:'Qty ≥',qmax:'Qty ≤',kw:'Search'};
+    var html='';for(var k in ADV){if(ADV[k]!=='')html+='<span class="apill">'+lbl[k]+': '+esc(k==='sp'&&ADV[k]==='__unassigned__'?'Unassigned':ADV[k])+' <span class="x" onclick="dropAdv(\''+k+'\')">✕</span></span>';}
     html+='<span class="apill clr" onclick="resetAdv()">↺ clear all</span>';
     act.innerHTML=html;act.style.display='flex';
   }
@@ -888,8 +927,8 @@ function updateAdvUI(){
 function esc(t){var d=document.createElement('div');d.textContent=t==null?'':t;return d.innerHTML;}
 function exportFiltered(){
   var rows=finalView();
-  var heads=['Order','Product','Date','Customer','Phone','Address','Zone','Qty','Price','Delivery','Cancel Chg','Revenue','Payment','Status'];
-  var keys=['code','product_name','order_date','customer','phone','address','zone','qty','sell_price','delivery_charge','cancel_charge','revenue','payment_type','status'];
+  var heads=['Order','Sales Person','Product','Date','Customer','Phone','Address','Zone','Qty','Price','Delivery','Cancel Chg','Revenue','Payment','Status'];
+  var keys=['code','sales_person_name','product_name','order_date','customer','phone','address','zone','qty','sell_price','delivery_charge','cancel_charge','revenue','payment_type','status'];
   var lines=[heads.join(',')];
   rows.forEach(function(r){lines.push(keys.map(function(k){var v=(r[k]==null?'':String(r[k]));return '"'+v.replace(/"/g,'""')+'"';}).join(','));});
   var blob=new Blob([lines.join('\n')],{type:'text/csv'});
@@ -1086,6 +1125,7 @@ function openOrderForm(){
   document.getElementById('f_pay').value=DEF_PAY_UI;
   document.getElementById('f_status').value=DEF_STATUS;
   document.getElementById('f_courier').value='';
+  document.getElementById('f_salesperson').value='';
   document.getElementById('f_delivery').value=0;
   ['f_customer','f_phone','f_address','f_remarks'].forEach(function(i){document.getElementById(i).value='';});
   document.getElementById('prodLines').innerHTML=prodLineHTML();  /* one fresh product line */
@@ -1148,6 +1188,8 @@ function fCalc(){
   if(om) om.addEventListener('click',function(e){ if(e.target===om) closeOrderForm(); });
 })();
 function resetOrderForm(){
+  /* sales person, courier, zone, status are left alone — same as they already are —
+     so entering several orders in a row for one salesperson doesn't need reselecting */
   ['f_customer','f_phone','f_address','f_remarks'].forEach(function(i){document.getElementById(i).value='';});
   document.getElementById('prodLines').innerHTML=prodLineHTML();
   document.getElementById('f_delivery').value=0;
@@ -1167,6 +1209,7 @@ function saveOrderForm(keepOpen){
     order_date:document.getElementById('f_date').value||new Date().toISOString().slice(0,10),
     customer:cust, phone:document.getElementById('f_phone').value.trim(),
     address:document.getElementById('f_address').value.trim(),
+    sales_person_id:document.getElementById('f_salesperson').value||'',
     delivery_charge:parseFloat(document.getElementById('f_delivery').value)||0,
     zone:document.getElementById('f_zone').value,
     payment_type:document.getElementById('f_pay').value,
@@ -1228,7 +1271,7 @@ var _fb2=document.getElementById('addFormBtn2'); if(_fb2) _fb2.onclick=openOrder
 
 function makeBlankRow(){
   var blank={_id:0, code:'', order_date:new Date().toISOString().slice(0,10),
-    customer:'', phone:'', address:'', product_name:'',
+    customer:'', phone:'', address:'', sales_person_name:'', product_name:'',
     qty:1, sell_price:0, cost_price:0, cancel_charge:0,
     delivery_charge:0,   /* courier cost — enter manually per destination */
     zone:(DEF_ZONE==='outside'?'Outside':'Inside'),
@@ -1246,6 +1289,7 @@ function addRowSameCustomer(srcRow){
   var blank=makeBlankRow();
   blank.customer=src.customer||''; blank.phone=src.phone||''; blank.address=src.address||'';
   blank.zone=src.zone||blank.zone; blank.courier_name=src.courier_name||'';
+  blank.sales_person_name=src.sales_person_name||'';
   blank.order_date=src.order_date||blank.order_date;
   blank.payment_type=src.payment_type||blank.payment_type;
   blank.status=src.status||blank.status;
@@ -1265,7 +1309,7 @@ function addBlankRow(){
   CURFILTER='all'; refreshView(); updateChips();
   updateRowCount();
   var last=VIEW.length-1;
-  hot.selectCell(last,4);            // focus Customer on the new row
+  hot.selectCell(last,colIndex('customer'));   // focus Customer on the new row
   hot.scrollViewportTo(last,0);
 }
 
@@ -1352,6 +1396,7 @@ var IMP_SYN={
   customer:['customer','customer name','name','client','buyer','ग्राहक','ग्राहकको नाम'],
   phone:['phone','phone number','mobile','mobile number','number','contact','contact number','tel','फोन','मोबाइल'],
   address:['address','location','city','place','area','tole','ठेगाना'],
+  sales_person:['sales person','salesperson','sales rep','sales agent','sales staff','agent','seller','sold by','rep'],
   product:['product','product name','item','item name','goods','सामान'],
   qty:['qty','quantity','pcs','piece','pieces','count','nos','no','परिमाण'],
   price:['price','rate','amount','sell price','selling price','unit price','मूल्य','दर'],
@@ -1383,20 +1428,25 @@ function impDetect(rows){
   var W=Math.max.apply(null,rows.map(function(r){return r.length;}));
   if(W<3) return null;
   var prodNamesLC=(window.prodNames||[]).map(function(n){return n.toLowerCase();});
+  var spNamesLC=(window.spNames||[]).map(function(n){return n.toLowerCase();});
   function isPhone(v){var d=String(v).replace(/[^0-9]/g,'');return d.length>=9&&d.length<=13;}
   function isZone(v){var t=String(v).trim().toLowerCase();return t==='inside'||t==='outside'||t==='valley'||t==='kathmandu';}
   function isProd(v){var t=String(v).trim().toLowerCase();if(!t)return false;
     if(prodNamesLC.indexOf(t)>-1)return true;
     return prodNamesLC.some(function(pn){return pn.indexOf(t)>-1||t.indexOf(pn)>-1;});}
+  function isSP(v){var t=String(v).trim().toLowerCase();if(!t||!spNamesLC.length)return false;
+    if(spNamesLC.indexOf(t)>-1)return true;
+    return spNamesLC.some(function(sn){return sn.indexOf(t)>-1||t.indexOf(sn)>-1;});}
   function num(v){var n=parseFloat(String(v).replace(/[^0-9.]/g,''));return isNaN(n)?null:n;}
   // score each column across all rows
   var score=[];
-  for(var c=0;c<W;c++){score[c]={phone:0,zone:0,prod:0,intSmall:0,numBig:0,text:0,total:0};}
+  for(var c=0;c<W;c++){score[c]={phone:0,zone:0,prod:0,sp:0,intSmall:0,numBig:0,text:0,total:0};}
   rows.forEach(function(r){
     for(var c=0;c<W;c++){var v=r[c]; if(v===undefined||v==='')continue; score[c].total++;
       if(isPhone(v))score[c].phone++;
       else if(isZone(v))score[c].zone++;
       else if(isProd(v))score[c].prod++;
+      else if(isSP(v))score[c].sp++;
       var n=num(v);
       if(n!==null && !isPhone(v)){ if(n>0&&n<=99&&String(v).indexOf('.')===-1)score[c].intSmall++; if(n>=100)score[c].numBig++; }
       if(n===null)score[c].text++;
@@ -1408,6 +1458,7 @@ function impDetect(rows){
   var pc=pick('phone',used); if(pc>-1){map.phone=pc;used.push(pc);}
   var zc=pick('zone',used);  if(zc>-1){map.zone=zc;used.push(zc);}
   var prc=pick('prod',used); if(prc>-1){map.product=prc;used.push(prc);}
+  var spc=pick('sp',used);   if(spc>-1 && score[spc].sp>=score[spc].total*0.5){map.sales_person=spc;used.push(spc);}
   var qc=pick('intSmall',used); if(qc>-1){map.qty=qc;used.push(qc);}
   var prc2=pick('numBig',used); if(prc2>-1){map.price=prc2;used.push(prc2);}
   // remaining text columns → customer first, then address (by position)
@@ -1435,6 +1486,7 @@ function parseImport(text){
     var f=impSplit(line).map(function(x){return String(x).trim();});
     function g(k){ var i=map[k]; return (i===undefined||i<0)?'':(f[i]||''); }
     var rec={customer:g('customer'),phone:g('phone'),address:g('address'),product:g('product'),
+             sales_person:g('sales_person'),
              qty:parseInt(g('qty'))||1,price:parseFloat(g('price'))||0,delivery:parseFloat(g('delivery'))||0,
              zone:(function(){var z=String(g('zone')||'').trim().toLowerCase();return z==='outside'?'Outside':(z==='inside'?'Inside':'');})()};
     if(!rec.customer&&!rec.product)return;
@@ -1458,7 +1510,8 @@ function impPreview(){
           : 'ℹ️ No header — using default order:'))+'</div>'+chips+
     '<div style="margin-top:6px">'+recs.length+' order(s) ready'+(first?
       ' · first: <b>'+esc4(first.customer||'—')+'</b> · '+esc4(first.product||'—')+' ×'+first.qty+
-      (first.price?' @ '+first.price:'')+(first.phone?' · '+esc4(first.phone):''):'')+'</div>';
+      (first.price?' @ '+first.price:'')+(first.phone?' · '+esc4(first.phone):'')+
+      (first.sales_person?' · sold by '+esc4(first.sales_person):''):'')+'</div>';
 }
 function esc4(t){var d=document.createElement('div');d.textContent=t==null?'':t;return d.innerHTML;}
 function runImport(){
@@ -1493,8 +1546,9 @@ function runImport(){
       return;
     }
     var r=recs[i++], lineNo=i+hdr; st.textContent='Importing '+i+' / '+recs.length+'…';
-    var p=prodByName(r.product);
+    var p=prodByName(r.product), sp=spByName(r.sales_person);
     var body={op:'create',order_date:TODAY,customer:r.customer,phone:r.phone,address:r.address,
+      sales_person_id:sp?sp.id:'',
       product_id:p?p.id:'',qty:r.qty,sell_price:r.price||(p?p.price:0),delivery_charge:r.delivery,
       zone:(r.zone||DEF_ZONE),payment_type:DEF_PAY_UI,status:DEF_STATUS,remarks:'imported'};
     post(body,function(err,res){
@@ -1505,6 +1559,22 @@ function runImport(){
   })();
 }
 document.getElementById('importBtn').onclick=openImport;
+
+/* ===== bulk-assign every unassigned order to Luprah (company sales) ===== */
+function assignUnassignedToLuprah(){
+  var n=DATA.filter(function(o){return o._id && !(String(o.sales_person_name||'').trim());}).length;
+  if(!n){alert('No unassigned orders found — everything already has a sales person.');return;}
+  if(!confirm('Assign all '+n+' unassigned order(s) to Luprah (company sales)?'))return;
+  var btn=document.getElementById('assignLuprahBtn'); if(btn){btn.disabled=true;btn.textContent='Assigning…';}
+  post({op:'assign_unassigned_to_company'},function(err,res){
+    if(btn){btn.disabled=false;btn.textContent='🏢 Unassigned → Luprah';}
+    if(err){alert('Could not assign: '+err);return;}
+    DATA.forEach(function(o){ if(o._id && !(String(o.sales_person_name||'').trim())) o.sales_person_name='Luprah'; });
+    refreshView(); updateStats();
+    alert('Assigned '+(res.updated!=null?res.updated:n)+' order(s) to Luprah.');
+  });
+}
+document.getElementById('assignLuprahBtn').onclick=assignUnassignedToLuprah;
 
 document.getElementById('addRowBtn').onclick=addBlankRow;
 var _ab2=document.getElementById('addRowBtn2'); if(_ab2) _ab2.onclick=addBlankRow;
@@ -1531,7 +1601,7 @@ function doDelete(){
 document.getElementById('sheetSearch').oninput=function(){
   var q=this.value.toLowerCase().trim();
   if(!q){hot.loadData(DATA);document.getElementById('rowCount').textContent=DATA.length+' rows';var _r2=document.getElementById('rowCount2');if(_r2)_r2.textContent=DATA.length;return;}
-  var f=DATA.filter(function(r){return ['code','customer','phone','address','product_name','status','courier_name','remarks'].some(function(k){return(r[k]||'').toLowerCase().indexOf(q)>-1;});});
+  var f=DATA.filter(function(r){return ['code','customer','phone','address','product_name','sales_person_name','status','courier_name','remarks'].some(function(k){return(r[k]||'').toLowerCase().indexOf(q)>-1;});});
   hot.loadData(f);
   document.getElementById('rowCount').textContent=f.length+' of '+DATA.length+' rows';var _r3=document.getElementById('rowCount2');if(_r3)_r3.textContent=f.length;
 };
@@ -1543,8 +1613,8 @@ if(document.getElementById('sheetSearch').value.trim()!==''){
 
 /* CSV export */
 document.getElementById('csvBtn').onclick=function(){
-  var heads=['Order','Product','Date','Customer','Phone','Address','Zone','Quantity','Price','Delivery','Cancel Charge','Revenue','Payment Type','Status','Payment Received','Courier','Profit'];
-  var keys=['code','product_name','order_date','customer','phone','address','zone','qty','sell_price','delivery_charge','cancel_charge','revenue','payment_type','status','payment_status','courier_name','profit'];
+  var heads=['Order','Sales Person','Product','Date','Customer','Phone','Address','Zone','Quantity','Price','Delivery','Cancel Charge','Revenue','Payment Type','Status','Payment Received','Courier','Profit'];
+  var keys=['code','sales_person_name','product_name','order_date','customer','phone','address','zone','qty','sell_price','delivery_charge','cancel_charge','revenue','payment_type','status','payment_status','courier_name','profit'];
   var lines=[heads.join(',')];
   DATA.forEach(function(r){lines.push(keys.map(function(k){var v=(r[k]==null?'':String(r[k]));return '"'+v.replace(/"/g,'""')+'"';}).join(','));});
   var blob=new Blob([lines.join('\n')],{type:'text/csv'});

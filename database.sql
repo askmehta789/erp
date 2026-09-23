@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS orders (
   customer VARCHAR(140),
   phone VARCHAR(40),
   address VARCHAR(255),
+  sales_person_id INT NULL,
   product_id INT NULL,
   qty INT NOT NULL DEFAULT 1,
   sell_price DECIMAL(12,2) NOT NULL DEFAULT 0,
@@ -80,7 +81,7 @@ CREATE TABLE IF NOT EXISTS orders (
   courier_id INT NULL,
   remarks VARCHAR(255),
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  INDEX(order_date), INDEX(status), INDEX(courier_id), INDEX(product_id)
+  INDEX(order_date), INDEX(status), INDEX(courier_id), INDEX(product_id), INDEX(sales_person_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS purchases (

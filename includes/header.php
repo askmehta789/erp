@@ -31,7 +31,8 @@ $helpLine  = setting('help_line', '01-5970736');
 <body>
 <script>/* apply default theme when the user has no saved preference */
 (function(){try{if(localStorage.getItem('erp_dark')===null){var d=<?= json_encode(strtolower(setting('default_theme','light'))==='dark') ?>;if(d)document.body.classList.add('dark');}}catch(e){}})();</script>
-<?php if (strtolower(setting('enable_toasts','yes')) !== 'no'): ?><div class="toast-wrap" id="toastWrap"></div><?php endif; ?>
+<?php $notifsOn = strtolower(setting('notifications_enabled','yes')) !== 'no'; ?>
+<?php if ($notifsOn && strtolower(setting('enable_toasts','yes')) !== 'no'): ?><div class="toast-wrap" id="toastWrap"></div><?php endif; ?>
 <script>window.ERP_CSRF=<?= json_encode(csrf()) ?>;</script>
 <div class="layout">
   <aside class="sidebar" id="sidebar">
@@ -94,6 +95,7 @@ $helpLine  = setting('help_line', '01-5970736');
         <span class="l2"><?= e($storeName) ?><?= $bizPhone ? ' · '.e($bizPhone) : '' ?></span>
       </div>
       <div class="spacer"></div>
+      <?php if ($notifsOn): ?>
       <div class="notif-wrap">
         <button class="tb-icon notif-bell" id="notifBell" onclick="toggleNotif(event)" title="Notifications">
           <span class="bell-ico">🔔</span><span class="notif-badge" id="notifBadge" style="display:none">0</span>
@@ -109,6 +111,7 @@ $helpLine  = setting('help_line', '01-5970736');
           <div id="notifList"><div class="notif-empty">Loading…</div></div>
         </div>
       </div>
+      <?php endif; ?>
       <button class="tb-icon" onclick="toggleTheme()" id="themeBtn" title="Dark mode">🌙</button>
       <a class="tb-add" href="sales.php" title="New order">+</a>
       <div class="profile">

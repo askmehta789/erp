@@ -67,7 +67,10 @@ foreach($orders as $o){
 $inDelivery  = $shipped + $processing;
 $returnProc  = $returned;
 $returnRate  = $total? round(($returned)/$total*100,1):0;
+$cancelRate  = $total? round(($cancelled)/$total*100,1):0;
+$combinedRate = $total? round(($returned+$cancelled)/$total*100,1):0;
 $expenses    = (float)val("SELECT COALESCE(SUM(amount),0) FROM expenses");
+$expenseByCat = rows("SELECT category, COALESCE(SUM(amount),0) AS total FROM expenses GROUP BY category ORDER BY total DESC");
 $net         = $profit - $expenses;
 /* stock summary for dashboard */
 $prodRows    = rows("SELECT stock, low_stock, cost FROM products");
@@ -79,6 +82,7 @@ if ($stkValue <= 0) $stkValue = array_sum(array_map(fn($p)=>(int)$p['stock']*(fl
 $stkLow      = count(array_filter($prodRows, fn($p)=>(int)$p['stock']>0 && (int)$p['stock']<=(int)$p['low_stock']));
 $stkOut      = count(array_filter($prodRows, fn($p)=>(int)$p['stock']<=0));
 $margin      = $revenue>0? round($profit/$revenue*100,1):0;
+$netMargin   = $revenue>0? round($net/$revenue*100,1):0;
 
 /* order-status chart buckets — delivered excluded (it dwarfs the rest;
    it's shown big in the cards + the doughnut). This keeps small bars visible. */
@@ -158,7 +162,14 @@ if ($returned>0)     $todo[] = ['↩️','var(--red)',   "$returned returned/can
   <div class="metric green"><div><div class="mv"><?= number_format($delivered) ?></div><div class="ml">Delivered</div></div><div class="mi">✅</div></div>
   <div class="metric purple"><div><div class="mv"><?= number_format($unitsDelivered) ?> <span style="font-size:13px">pcs</span></div><div class="ml">Units Delivered</div><div class="ms">total quantity sold</div></div><div class="mi">🔢</div></div>
   <div class="metric amber"><div><div class="mv"><?= number_format($returned) ?></div><div class="ml">Returns / RTV</div></div><div class="mi">↩️</div></div>
-  <div class="metric red"><div><div class="mv"><?= $returnRate ?>%</div><div class="ml">Return Rate</div></div><div class="mi">％</div></div>
+  <div class="metric red">
+    <div>
+      <div class="mv"><span class="rr-view rr-return"><?= $returnRate ?>%</span><span class="rr-view rr-cancel" style="display:none"><?= $cancelRate ?>%</span></div>
+      <div class="ml"><span class="rr-view rr-return">Return Rate</span><span class="rr-view rr-cancel" style="display:none">Cancel Rate</span></div>
+      <div class="ms">Combined <?= $combinedRate ?>% · <?= $returnRate ?>% return + <?= $cancelRate ?>% cancel</div>
+    </div>
+    <div class="mi">％</div>
+  </div>
   <div class="metric orange"><div><div class="mv"><?= number_format($inDelivery) ?></div><div class="ml">In Delivery</div></div><div class="mi">🚚</div></div>
   <div class="metric indigo"><div><div class="mv"><?= number_format($pending) ?></div><div class="ml">Pending Orders</div></div><div class="mi">⏳</div></div>
   <div class="metric purple"><div><div class="mv"><?= number_format($cancelled) ?></div><div class="ml">Cancelled</div></div><div class="mi">✖️</div></div>
@@ -171,7 +182,7 @@ if ($returned>0)     $todo[] = ['↩️','var(--red)',   "$returned returned/can
   <div class="metric green"><div><div class="mv" style="font-size:22px"><?= money($revenue) ?></div><div class="ml">Revenue (delivered)</div><div class="ms"><?= $margin ?>% margin</div></div><div class="mi">📈</div></div>
   <div class="metric blue"><div><div class="mv" style="font-size:22px"><?= money($profit) ?></div><div class="ml">Gross Profit</div></div><div class="mi">💵</div></div>
   <div class="metric red"><div><div class="mv" style="font-size:22px"><?= money($expenses) ?></div><div class="ml">Expenses</div></div><div class="mi">💸</div></div>
-  <div class="metric <?= $net>=0?'teal':'red' ?>"><div><div class="mv" style="font-size:22px"><?= money($net) ?></div><div class="ml">Net Profit</div><div class="ms">after expenses</div></div><div class="mi">🧾</div></div>
+  <div class="metric <?= $net>=0?'teal':'red' ?>"><div><div class="mv" style="font-size:22px"><?= money($net) ?></div><div class="ml">Net Profit</div><div class="ms">after expenses · <?= $netMargin ?>% margin</div></div><div class="mi">🧾</div></div>
 </div>
 </div><!-- /dash-main -->
 
@@ -251,12 +262,24 @@ if ($returned>0)     $todo[] = ['↩️','var(--red)',   "$returned returned/can
 
   <!-- return rate + top products -->
   <div class="panel">
-    <div class="panel-head"><h2>↩️ Return Rate</h2></div>
+    <div class="panel-head"><h2>↩️ Return Rate</h2>
+      <label class="rr-toggle-label" title="Switch between Return Rate and Cancel Rate">
+        <span id="rrLabelReturn" class="on">Return</span>
+        <span class="mini-switch"><input type="checkbox" id="rrToggleInput" onchange="rrToggle(this.checked)"><span class="mini-slider"></span></span>
+        <span id="rrLabelCancel">Cancel</span>
+      </label>
+    </div>
     <div class="panel-body" style="padding-top:6px">
       <div class="rate-row">
-        <div class="rm"><b><?= $returned ?> RTV</b><span>/ <?= $delivered ?> delivered</span></div>
-        <div class="rate-badge" style="background:var(--red-bg);color:var(--red)"><?= $returnRate ?>%</div>
+        <div class="rm">
+          <b class="rr-view rr-return"><?= $returned ?> RTV</b><span class="rr-view rr-return">/ <?= $delivered ?> delivered</span>
+          <b class="rr-view rr-cancel" style="display:none"><?= $cancelled ?> Cancelled</b><span class="rr-view rr-cancel" style="display:none">/ <?= $total ?> total orders</span>
+        </div>
+        <div class="rate-badge" style="background:var(--red-bg);color:var(--red)">
+          <span class="rr-view rr-return"><?= $returnRate ?>%</span><span class="rr-view rr-cancel" style="display:none"><?= $cancelRate ?>%</span>
+        </div>
       </div>
+      <div class="muted" style="font-size:11.5px;margin-top:8px">Combined issue rate: <b><?= $combinedRate ?>%</b> — <?= $returnRate ?>% return + <?= $cancelRate ?>% cancel</div>
       <div class="dash-sec" style="margin:14px 0 6px">Top Products</div>
       <?php $mx=$topProd?max($topProd):1; foreach($topProd as $n=>$v): ?>
         <div class="cat-row"><div class="cat-name"><?= e($n) ?></div><div class="cat-track"><div class="cat-fill" style="width:<?= max(4,round($v/$mx*100)) ?>%;background:var(--brand)"></div></div><div class="cat-amt num"><?= money($v) ?></div></div>
@@ -276,15 +299,31 @@ if ($returned>0)     $todo[] = ['↩️','var(--red)',   "$returned returned/can
       <div class="info-row"><span class="ii r">🚫</span><span class="it">Out of Stock</span><span class="iv" style="color:var(--red)"><?= $stkOut ?></span></div>
     </div>
   </div>
-  <div class="panel"><div class="panel-head"><h2>💡 Profit Note</h2></div>
+  <div class="panel"><div class="panel-head"><h2>💡 Profit Note</h2><a class="btn btn-sm" href="expenses.php">Open Expenses →</a></div>
     <div class="panel-body" style="padding-top:6px">
       <div class="info-row"><span class="it">Revenue (delivered)</span><span class="iv"><?= money($revenue) ?></span></div>
       <div class="info-row"><span class="it">− COGS</span><span class="iv" style="color:var(--red)"><?= money($cogs) ?></span></div>
       <div class="info-row"><span class="it">− Delivery Charges</span><span class="iv" style="color:var(--red)"><?= money($delivery) ?></span></div>
       <?php if($returnLoss>0): ?><div class="info-row"><span class="it">− Returns / Cancellation Charges</span><span class="iv" style="color:var(--red)"><?= money($returnLoss) ?></span></div><?php endif; ?>
       <div class="info-row"><span class="it">= Gross Profit</span><span class="iv" style="color:var(--green)"><?= money($profit) ?></span></div>
+      <?php if($expenseByCat): ?>
+      <div class="info-row" style="cursor:pointer" onclick="toggleExpBreakdown(this)">
+        <span class="it">− Expenses <span id="expChevron" class="muted" style="font-size:10px">▸ tap to show</span></span>
+        <span class="iv" style="color:var(--red)"><?= money($expenses) ?></span>
+      </div>
+      <div id="expBreakdown" style="display:none;margin:0 0 8px 15px;padding-left:9px;border-left:2px solid var(--surface-2)">
+        <?php foreach($expenseByCat as $ec): $pct = $expenses>0? round($ec['total']/$expenses*100,1):0; ?>
+        <div class="info-row" style="padding:6px 4px;font-size:12px;border-bottom:0">
+          <span class="it" style="color:var(--muted-2);font-weight:500">↳ <?= htmlspecialchars($ec['category']) ?></span>
+          <span class="iv" style="font-weight:600;color:var(--muted-2)"><?= money($ec['total']) ?> <span style="opacity:.65">(<?= $pct ?>%)</span></span>
+        </div>
+        <?php endforeach; ?>
+      </div>
+      <?php else: ?>
       <div class="info-row"><span class="it">− Expenses</span><span class="iv" style="color:var(--red)"><?= money($expenses) ?></span></div>
+      <?php endif; ?>
       <div class="info-row"><span class="it"><b>= Net Profit</b></span><span class="iv" style="color:<?= $net>=0?'var(--green)':'var(--red)' ?>"><b><?= money($net) ?></b></span></div>
+      <div class="info-row"><span class="it muted">Net Margin</span><span class="iv" style="color:<?= $net>=0?'var(--green)':'var(--red)' ?>"><?= $netMargin ?>%</span></div>
     </div>
   </div>
 </div>
@@ -313,6 +352,23 @@ if ($returned>0)     $todo[] = ['↩️','var(--red)',   "$returned returned/can
 </div>
 
 <script>
+/* Profit Note: tap "Expenses" to reveal the per-category breakdown */
+function toggleExpBreakdown(row){
+  var b = document.getElementById('expBreakdown'), c = document.getElementById('expChevron');
+  if (!b) return;
+  var open = b.style.display !== 'none';
+  b.style.display = open ? 'none' : '';
+  if (c) c.textContent = open ? '▸ tap to show' : '▾ tap to hide';
+}
+
+/* Return Rate metric card + panel: toggle headline between return % and cancel % */
+function rrToggle(showCancel){
+  document.querySelectorAll('.rr-return').forEach(function(el){ el.style.display = showCancel ? 'none' : ''; });
+  document.querySelectorAll('.rr-cancel').forEach(function(el){ el.style.display = showCancel ? '' : 'none'; });
+  var lr = document.getElementById('rrLabelReturn'), lc = document.getElementById('rrLabelCancel');
+  if (lr && lc) { lr.classList.toggle('on', !showCancel); lc.classList.toggle('on', showCancel); }
+}
+
 var CH_GRID = (getComputedStyle(document.body).getPropertyValue('--border')||'#e9edf3').trim();
 var baseOpts = {responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}}};
 

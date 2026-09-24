@@ -9,7 +9,7 @@ $isAdmin = role_rank($u['role'] ?? '') >= 3;
 if ($_SERVER['REQUEST_METHOD']==='POST') {
   check_csrf();
   $act=$_POST['_action'] ?? '';
-  $backM=preg_match('/^\d{4}-\d{2}$/',$_POST['m'] ?? '')?$_POST['m']:date('Y-m');
+  $backM=preg_match('/^\d{4}-\d{2}$/',$_POST['m'] ?? '')?$_POST['m']:bs_ym_of(date('Y-m-d'));
   $backEmp=(int)($_POST['back_emp'] ?? 0);
 
   if ($act==='save_entry') {
@@ -32,7 +32,7 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
         q("INSERT INTO lunch_orders(employee_id,order_date,order_amount,attendance,lunch_ordered,note) VALUES(?,?,?,?,?,?)
            ON DUPLICATE KEY UPDATE order_amount=VALUES(order_amount),attendance=VALUES(attendance),lunch_ordered=VALUES(lunch_ordered),note=VALUES(note)",
           [$eid,$d,$amt,$att,$ordered,$note]);
-        lunch_sync_salary_entry($eid, substr($d,0,7));
+        lunch_sync_salary_entry($eid, bs_ym_of($d));
         log_activity(($id?'Updated':'Added')." lunch entry for emp #$eid on $d",'Lunch Management');
         flash('Lunch entry saved for '.dual_date($d).'.');
       }
@@ -44,7 +44,7 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
     $id=(int)($_POST['id'] ?? 0);
     $row=row("SELECT employee_id,order_date FROM lunch_orders WHERE id=?",[$id]);
     q("DELETE FROM lunch_orders WHERE id=?",[$id]);
-    if ($row) lunch_sync_salary_entry((int)$row['employee_id'], substr($row['order_date'],0,7));
+    if ($row) lunch_sync_salary_entry((int)$row['employee_id'], bs_ym_of($row['order_date']));
     flash('Lunch entry deleted.');
     header('Location: lunch_management.php?m='.urlencode($backM).($backEmp?'&emp='.$backEmp:'')); exit;
   }
@@ -68,10 +68,15 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
   }
 }
 
-$m = preg_match('/^\d{4}-\d{2}$/', $_GET['m'] ?? '') ? $_GET['m'] : date('Y-m');
+/* $m is a BS (Nepali) 'Y-m' key — real Nepali-month boundaries, not the AD calendar month */
+$m = preg_match('/^\d{4}-\d{2}$/', $_GET['m'] ?? '') ? $_GET['m'] : bs_ym_of(date('Y-m-d'));
 $d = preg_match('/^\d{4}-\d{2}-\d{2}$/', $_GET['d'] ?? '') ? $_GET['d'] : date('Y-m-d');
 $empFilter = (int)($_GET['emp'] ?? 0);
-$mStart = $m.'-01'; $mEnd = date('Y-m-t', strtotime($mStart));
+$mParts = array_map('intval', explode('-', $m));
+$bsY = $mParts[0]; $bsM = $mParts[1];
+$mRange = bs_month_range($bsY,$bsM);
+if (!$mRange) { $m = bs_ym_of(date('Y-m-d')); [$bsY,$bsM] = array_map('intval', explode('-', $m)); $mRange = bs_month_range($bsY,$bsM); }
+[$mStart,$mEnd] = $mRange;
 
 $allEmps = rows("SELECT id,name,salary,lunch_rate FROM employees ORDER BY name");
 $empName = []; foreach ($allEmps as $ae) $empName[(int)$ae['id']] = $ae['name'];
@@ -127,7 +132,10 @@ $lunchLabel = fn($s) => ['ok'=>'Completed','leave'=>'Leave','review'=>'Requires 
     <form method="get" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
       <select name="emp"><option value="0">All Staff</option>
         <?php foreach($allEmps as $ae): ?><option value="<?= (int)$ae['id'] ?>"<?= $empFilter===(int)$ae['id']?' selected':'' ?>><?= e($ae['name']) ?></option><?php endforeach; ?></select>
-      <input type="month" name="m" value="<?= e($m) ?>">
+      <a class="btn btn-sm" href="?m=<?= e(bs_ym_add($m,-1)) ?>&emp=<?= $empFilter ?>&d=<?= e($d) ?>" title="Previous Nepali month">◀</a>
+      <span style="font-weight:800;padding:0 4px;white-space:nowrap"><?= e(bs_ym_label($m)) ?></span>
+      <a class="btn btn-sm" href="?m=<?= e(bs_ym_add($m,1)) ?>&emp=<?= $empFilter ?>&d=<?= e($d) ?>" title="Next Nepali month">▶</a>
+      <input type="hidden" name="m" value="<?= e($m) ?>">
       <input type="date" name="d" value="<?= e($d) ?>" title="Logging date">
       <button class="btn btn-sm">Go</button>
     </form>
@@ -139,7 +147,7 @@ $lunchLabel = fn($s) => ['ok'=>'Completed','leave'=>'Leave','review'=>'Requires 
 <div class="mgrid">
   <div class="metric blue"><div><div class="mv" style="font-size:19px"><?= number_format(count($allEmps)) ?></div><div class="ml">Total Staff</div></div><div class="mi">👥</div></div>
   <div class="metric teal"><div><div class="mv" style="font-size:19px"><?= number_format($tEligible) ?></div><div class="ml">Eligible Lunch Days</div><div class="ms">from actual attendance</div></div><div class="mi">📅</div></div>
-  <div class="metric indigo"><div><div class="mv" style="font-size:19px"><?= money($tAllowance) ?></div><div class="ml">Lunch Allowance</div><div class="ms"><?= e(date('M Y',strtotime($m.'-01'))) ?></div></div><div class="mi">🍱</div></div>
+  <div class="metric indigo"><div><div class="mv" style="font-size:19px"><?= money($tAllowance) ?></div><div class="ml">Lunch Allowance</div><div class="ms"><?= e(bs_ym_label($m)) ?></div></div><div class="mi">🍱</div></div>
   <div class="metric red"><div><div class="mv" style="font-size:19px"><?= money($tActual) ?></div><div class="ml">Actual Lunch Expense</div></div><div class="mi">🧾</div></div>
   <div class="metric orange"><div><div class="mv" style="font-size:19px"><?= money($tAdjustment) ?></div><div class="ml">Salary Adjustment</div><div class="ms">added to Payable</div></div><div class="mi">💰</div></div>
   <div class="metric <?= $pendingEntries>0?'amber':'green' ?>"><div><div class="mv" style="font-size:19px"><?= number_format(max(0,$pendingEntries)) ?></div><div class="ml">Pending Entries</div><div class="ms">not logged for <?= e(date('d M',strtotime($d))) ?></div></div><div class="mi">⏳</div></div>
@@ -165,7 +173,7 @@ $lunchLabel = fn($s) => ['ok'=>'Completed','leave'=>'Leave','review'=>'Requires 
 <?php endif; ?>
 
 <div class="panel" style="margin-top:16px">
-  <div class="panel-head"><h2>🧾 Daily Lunch Entries — <?= e(date('M Y',strtotime($m.'-01'))) ?> · <?= e(bs_month_label($m)) ?></h2>
+  <div class="panel-head"><h2>🧾 Daily Lunch Entries — <?= e(bs_ym_label($m)) ?></h2>
     <div style="display:flex;gap:8px"><button type="button" class="btn btn-sm" onclick="lmExportCsv('dailyTbl','daily-lunch-<?= e($m) ?>.csv')">⬇ Export CSV</button><button type="button" class="btn btn-sm" onclick="window.print()">🖨 Print</button></div>
   </div>
   <div class="table-wrap"><table class="tbl led-tbl" id="dailyTbl"><thead><tr>
@@ -192,7 +200,7 @@ $lunchLabel = fn($s) => ['ok'=>'Completed','leave'=>'Leave','review'=>'Requires 
 </div>
 
 <div class="panel" style="margin-top:16px">
-  <div class="panel-head"><h2>📊 Monthly Lunch Summary — <?= e(date('M Y',strtotime($m.'-01'))) ?> · <?= e(bs_month_label($m)) ?></h2>
+  <div class="panel-head"><h2>📊 Monthly Lunch Summary — <?= e(bs_ym_label($m)) ?></h2>
     <button type="button" class="btn btn-sm" onclick="lmExportCsv('summaryTbl','lunch-summary-<?= e($m) ?>.csv')">⬇ Export CSV</button>
   </div>
   <div class="table-wrap"><table class="tbl num-tbl" id="summaryTbl"><thead><tr>
@@ -239,7 +247,7 @@ $lunchLabel = fn($s) => ['ok'=>'Completed','leave'=>'Leave','review'=>'Requires 
     <div class="panel-head"><h2>🔄 Recalculate</h2></div>
     <div class="panel-body">
       <p class="muted" style="font-size:12.5px">If you changed a setting above, existing entries this month won't reflect it until you recalculate. This re-syncs every staff member's Lunch figure on the Staff Salary page from their logged entries — it never creates duplicates.</p>
-      <form method="post" onsubmit="return confirm('Recalculate lunch adjustments for everyone in '+<?= json_encode(date('M Y',strtotime($m.'-01'))) ?>+'?')">
+      <form method="post" onsubmit="return confirm('Recalculate lunch adjustments for everyone in '+<?= json_encode(bs_ym_label($m,false)) ?>+'?')">
         <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="recalc_month"><input type="hidden" name="m" value="<?= e($m) ?>">
         <button class="btn btn-primary">🔄 Recalculate This Month</button>
       </form>

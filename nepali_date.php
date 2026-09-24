@@ -55,20 +55,44 @@ function bs_month_table() {
 function bs_months_np(){ return ['बैशाख','जेठ','असार','साउन','भदौ','असोज','कात्तिक','मंसिर','पुष','माघ','फागुन','चैत']; }
 function np_digits($s){ return strtr((string)$s, ['0'=>'०','1'=>'१','2'=>'२','3'=>'३','4'=>'४','5'=>'५','6'=>'६','7'=>'७','8'=>'८','9'=>'९']); }
 
+/* Parse an AD date (string 'Y-m-d...' or a unix timestamp) into a plain
+   [year,month,day] calendar triple, without ever going through a
+   local-timezone-sensitive strtotime()+date() round trip for the common
+   'Y-m-d' case — needed so day-count math below stays exact. */
+function _bs_ymd($adDate) {
+  if (is_numeric($adDate)) {
+    $ts=(int)$adDate;
+    return [(int)date('Y',$ts),(int)date('n',$ts),(int)date('j',$ts)];
+  }
+  if (preg_match('/^(\d{4})-(\d{1,2})-(\d{1,2})/', (string)$adDate, $mm)) {
+    return [(int)$mm[1],(int)$mm[2],(int)$mm[3]];
+  }
+  $t = strtotime((string)$adDate);
+  if ($t===false) return null;
+  return [(int)date('Y',$t),(int)date('n',$t),(int)date('j',$t)];
+}
+/* Whole-day count for a calendar triple, anchored purely in UTC (gmmktime
+   never applies DST or historical offset changes — unlike combining
+   strtotime()'s Asia/Kathmandu-local seconds with raw day*86400 arithmetic,
+   which silently drifts by a day: Kathmandu was UTC+5:30 in 1943 but is
+   UTC+5:45 today, and that 15-minute gap corrupts naive epoch math). */
+function _bs_day_num($y,$mo,$d) { return (int)floor(gmmktime(0,0,0,$mo,$d,$y)/86400); }
+
 /* AD Y-m-d → [bsYear, bsMonth, bsDay] */
 function ad_to_bs($adDate) {
-  $t = is_numeric($adDate) ? (int)$adDate : strtotime($adDate);
-  if (!$t) return null;
-  $days = (int)floor(($t - strtotime('1943-04-14')) / 86400);   // anchor: BS 2000-01-01
+  $ymd = _bs_ymd($adDate);
+  if (!$ymd) return null;
+  [$y,$mo,$d] = $ymd;
+  $days = _bs_day_num($y,$mo,$d) - _bs_day_num(1943,4,14);   // anchor: BS 2000-01-01
   if ($days < 0) return null;
   $tbl = bs_month_table();
-  $y=2000; $m=1;
+  $by=2000; $bm=1;
   while (true) {
-    if (!isset($tbl[$y])) return null;
-    $dim = $tbl[$y][$m-1];
-    if ($days < $dim) return [$y,$m,$days+1];
+    if (!isset($tbl[$by])) return null;
+    $dim = $tbl[$by][$bm-1];
+    if ($days < $dim) return [$by,$bm,$days+1];
     $days -= $dim;
-    $m++; if ($m>12){ $m=1; $y++; }
+    $bm++; if ($bm>12){ $bm=1; $by++; }
   }
 }
 /* pretty: "२६ असार २०८३" (or latin digits) */
@@ -89,4 +113,49 @@ function bs_month_label($ym) {
   $bs = ad_to_bs($ym.'-15');
   if(!$bs) return '';
   return bs_months_np()[$bs[1]-1].' '.np_digits($bs[0]);
+}
+
+/* ============ reverse: BS → AD (needed to make BS the real grouping unit) ============ */
+
+/* [bsYear,bsMonth,bsDay] → AD 'Y-m-d'. Inverse of ad_to_bs(). */
+function bs_to_ad($bsY,$bsM,$bsD) {
+  $tbl = bs_month_table();
+  if (!isset($tbl[$bsY]) || $bsM<1 || $bsM>12) return null;
+  $days = 0;
+  for ($y=2000; $y<$bsY; $y++) { if(!isset($tbl[$y])) return null; foreach($tbl[$y] as $dim) $days += $dim; }
+  for ($mo=1; $mo<$bsM; $mo++) $days += $tbl[$bsY][$mo-1];
+  $days += max(1,(int)$bsD) - 1;
+  return gmdate('Y-m-d', (_bs_day_num(1943,4,14) + $days) * 86400);
+}
+/* AD start+end date ('Y-m-d' each) spanning one full BS month */
+function bs_month_range($bsY,$bsM) {
+  $tbl = bs_month_table();
+  if (!isset($tbl[$bsY]) || $bsM<1 || $bsM>12) return null;
+  $dim = $tbl[$bsY][$bsM-1];
+  $start = bs_to_ad($bsY,$bsM,1);
+  $end   = bs_to_ad($bsY,$bsM,$dim);
+  if (!$start || !$end) return null;
+  return [$start,$end];
+}
+/* BS 'Y-m' key (e.g. "2083-05") for an AD date — the true Nepali month it falls in */
+function bs_ym_of($adDate) {
+  $bs = ad_to_bs($adDate);
+  if(!$bs) return date('Y-m', is_numeric($adDate)?(int)$adDate:strtotime($adDate));
+  return sprintf('%04d-%02d', $bs[0], $bs[1]);
+}
+/* shift a BS 'Y-m' key by $delta months (may cross year boundaries, +/-) */
+function bs_ym_add($ym,$delta) {
+  $parts = array_map('intval', explode('-', $ym));
+  $y = $parts[0] ?? 2083; $m = $parts[1] ?? 1;
+  $m += (int)$delta;
+  while ($m > 12) { $m -= 12; $y++; }
+  while ($m < 1)  { $m += 12; $y--; }
+  return sprintf('%04d-%02d', $y, $m);
+}
+/* pretty label "भदौ २०८३" from a BS 'Y-m' key */
+function bs_ym_label($ym,$nepaliDigits=true) {
+  $parts = array_map('intval', explode('-', $ym));
+  $y = $parts[0] ?? 0; $m = max(1,min(12,$parts[1] ?? 1));
+  $mn = bs_months_np()[$m-1];
+  return $nepaliDigits ? ($mn.' '.np_digits($y)) : ($mn.' '.$y);
 }

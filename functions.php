@@ -1,5 +1,6 @@
 <?php
 require_once __DIR__ . '/auth.php';
+require_once __DIR__ . '/nepali_date.php';
 
 function e($s)     { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
 function money($n) { return CURRENCY . ' ' . number_format((float)$n, 0); }
@@ -590,7 +591,11 @@ function lunch_sync_salary_entry($employeeId, $ym) {
   ensure_lunch_system();
   $employeeId = (int)$employeeId;
   if (!$employeeId || !preg_match('/^\d{4}-\d{2}$/', $ym)) return 0.0;
-  $mStart = $ym.'-01'; $mEnd = date('Y-m-t', strtotime($mStart));
+  /* $ym is a BS (Nepali) 'Y-m' key — resolve it to the real AD date span it covers */
+  $parts = array_map('intval', explode('-', $ym));
+  $range = bs_month_range($parts[0] ?? 0, $parts[1] ?? 0);
+  if (!$range) return 0.0;
+  [$mStart,$mEnd] = $range;
   $agg = lunch_monthly_agg($mStart, $mEnd, $employeeId);
   $amount = round((float)($agg[$employeeId]['adjustment'] ?? 0), 2);
   q("DELETE FROM salary_entries WHERE employee_id=? AND ym=? AND type='lunch' AND source='lunch_mgmt'", [$employeeId, $ym]);
@@ -599,4 +604,18 @@ function lunch_sync_salary_entry($employeeId, $ym) {
       [$employeeId, $ym, 'lunch', $amount, date('Y-m-d'), 'Auto-synced from Lunch Management', 'lunch_mgmt']);
   }
   return $amount;
+}
+
+/* one-time fix: salary_entries.ym used to be stamped with the AD calendar month.
+   Staff Salary now groups by the true Nepali (BS) month instead, so re-derive
+   every row's ym from its actual entry_date once, then never again. */
+function ensure_salary_ym_bs() {
+  if (setting('salary_ym_bs_migrated','') === '1') return;
+  try {
+    foreach (rows("SELECT id, entry_date FROM salary_entries") as $r) {
+      $bsYm = bs_ym_of($r['entry_date']);
+      if ($bsYm) q("UPDATE salary_entries SET ym=? WHERE id=?", [$bsYm, $r['id']]);
+    }
+  } catch (Exception $e) {}
+  set_setting('salary_ym_bs_migrated','1');
 }

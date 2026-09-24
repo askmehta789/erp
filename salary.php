@@ -15,7 +15,7 @@ $isAdmin = role_rank($u['role'] ?? '') >= 3;
 try { q("CREATE TABLE IF NOT EXISTS salary_entries(
   id INT AUTO_INCREMENT PRIMARY KEY,
   employee_id INT NOT NULL,
-  ym CHAR(7) NOT NULL,                 /* salary month YYYY-MM (AD) */
+  ym CHAR(7) NOT NULL,                 /* salary month YYYY-MM (BS/Nepali) */
   type VARCHAR(12) NOT NULL,           /* payment | advance | bonus | lunch | deduction */
   amount DECIMAL(12,2) NOT NULL,
   entry_date DATE NOT NULL,
@@ -27,6 +27,7 @@ ensure_expense_bank_columns();
 try { q("ALTER TABLE salary_entries ADD COLUMN IF NOT EXISTS account_id INT NULL"); } catch (Exception $e) {}
 try { q("ALTER TABLE salary_entries ADD COLUMN IF NOT EXISTS bank_txn_id INT NULL"); } catch (Exception $e) {}
 try { q("ALTER TABLE salary_entries ADD COLUMN IF NOT EXISTS expense_id INT NULL"); } catch (Exception $e) {}
+ensure_salary_ym_bs();
 
 /* a salary payment/advance/bonus paid from a bank account mirrors into the
    expenses table (category 'Salary', via the same expense_bank_sync() that
@@ -74,7 +75,9 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
     $type=isset($TYPES[$_POST['type'] ?? '']) ? $_POST['type'] : 'payment';
     $amt=(float)($_POST['amount'] ?? 0);
     $note=trim($_POST['note'] ?? '');
-    $ym=preg_match('/^\d{4}-\d{2}$/',$_POST['ym'] ?? '')?$_POST['ym']:date('Y-m');
+    $ymMonth=max(1,min(12,(int)($_POST['ym_month'] ?? 0)));
+    $ymYear=(int)($_POST['ym_year'] ?? 0);
+    $ym=$ymYear ? sprintf('%04d-%02d',$ymYear,$ymMonth) : bs_ym_of(date('Y-m-d'));
     /* lunch is entirely Lunch Management's domain now — it auto-syncs its own
        'lunch' row (source='lunch_mgmt') from the daily entries there, so this
        page no longer accepts manual Lunch entries at all */
@@ -110,10 +113,10 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
     }
     q("DELETE FROM salary_entries WHERE id=?",[$delId]);
     flash('Entry deleted.');
-    header('Location: salary.php?m='.urlencode($_POST['m'] ?? date('Y-m'))); exit;
+    header('Location: salary.php?m='.urlencode(preg_match('/^\d{4}-\d{2}$/',$_POST['m'] ?? '')?$_POST['m']:bs_ym_of(date('Y-m-d')))); exit;
   }
   if ($act==='pay_all' && $isAdmin) {
-    $ym2=preg_match('/^\d{4}-\d{2}$/',$_POST['ym'] ?? '')?$_POST['ym']:date('Y-m');
+    $ym2=preg_match('/^\d{4}-\d{2}$/',$_POST['ym'] ?? '')?$_POST['ym']:bs_ym_of(date('Y-m-d'));
     $acc2=(int)($_POST['account_id'] ?? 0) ?: null;
     $paidCount=0; $paidTotal=0;
     foreach (rows("SELECT id,salary FROM employees ORDER BY name") as $e2) {
@@ -146,7 +149,14 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
   }
 }
 
-$m = preg_match('/^\d{4}-\d{2}$/', $_GET['m'] ?? '') ? $_GET['m'] : date('Y-m');
+/* $m is a BS (Nepali) 'Y-m' key, e.g. "2083-05" for भदौ — the real grouping
+   unit for payroll now, not the Gregorian calendar month */
+$m = preg_match('/^\d{4}-\d{2}$/', $_GET['m'] ?? '') ? $_GET['m'] : bs_ym_of(date('Y-m-d'));
+$mParts = array_map('intval', explode('-', $m));
+$bsY = $mParts[0]; $bsM = $mParts[1];
+$adRange = bs_month_range($bsY,$bsM);
+if (!$adRange) { $m = bs_ym_of(date('Y-m-d')); [$bsY,$bsM] = array_map('intval', explode('-', $m)); $adRange = bs_month_range($bsY,$bsM); }
+[$adMonthStart,$adMonthEnd] = $adRange;
 $linkAccounts = rows("SELECT * FROM bank_accounts WHERE archived=0 ORDER BY kind='cash' DESC, name");
 $acctBal = [];
 foreach($linkAccounts as $A){
@@ -159,8 +169,6 @@ $empFilter = (int)($_GET['emp'] ?? 0);
 $emps = rows("SELECT * FROM employees".($empFilter?" WHERE id=".$empFilter:"")." ORDER BY name");
 $allEmps = rows("SELECT id,name,lunch_rate FROM employees ORDER BY name");
 $empName=[]; $empLunchRate=[]; foreach($allEmps as $ae) { $empName[(int)$ae['id']]=$ae['name']; $empLunchRate[(int)$ae['id']]=(float)$ae['lunch_rate']; }
-
-$mStart=$m.'-01';
 
 /* month aggregates per employee */
 $agg=[];
@@ -203,8 +211,8 @@ if ($empFilter) {
           FROM salary_entries WHERE employee_id=? GROUP BY ym ORDER BY ym DESC",[$empFilter]) as $h) $history[]=$h;
 }
 
-/* ---- 12-month trend (company-wide, or one employee when filtered) ---- */
-$trendFrom=date('Y-m',strtotime($mStart.' -11 months'));
+/* ---- 12 BS-month trend (company-wide, or one employee when filtered) ---- */
+$trendFrom=bs_ym_add($m,-11);
 $trendMap=[];
 foreach (rows("SELECT ym,
         SUM(CASE WHEN type IN ('payment','advance') THEN amount ELSE 0 END) paid,
@@ -214,15 +222,15 @@ foreach (rows("SELECT ym,
   $trendMap[$t['ym']]=$t;
 $trendLabels=[];$trendPaid=[];$trendBon=[];$trendLun=[];
 for($i=11;$i>=0;$i--){
-  $ym2=date('Y-m',strtotime($mStart.' -'.$i.' months'));
-  $trendLabels[]=date('M Y',strtotime($ym2.'-01'));
+  $ym2=bs_ym_add($m,-$i);
+  $trendLabels[]=bs_ym_label($ym2,false);
   $trendPaid[]=round((float)($trendMap[$ym2]['paid']??0),2);
   $trendBon[]=round((float)($trendMap[$ym2]['bon']??0),2);
   $trendLun[]=round((float)($trendMap[$ym2]['lun']??0),2);
 }
 
-/* ---- yearly summary (Paid = payments + advances, per employee per month) ---- */
-$year=preg_match('/^\d{4}$/',$_GET['year'] ?? '')?(int)$_GET['year']:(int)date('Y');
+/* ---- yearly summary (Paid = payments + advances, per employee per BS month) ---- */
+$year=preg_match('/^\d{4}$/',$_GET['year'] ?? '')?(int)$_GET['year']:$bsY;
 $yearMap=[];
 foreach (rows("SELECT employee_id,ym,SUM(CASE WHEN type IN ('payment','advance') THEN amount ELSE 0 END) paid
         FROM salary_entries WHERE ym LIKE ? GROUP BY employee_id,ym",[$year.'-%']) as $yr)
@@ -232,12 +240,16 @@ require __DIR__.'/includes/header.php';
 $stPill=fn($s)=>['Paid'=>'p-green','Partial'=>'p-yellow','Pending'=>'p-red'][$s];
 ?>
 <div class="page-head">
-  <div><h1>💵 Staff Salary</h1><p><?= e(date('F Y',strtotime($m.'-01'))) ?> · <?= e(bs_month_label($m)) ?> — salaries, advances, bonuses, lunch allowance &amp; deductions</p></div>
+  <div><h1>💵 Staff Salary</h1><p><?= e(bs_ym_label($m)) ?> · <?= e(date('d M',strtotime($adMonthStart))) ?> – <?= e(date('d M Y',strtotime($adMonthEnd))) ?> — salaries, advances, bonuses, lunch allowance &amp; deductions</p></div>
   <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
     <form method="get" style="display:flex;gap:6px;align-items:center">
+      <input type="hidden" name="m" value="<?= e($m) ?>">
       <select name="emp"><option value="0">All staff</option>
         <?php foreach($allEmps as $ae): ?><option value="<?= (int)$ae['id'] ?>"<?= $empFilter===(int)$ae['id']?' selected':'' ?>><?= e($ae['name']) ?></option><?php endforeach; ?></select>
-      <input type="month" name="m" value="<?= e($m) ?>"><button class="btn btn-sm">Go</button>
+      <a class="btn btn-sm" href="?m=<?= e(bs_ym_add($m,-1)) ?>&emp=<?= $empFilter ?>" title="Previous Nepali month">◀</a>
+      <span style="font-weight:800;padding:0 4px;white-space:nowrap"><?= e(bs_ym_label($m)) ?></span>
+      <a class="btn btn-sm" href="?m=<?= e(bs_ym_add($m,1)) ?>&emp=<?= $empFilter ?>" title="Next Nepali month">▶</a>
+      <button class="btn btn-sm">Go</button>
     </form>
     <a class="btn" style="background:var(--orange-bg);color:var(--orange)" href="lunch_management.php?m=<?= e($m) ?>">🍱 Lunch Management</a>
     <?php if($isAdmin && $tDue>0.5): ?><button class="btn" style="background:var(--green-bg);color:var(--green)" onclick="openPayAll()">💰 Pay All Due</button><?php endif; ?>
@@ -249,14 +261,14 @@ $stPill=fn($s)=>['Paid'=>'p-green','Partial'=>'p-yellow','Pending'=>'p-red'][$s]
 <div class="mgrid">
   <div class="metric blue"><div><div class="mv" style="font-size:19px"><?= money($tPayable) ?></div><div class="ml">Payable This Month</div><div class="ms">base + bonus + lunch − deduction</div></div><div class="mi">🧾</div></div>
   <div class="metric green"><div><div class="mv" style="font-size:19px"><?= money($tPaid) ?></div><div class="ml">Paid</div><div class="ms">payments + advances</div></div><div class="mi">✅</div></div>
-  <div class="metric <?= $tDue>0.5?'amber':'teal' ?>"><div><div class="mv" style="font-size:19px"><?= money($tDue) ?></div><div class="ml">Remaining Due</div><div class="ms"><?= e(bs_month_label($m)) ?></div></div><div class="mi">⏳</div></div>
+  <div class="metric <?= $tDue>0.5?'amber':'teal' ?>"><div><div class="mv" style="font-size:19px"><?= money($tDue) ?></div><div class="ml">Remaining Due</div><div class="ms"><?= e(bs_ym_label($m)) ?></div></div><div class="mi">⏳</div></div>
   <div class="metric orange"><div><div class="mv" style="font-size:19px"><?= money($tLunch) ?></div><div class="ml">Lunch Allowance</div><div class="ms">paid out this month</div></div><div class="mi">🍱</div></div>
   <div class="metric purple"><div><div class="mv" style="font-size:19px"><?= money($tBonus) ?></div><div class="ml">Bonuses</div><div class="ms">this month</div></div><div class="mi">🎁</div></div>
   <div class="metric indigo"><div><div class="mv" style="font-size:19px"><?= money($tAdvance) ?></div><div class="ml">Advances</div><div class="ms">this month</div></div><div class="mi">⏩</div></div>
 </div>
 
 <div class="panel" style="margin-top:16px">
-  <div class="panel-head"><h2>👥 Salary Sheet — <?= e(date('M Y',strtotime($m.'-01'))) ?> · <?= e(bs_month_label($m)) ?></h2>
+  <div class="panel-head"><h2>👥 Salary Sheet — <?= e(bs_ym_label($m)) ?></h2>
     <span class="muted" style="font-size:12px">staff directory is below ⬇ — add &amp; edit employees there</span></div>
   <div class="table-wrap"><table class="tbl num-tbl"><thead><tr>
     <th>Employee</th><th class="right">Base Salary</th><th class="right">Bonus</th><th class="right">Lunch</th><th class="right">Deduction</th><th class="right">Payable</th><th class="right">Advance</th><th class="right">Payment</th><th class="right">Remaining</th><th>Status</th><th></th>
@@ -292,12 +304,12 @@ $stPill=fn($s)=>['Paid'=>'p-green','Partial'=>'p-yellow','Pending'=>'p-red'][$s]
   <div class="panel-head"><h2>📜 Full History — <?= e($empName[$empFilter] ?? '') ?></h2>
     <a class="btn btn-sm" href="salary.php?m=<?= e($m) ?>">← all staff</a></div>
   <div class="table-wrap"><table class="tbl num-tbl"><thead><tr>
-    <th>Month (AD)</th><th>Month (BS)</th><th class="right">Bonus</th><th class="right">Lunch</th><th class="right">Deduction</th><th class="right">Advance</th><th class="right">Payment</th><th class="right">Total Received</th>
+    <th>Month (BS)</th><th>≈ AD range</th><th class="right">Bonus</th><th class="right">Lunch</th><th class="right">Deduction</th><th class="right">Advance</th><th class="right">Payment</th><th class="right">Total Received</th>
   </tr></thead><tbody>
-  <?php foreach($history as $h): ?>
+  <?php foreach($history as $h): $hp=array_map('intval',explode('-',$h['ym'])); $hr=bs_month_range($hp[0]??0,$hp[1]??0); ?>
     <tr>
-      <td><b><?= e(date('M Y',strtotime($h['ym'].'-01'))) ?></b></td>
-      <td><?= e(bs_month_label($h['ym'])) ?></td>
+      <td><b><?= e(bs_ym_label($h['ym'])) ?></b></td>
+      <td class="muted"><?= $hr?e(date('d M',strtotime($hr[0])).' – '.date('d M Y',strtotime($hr[1]))):'—' ?></td>
       <td class="num right" style="color:var(--green)"><?= money($h['bon']) ?></td>
       <td class="num right" style="color:var(--orange)"><?= money($h['lun']) ?></td>
       <td class="num right" style="color:var(--red)"><?= money($h['ded']) ?></td>
@@ -311,19 +323,19 @@ $stPill=fn($s)=>['Paid'=>'p-green','Partial'=>'p-yellow','Pending'=>'p-red'][$s]
 <?php endif; ?>
 
 <div class="panel" style="margin-top:16px">
-  <div class="panel-head"><h2>📅 Yearly Summary — <?= $year ?></h2>
+  <div class="panel-head"><h2>📅 Yearly Summary (BS) — <?= np_digits($year) ?></h2>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       <form method="get" style="display:inline-flex;gap:6px;align-items:center">
         <input type="hidden" name="m" value="<?= e($m) ?>"><input type="hidden" name="emp" value="<?= $empFilter ?>">
         <select name="year" onchange="this.form.submit()">
-          <?php for($y=(int)date('Y');$y>=(int)date('Y')-4;$y--): ?><option value="<?= $y ?>"<?= $y===$year?' selected':'' ?>><?= $y ?></option><?php endfor; ?>
+          <?php for($y=$bsY;$y>=$bsY-4;$y--): ?><option value="<?= $y ?>"<?= $y===$year?' selected':'' ?>><?= np_digits($y) ?></option><?php endfor; ?>
         </select>
       </form>
       <button type="button" class="btn btn-sm" onclick="salExportYearCsv()">⬇ Export CSV</button>
     </div>
   </div>
   <div class="table-wrap"><table class="tbl num-tbl" id="yearlyTbl"><thead><tr>
-    <th>Employee</th><?php foreach(['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'] as $mn): ?><th class="right"><?= $mn ?></th><?php endforeach; ?><th class="right">Year Total</th>
+    <th>Employee</th><?php foreach(bs_months_np() as $mn): ?><th class="right"><?= e($mn) ?></th><?php endforeach; ?><th class="right">Year Total</th>
   </tr></thead><tbody>
   <?php $yearColTotals=array_fill(1,12,0.0); $yearGrand=0.0; foreach($allEmps as $ae): $aeid=(int)$ae['id']; $rowTotal=0.0; ?>
     <tr>
@@ -347,7 +359,7 @@ $stPill=fn($s)=>['Paid'=>'p-green','Partial'=>'p-yellow','Pending'=>'p-red'][$s]
 </div>
 
 <div class="panel" style="margin-top:16px">
-  <div class="panel-head"><h2>🧾 Entries — <?= e(date('M Y',strtotime($m.'-01'))) ?></h2></div>
+  <div class="panel-head"><h2>🧾 Entries — <?= e(bs_ym_label($m)) ?></h2></div>
   <div class="table-wrap"><table class="tbl led-tbl"><thead><tr>
     <th>Date (AD · BS)</th><th>Employee</th><th>Type</th><th style="text-align:right">Amount</th><th>Note</th><?php if($isAdmin): ?><th></th><?php endif; ?>
   </tr></thead><tbody>
@@ -373,7 +385,14 @@ $stPill=fn($s)=>['Paid'=>'p-green','Partial'=>'p-yellow','Pending'=>'p-red'][$s]
     <div><label>Employee *</label><select name="employee_id" id="sal_emp" required><option value="">—</option>
       <?php foreach($allEmps as $ae): ?><option value="<?= (int)$ae['id'] ?>"><?= e($ae['name']) ?></option><?php endforeach; ?></select></div>
     <div><label>Type</label><select name="type" id="sal_type"><?php foreach($TYPES as $k=>$l): if($k==='lunch') continue; ?><option value="<?= $k ?>"><?= e($l) ?></option><?php endforeach; ?></select></div>
-    <div><label>Salary Month</label><input type="month" name="ym" value="<?= e($m) ?>"></div>
+    <div><label>Salary Month (BS)</label>
+      <div style="display:flex;gap:6px">
+        <select name="ym_month" id="sal_ym_month" style="flex:1">
+          <?php foreach(bs_months_np() as $i=>$mn): ?><option value="<?= $i+1 ?>"<?= ($i+1)===$bsM?' selected':'' ?>><?= e($mn) ?></option><?php endforeach; ?>
+        </select>
+        <input type="number" name="ym_year" id="sal_ym_year" value="<?= $bsY ?>" min="2000" max="2090" style="width:90px">
+      </div>
+    </div>
     <div><label>Amount (Rs.) *</label><input type="number" step="any" min="1" name="amount" id="sal_amount" required></div>
     <div><label>Account (Bank page) — leave "not linked" for advances/deductions you track only here</label>
       <select name="account_id">
@@ -395,7 +414,7 @@ $stPill=fn($s)=>['Paid'=>'p-green','Partial'=>'p-yellow','Pending'=>'p-red'][$s]
   <div class="modal-head"><span>💰 Pay All Remaining</span><span class="mx" onclick="closePayAll()">✕</span></div>
   <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="pay_all"><input type="hidden" name="ym" value="<?= e($m) ?>">
   <div class="modal-body">
-    <p>Records a <b>Payment</b> for every staff member with remaining due in <?= e(date('M Y',strtotime($m.'-01'))) ?>, totalling <b><?= money($tDue) ?></b>.</p>
+    <p>Records a <b>Payment</b> for every staff member with remaining due in <?= e(bs_ym_label($m)) ?>, totalling <b><?= money($tDue) ?></b>.</p>
     <div><label>Pay from Account</label>
       <select name="account_id">
         <option value="0">⏳ — not linked (track only) —</option>
@@ -410,7 +429,12 @@ $stPill=fn($s)=>['Paid'=>'p-green','Partial'=>'p-yellow','Pending'=>'p-red'][$s]
 
 <script>
 var BS_LABELS=<?php $lbl=[]; for($i=-60;$i<=30;$i++){$d=date('Y-m-d',strtotime("$i days")); $lbl[$d]=bs_pretty($d);} echo json_encode($lbl); ?>;
-function salBs(){var d=document.getElementById('sal_date').value;document.getElementById('sal_bs').textContent=BS_LABELS[d]||'';}
+var BS_YM=<?php $ymm=[]; for($i=-60;$i<=30;$i++){$d=date('Y-m-d',strtotime("$i days")); $ymm[$d]=bs_ym_of($d);} echo json_encode($ymm); ?>;
+function salBs(){
+  var d=document.getElementById('sal_date').value;
+  document.getElementById('sal_bs').textContent=BS_LABELS[d]||'';
+  var ym=BS_YM[d]; if(ym){var p=ym.split('-');document.getElementById('sal_ym_month').value=parseInt(p[1],10);document.getElementById('sal_ym_year').value=parseInt(p[0],10);}
+}
 function openSal(eid){
   if(eid)document.getElementById('sal_emp').value=eid;
   document.getElementById('sal_type').value='payment';

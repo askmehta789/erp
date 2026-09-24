@@ -13,8 +13,8 @@ $orders = rows("SELECT o.*, p.name AS product_name, c.name AS courier_name
 /* ---- period selector: 30d / 90d / this year / lifetime ---- */
 $range = (string)($_GET['range'] ?? 'all');
 $rangeDefs = [
-  '30'   => ['Last 30 days',  date('Y-m-d', strtotime('-30 days'))],
-  '90'   => ['Last 90 days',  date('Y-m-d', strtotime('-90 days'))],
+  '30'   => ['Last 30 days',  date('Y-m-d', strtotime('-29 days'))],
+  '90'   => ['Last 90 days',  date('Y-m-d', strtotime('-89 days'))],
   'year' => ['This year',     date('Y-01-01')],
   'all'  => ['Lifetime',      null],
 ];

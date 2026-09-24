@@ -216,7 +216,7 @@ $lunchLabel = fn($s) => ['ok'=>'Completed','leave'=>'Leave','review'=>'Requires 
 .cal-ok a{background:var(--green-bg);color:var(--green)}
 .cal-noorder a{background:var(--surface-2);color:var(--muted)}
 .cal-review a{background:var(--amber-bg,#fef3c7);color:var(--amber)}
-.cal-leave a{background:var(--surface-2);color:var(--muted-2)}
+.cal-leave a{background:var(--red-bg,#fee2e2);color:var(--red)}
 .cal-blank a{color:var(--muted-2);opacity:.35}
 </style>
 <div class="panel" style="margin-top:16px">

@@ -229,10 +229,10 @@ for($i=11;$i>=0;$i--){
   $trendLun[]=round((float)($trendMap[$ym2]['lun']??0),2);
 }
 
-/* ---- yearly summary (Paid = payments + advances, per employee per BS month) ---- */
+/* ---- yearly summary (Paid = payments + advances + bonuses, per employee per BS month) ---- */
 $year=preg_match('/^\d{4}$/',$_GET['year'] ?? '')?(int)$_GET['year']:$bsY;
 $yearMap=[];
-foreach (rows("SELECT employee_id,ym,SUM(CASE WHEN type IN ('payment','advance') THEN amount ELSE 0 END) paid
+foreach (rows("SELECT employee_id,ym,SUM(CASE WHEN type IN ('payment','advance','bonus') THEN amount ELSE 0 END) paid
         FROM salary_entries WHERE ym LIKE ? GROUP BY employee_id,ym",[$year.'-%']) as $yr)
   $yearMap[(int)$yr['employee_id']][$yr['ym']]=(float)$yr['paid'];
 
@@ -355,7 +355,7 @@ $stPill=fn($s)=>['Paid'=>'p-green','Partial'=>'p-yellow','Pending'=>'p-red'][$s]
   </tr></tfoot>
   <?php endif; ?>
   </table></div>
-  <p class="muted" style="font-size:11.5px;margin-top:8px">Monthly figures are total payments + advances actually paid out that month.</p>
+  <p class="muted" style="font-size:11.5px;margin-top:8px">Monthly figures are total payments + advances + bonuses recorded that month.</p>
 </div>
 
 <div class="panel" style="margin-top:16px">

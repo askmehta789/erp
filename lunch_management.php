@@ -40,6 +40,34 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
     header('Location: lunch_management.php?m='.urlencode($backM).($backEmp?'&emp='.$backEmp:'')); exit;
   }
 
+  if ($act==='save_bulk') {
+    $bd=preg_match('/^\d{4}-\d{2}-\d{2}$/',$_POST['entry_date'] ?? '')?$_POST['entry_date']:date('Y-m-d');
+    $bym=bs_ym_of($bd);
+    $eids=$_POST['employee_id'] ?? [];
+    $atts=$_POST['attendance'] ?? [];
+    $ords=$_POST['lunch_ordered'] ?? [];
+    $amts=$_POST['order_amount'] ?? [];
+    $notes=$_POST['note'] ?? [];
+    $saved=0;
+    foreach ($eids as $i=>$eidRaw) {
+      $eid=(int)$eidRaw;
+      if (!$eid) continue;
+      $att=in_array($atts[$i] ?? '',['present','leave'],true)?$atts[$i]:'present';
+      $ordered=(($ords[$i] ?? '1')==='1') ? 1 : 0;
+      $amt=max(0,(float)($amts[$i] ?? 0));
+      $note=trim($notes[$i] ?? '');
+      if ($att==='leave') { $ordered=0; $amt=0; }
+      q("INSERT INTO lunch_orders(employee_id,order_date,order_amount,attendance,lunch_ordered,note) VALUES(?,?,?,?,?,?)
+         ON DUPLICATE KEY UPDATE order_amount=VALUES(order_amount),attendance=VALUES(attendance),lunch_ordered=VALUES(lunch_ordered),note=VALUES(note)",
+        [$eid,$bd,$amt,$att,$ordered,$note]);
+      lunch_sync_salary_entry($eid, $bym);
+      $saved++;
+    }
+    log_activity("Bulk-logged lunch/attendance for $saved staff on $bd",'Lunch Management');
+    flash("Saved attendance & lunch for $saved staff — ".dual_date($bd).".");
+    header('Location: lunch_management.php?m='.urlencode($backM).'&d='.urlencode($bd)); exit;
+  }
+
   if ($act==='del_entry' && $isAdmin) {
     $id=(int)($_POST['id'] ?? 0);
     $row=row("SELECT employee_id,order_date FROM lunch_orders WHERE id=?",[$id]);
@@ -88,9 +116,11 @@ $entries = rows("SELECT lo.*, e.name, e.lunch_rate FROM lunch_orders lo JOIN emp
                  WHERE lo.order_date BETWEEN ? AND ?".($empFilter?" AND lo.employee_id=".$empFilter:"")."
                  ORDER BY lo.order_date DESC, e.name",[$mStart,$mEnd]);
 
-/* who already has an entry for the selected logging date (duplicate map + pending count) */
-$loggedToday = [];
-foreach (rows("SELECT employee_id FROM lunch_orders WHERE order_date=?",[$d]) as $t) $loggedToday[(int)$t['employee_id']] = true;
+/* full rows already logged for the selected logging date — powers both the
+   bulk "quick daily entry" prefill and the pending-count stat */
+$dayEntries = [];
+foreach (rows("SELECT * FROM lunch_orders WHERE order_date=?",[$d]) as $t) $dayEntries[(int)$t['employee_id']] = $t;
+$loggedToday = array_fill_keys(array_keys($dayEntries), true);
 $pendingEntries = count($allEmps) - count($loggedToday);
 
 /* bonus/deduction from the main payroll ledger, so "Final Salary" here matches
@@ -153,6 +183,40 @@ $lunchLabel = fn($s) => ['ok'=>'Completed','leave'=>'Leave','review'=>'Requires 
   <div class="metric <?= $pendingEntries>0?'amber':'green' ?>"><div><div class="mv" style="font-size:19px"><?= number_format(max(0,$pendingEntries)) ?></div><div class="ml">Pending Entries</div><div class="ms">not logged for <?= e(date('d M',strtotime($d))) ?></div></div><div class="mi">⏳</div></div>
 </div>
 <?php if($tReview>0): ?><div class="flash" style="background:var(--amber-bg,#fef3c7);color:var(--amber)">⚠ <b><?= $tReview ?></b> entr<?= $tReview>1?'ies':'y' ?> this month exceed the daily allowance and need review.</div><?php endif; ?>
+
+<div class="panel" style="margin-top:16px">
+  <div class="panel-head"><h2>📋 Quick Daily Entry — <?= e(dual_date($d)) ?></h2>
+    <span class="muted" style="font-size:12px">mark everyone at once instead of one by one — edit only the rows that differ, then Save All</span></div>
+  <form method="post">
+    <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="save_bulk">
+    <input type="hidden" name="entry_date" value="<?= e($d) ?>"><input type="hidden" name="m" value="<?= e($m) ?>">
+    <div class="table-wrap"><table class="tbl num-tbl" id="bulkTbl"><thead><tr>
+      <th>Employee</th><th>Attendance</th><th>Lunch Ordered</th><th class="right">Amount</th><th>Note</th>
+    </tr></thead><tbody>
+    <?php foreach($allEmps as $ae): $eid=(int)$ae['id']; $ex=$dayEntries[$eid] ?? null;
+      $rAtt = $ex ? $ex['attendance'] : 'present';
+      $rOrd = $ex ? (int)$ex['lunch_ordered'] : 1;
+      $rAmt = $ex ? (float)$ex['order_amount'] : (float)$ae['lunch_rate'];
+      $rNote = $ex ? (string)$ex['note'] : '';
+    ?>
+      <tr data-rate="<?= (float)$ae['lunch_rate'] ?>">
+        <td><b><?= e($ae['name']) ?></b><input type="hidden" name="employee_id[]" value="<?= $eid ?>"></td>
+        <td><select name="attendance[]" class="bulk-att" onchange="bulkRowToggle(this)">
+          <option value="present"<?= $rAtt==='present'?' selected':'' ?>>Present</option>
+          <option value="leave"<?= $rAtt==='leave'?' selected':'' ?>>Leave</option>
+        </select></td>
+        <td><select name="lunch_ordered[]" class="bulk-ord" onchange="bulkRowToggle(this)"<?= $rAtt==='leave'?' disabled':'' ?>>
+          <option value="1"<?= $rOrd?' selected':'' ?>>Yes</option>
+          <option value="0"<?= !$rOrd?' selected':'' ?>>No</option>
+        </select></td>
+        <td class="right"><input type="number" name="order_amount[]" class="bulk-amt" value="<?= $rAmt ?>" step="any" min="0" style="width:100px;text-align:right"<?= ($rAtt==='leave'||!$rOrd)?' disabled':'' ?>></td>
+        <td><input type="text" name="note[]" value="<?= e($rNote) ?>" placeholder="optional" style="width:100%"></td>
+      </tr>
+    <?php endforeach; if(!$allEmps): ?><tr><td colspan="5"><div class="empty">No staff yet.</div></td></tr><?php endif; ?>
+    </tbody></table></div>
+    <div style="padding:14px 0 4px"><button class="btn btn-primary">💾 Save All (<?= count($allEmps) ?> staff)</button></div>
+  </form>
+</div>
 
 <?php if($empFilter && $summaryRows): $sr=$summaryRows[0]; $ae=$sr['e']; ?>
 <div class="panel" style="margin-top:16px">
@@ -281,6 +345,17 @@ var LM_PAY_UNUSED = <?= lunch_pay_unused() ? 'true' : 'false' ?>;
 var LM_OVER_MODE = <?= json_encode(lunch_over_allowance_setting()) ?>;
 var DUP_MAP = <?= json_encode($dupMap) ?>;
 var BS_LABELS=<?php $lbl=[]; for($i=-60;$i<=30;$i++){$dd=date('Y-m-d',strtotime("$i days")); $lbl[$dd]=bs_pretty($dd);} echo json_encode($lbl); ?>;
+
+function bulkRowToggle(el){
+  var tr=el.closest('tr'), rate=parseFloat(tr.getAttribute('data-rate')||'0');
+  var attSel=tr.querySelector('.bulk-att'), ordSel=tr.querySelector('.bulk-ord'), amtEl=tr.querySelector('.bulk-amt');
+  var isLeave = attSel.value==='leave';
+  ordSel.disabled = isLeave;
+  var isOrdered = !isLeave && ordSel.value==='1';
+  amtEl.disabled = !isOrdered;
+  if (isLeave) { amtEl.value = 0; }
+  else if (isOrdered && parseFloat(amtEl.value||'0')===0) { amtEl.value = rate; }
+}
 
 function lmRate(){
   var emp=document.getElementById('lm_emp'), opt=emp.options[emp.selectedIndex];

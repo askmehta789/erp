@@ -149,12 +149,18 @@ if ('serviceWorker' in navigator) {
 function crudOpen(n){var m=document.getElementById('mbg_'+n);if(!m)return;
   document.getElementById('mAction_'+n).value='add';document.getElementById('mId_'+n).value='';
   document.getElementById('mTitle_'+n).textContent='Add';
-  m.querySelectorAll('[name]').forEach(function(el){if(['csrf','_action','_entity','id'].indexOf(el.name)<0){if(el.tagName==='SELECT')el.selectedIndex=0;else el.value='';}});
+  m.querySelectorAll('[name]').forEach(function(el){if(['csrf','_action','_entity','id'].indexOf(el.name)<0){
+    if(el.type==='file'){el.value='';var p=document.getElementById('preview_'+el.name);if(p){p.style.display='none';p.src='';}}
+    else if(el.tagName==='SELECT')el.selectedIndex=0;else el.value='';
+  }});
   m.classList.add('open');document.body.classList.add('modal-open');}
 function crudEdit(n,btn){var m=document.getElementById('mbg_'+n);if(!m)return;
   var r=JSON.parse(btn.getAttribute('data-rec'));
   document.getElementById('mAction_'+n).value='update';document.getElementById('mId_'+n).value=r.id;
   document.getElementById('mTitle_'+n).textContent='Edit';
-  m.querySelectorAll('[name]').forEach(function(el){if(r[el.name]!==undefined&&r[el.name]!==null)el.value=r[el.name];});
+  m.querySelectorAll('[name]').forEach(function(el){
+    if(el.type==='file'){el.value='';var p=document.getElementById('preview_'+el.name);if(p){if(r[el.name]){p.src=r[el.name];p.style.display='';}else{p.style.display='none';p.src='';}}return;}
+    if(r[el.name]!==undefined&&r[el.name]!==null)el.value=r[el.name];
+  });
   m.classList.add('open');document.body.classList.add('modal-open');}
 function crudClose(n){var m=document.getElementById('mbg_'+n);if(m)m.classList.remove('open');document.body.classList.remove('modal-open');}

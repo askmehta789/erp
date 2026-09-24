@@ -164,6 +164,15 @@ foreach ($monthEntries as $en) $dupMap[$en['employee_id'].'_'.$en['order_date']]
   'attendance'=>$en['attendance'],'lunch_ordered'=>(int)$en['lunch_ordered'],'order_amount'=>(float)$en['order_amount'],'note'=>$en['note'],
 ];
 
+/* ---- monthly calendar grid: every staff member x every day of the BS month,
+   full present/leave/lunch detail at a glance ---- */
+$calDim = bs_month_table()[$bsY][$bsM-1] ?? 30;
+$calDays = [];
+for ($dd=1; $dd<=$calDim; $dd++) $calDays[] = ['bs'=>$dd, 'ad'=>bs_to_ad($bsY,$bsM,$dd)];
+$calMap = [];
+foreach ($monthEntries as $en) $calMap[(int)$en['employee_id']][$en['order_date']] = $en;
+$calToday = date('Y-m-d');
+
 require __DIR__.'/includes/header.php';
 $lunchPill = fn($s) => ['ok'=>'p-green','leave'=>'p-grey','review'=>'p-yellow'][$s] ?? 'p-grey';
 $lunchLabel = fn($s) => ['ok'=>'Completed','leave'=>'Leave','review'=>'Requires Review'][$s] ?? ucfirst($s);
@@ -197,7 +206,55 @@ $lunchLabel = fn($s) => ['ok'=>'Completed','leave'=>'Leave','review'=>'Requires 
 </div>
 <?php if($tReview>0): ?><div class="flash" style="background:var(--amber-bg,#fef3c7);color:var(--amber)">⚠ <b><?= $tReview ?></b> entr<?= $tReview>1?'ies':'y' ?> this month exceed the daily allowance and need review.</div><?php endif; ?>
 
+<style>
+.cal-tbl{border-collapse:separate;border-spacing:2px}
+.cal-tbl th,.cal-tbl td{padding:0;text-align:center;font-size:10.5px}
+.cal-tbl th{font-weight:800;color:var(--muted);padding:2px 0;min-width:24px}
+.cal-tbl td.cal-name{text-align:left;padding:2px 10px 2px 2px;font-weight:700;white-space:nowrap;position:sticky;left:0;background:var(--surface);z-index:1}
+.cal-today{background:rgba(99,102,241,.12);border-radius:4px}
+.cal-cell a{display:block;text-decoration:none;border-radius:4px;padding:4px 0;font-weight:800;min-width:22px}
+.cal-ok a{background:var(--green-bg);color:var(--green)}
+.cal-noorder a{background:var(--surface-2);color:var(--muted)}
+.cal-review a{background:var(--amber-bg,#fef3c7);color:var(--amber)}
+.cal-leave a{background:var(--surface-2);color:var(--muted-2)}
+.cal-blank a{color:var(--muted-2);opacity:.35}
+</style>
 <div class="panel" style="margin-top:16px">
+  <div class="panel-head"><h2>🗓 Monthly Calendar — <?= e(bs_ym_label($m)) ?></h2>
+    <span class="muted" style="font-size:12px">every staff member, every day — click a cell to fix that date</span></div>
+  <div class="table-wrap" style="overflow-x:auto">
+    <table class="cal-tbl"><thead><tr>
+      <th class="cal-name">Employee</th>
+      <?php foreach($calDays as $cd): $isToday=$cd['ad']===$calToday; ?>
+        <th class="<?= $isToday?'cal-today':'' ?>" title="<?= e(date('d M Y',strtotime($cd['ad']))) ?>"><?= np_digits($cd['bs']) ?></th>
+      <?php endforeach; ?>
+    </tr></thead><tbody>
+    <?php foreach($scopeEmps as $e): $eid=(int)$e['id']; ?>
+      <tr>
+        <td class="cal-name"><?= e($e['name']) ?></td>
+        <?php foreach($calDays as $cd):
+          $row = $calMap[$eid][$cd['ad']] ?? null; $isToday=$cd['ad']===$calToday;
+          if (!$row) { $cls='cal-blank'; $txt='·'; $title='Not logged — click to add'; }
+          else {
+            $c = lunch_day_calc($e['lunch_rate'],$row['attendance'],(int)$row['lunch_ordered'],$row['order_amount']);
+            if ($row['attendance']!=='present') { $cls='cal-leave'; $txt='L'; $title='Leave'; }
+            elseif (!$row['lunch_ordered']) { $cls='cal-noorder'; $txt='P'; $title='Present · lunch not ordered'; }
+            elseif ($c['status']==='review') { $cls='cal-review'; $txt='P'; $title='Present · lunch '.money($row['order_amount']).' — over allowance, needs review'; }
+            else { $cls='cal-ok'; $txt='P'; $title='Present · lunch '.money($row['order_amount']); }
+          }
+        ?>
+          <td class="cal-cell <?= $cls ?><?= $isToday?' cal-today':'' ?>">
+            <a href="?m=<?= e($m) ?>&d=<?= e($cd['ad']) ?>&emp=<?= $empFilter ?>#quickDaily" title="<?= e(date('d M Y',strtotime($cd['ad']))).' — '.e($title) ?>"><?= $txt ?></a>
+          </td>
+        <?php endforeach; ?>
+      </tr>
+    <?php endforeach; if(!$scopeEmps): ?><tr><td colspan="<?= count($calDays)+1 ?>"><div class="empty">No staff yet.</div></td></tr><?php endif; ?>
+    </tbody></table>
+  </div>
+  <p class="muted" style="font-size:11px;margin-top:8px"><span class="cal-cell cal-ok" style="display:inline-block;width:18px"><a style="pointer-events:none">P</a></span> present + lunch ordered &nbsp; <span class="cal-cell cal-noorder" style="display:inline-block;width:18px"><a style="pointer-events:none">P</a></span> present, no lunch &nbsp; <span class="cal-cell cal-review" style="display:inline-block;width:18px"><a style="pointer-events:none">P</a></span> over allowance, needs review &nbsp; <span class="cal-cell cal-leave" style="display:inline-block;width:18px"><a style="pointer-events:none">L</a></span> leave &nbsp; <b>·</b> nothing logged yet</p>
+</div>
+
+<div class="panel" style="margin-top:16px" id="quickDaily">
   <div class="panel-head"><h2>📋 Quick Daily Entry — <?= e(dual_date($d)) ?></h2>
     <span class="muted" style="font-size:12px">mark everyone at once instead of one by one — edit only the rows that differ, then Save All</span></div>
   <form method="post">

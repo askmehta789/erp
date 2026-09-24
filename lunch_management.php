@@ -112,9 +112,22 @@ $empName = []; foreach ($allEmps as $ae) $empName[(int)$ae['id']] = $ae['name'];
 $lunchAgg = lunch_monthly_agg($mStart, $mEnd, $empFilter);
 
 /* daily entries for the selected month (all staff, or one when filtered) */
-$entries = rows("SELECT lo.*, e.name, e.lunch_rate FROM lunch_orders lo JOIN employees e ON e.id=lo.employee_id
+$monthEntries = rows("SELECT lo.*, e.name, e.lunch_rate FROM lunch_orders lo JOIN employees e ON e.id=lo.employee_id
                  WHERE lo.order_date BETWEEN ? AND ?".($empFilter?" AND lo.employee_id=".$empFilter:"")."
                  ORDER BY lo.order_date DESC, e.name",[$mStart,$mEnd]);
+
+/* Daily Lunch Entries table: only the latest 10 show at once, rest on next page */
+$dpPer = 10;
+$dpCount = count($monthEntries);
+$dpPages = max(1, (int)ceil($dpCount / $dpPer));
+$dpPage = max(1, (int)($_GET['dp'] ?? 1));
+if ($dpPage > $dpPages) $dpPage = $dpPages;
+$dpOffset = ($dpPage-1) * $dpPer;
+$entries = array_slice($monthEntries, $dpOffset, $dpPer);
+function lm_dp_url($page,$m,$empFilter,$d) {
+  $q = array_filter(['m'=>$m,'emp'=>$empFilter?:null,'d'=>$d,'dp'=>$page], fn($v)=>$v!==null && $v!=='');
+  return '?'.http_build_query($q);
+}
 
 /* full rows already logged for the selected logging date — powers both the
    bulk "quick daily entry" prefill and the pending-count stat */
@@ -146,7 +159,7 @@ foreach ($scopeEmps as $e) {
 /* duplicate-detection map for the Add/Edit modal, scoped to the currently loaded month
    (the server always re-checks fresh against the DB regardless, on save) */
 $dupMap=[];
-foreach ($entries as $en) $dupMap[$en['employee_id'].'_'.$en['order_date']] = [
+foreach ($monthEntries as $en) $dupMap[$en['employee_id'].'_'.$en['order_date']] = [
   'id'=>(int)$en['id'],'employee_id'=>(int)$en['employee_id'],'order_date'=>$en['order_date'],
   'attendance'=>$en['attendance'],'lunch_ordered'=>(int)$en['lunch_ordered'],'order_amount'=>(float)$en['order_amount'],'note'=>$en['note'],
 ];
@@ -238,7 +251,7 @@ $lunchLabel = fn($s) => ['ok'=>'Completed','leave'=>'Leave','review'=>'Requires 
 
 <div class="panel" style="margin-top:16px">
   <div class="panel-head"><h2>🧾 Daily Lunch Entries — <?= e(bs_ym_label($m)) ?></h2>
-    <div style="display:flex;gap:8px"><button type="button" class="btn btn-sm" onclick="lmExportCsv('dailyTbl','daily-lunch-<?= e($m) ?>.csv')">⬇ Export CSV</button><button type="button" class="btn btn-sm" onclick="window.print()">🖨 Print</button></div>
+    <div style="display:flex;gap:8px"><button type="button" class="btn btn-sm" onclick="lmExportDailyCsv('daily-lunch-<?= e($m) ?>.csv')">⬇ Export CSV</button><button type="button" class="btn btn-sm" onclick="window.print()">🖨 Print</button></div>
   </div>
   <div class="table-wrap"><table class="tbl led-tbl" id="dailyTbl"><thead><tr>
     <th>Date (AD · BS)</th><th>Employee</th><th>Attendance</th><th>Lunch Ordered</th><th class="right">Allowance</th><th class="right">Actual Lunch</th><th class="right">Salary Adjustment</th><th>Status</th><th>Remarks</th><th></th>
@@ -261,6 +274,18 @@ $lunchLabel = fn($s) => ['ok'=>'Completed','leave'=>'Leave','review'=>'Requires 
     </tr>
   <?php endforeach; if(!$entries) echo '<tr><td colspan="10"><div class="empty">No lunch entries logged this month yet.</div></td></tr>'; ?>
   </tbody></table></div>
+  <?php if($dpCount>0): $dpShowFrom=$dpOffset+1; $dpShowTo=min($dpCount,$dpOffset+$dpPer); ?>
+  <div class="pager">
+    <span class="pg-info muted">Showing <?= $dpShowFrom ?>–<?= $dpShowTo ?> of <?= $dpCount ?></span>
+    <span class="pg-btns">
+      <a class="btn btn-sm" href="<?= e(lm_dp_url(1,$m,$empFilter,$d)) ?>" <?= $dpPage<=1?'style="pointer-events:none;opacity:.4"':'' ?>>« First</a>
+      <a class="btn btn-sm" href="<?= e(lm_dp_url(max(1,$dpPage-1),$m,$empFilter,$d)) ?>" <?= $dpPage<=1?'style="pointer-events:none;opacity:.4"':'' ?>>‹ Prev</a>
+      <span class="muted" style="padding:0 8px">Page <?= $dpPage ?> / <?= $dpPages ?></span>
+      <a class="btn btn-sm" href="<?= e(lm_dp_url(min($dpPages,$dpPage+1),$m,$empFilter,$d)) ?>" <?= $dpPage>=$dpPages?'style="pointer-events:none;opacity:.4"':'' ?>>Next ›</a>
+      <a class="btn btn-sm" href="<?= e(lm_dp_url($dpPages,$m,$empFilter,$d)) ?>" <?= $dpPage>=$dpPages?'style="pointer-events:none;opacity:.4"':'' ?>>Last »</a>
+    </span>
+  </div>
+  <?php endif; ?>
 </div>
 
 <div class="panel" style="margin-top:16px">
@@ -444,6 +469,31 @@ function lmExportCsv(tableId,filename){
     var cells=Array.prototype.map.call(tr.children,function(td){ var t=(td.textContent||'').trim().replace(/"/g,'""'); return '"'+t+'"'; });
     rows.push(cells.join(','));
   });
+  var blob=new Blob([rows.join('\n')],{type:'text/csv'});
+  var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=filename; a.click();
+}
+/* Daily Lunch Entries is paginated (10/page) on screen, but Export CSV should
+   still cover the whole month — so this exports server-rendered data for
+   every entry, not just whatever page happens to be visible. */
+var DAILY_CSV=<?php
+  $csvRows=[['Date (AD)','Date (BS)','Employee','Attendance','Lunch Ordered','Allowance','Actual Lunch','Salary Adjustment','Status','Remarks']];
+  foreach ($monthEntries as $en) {
+    $c=lunch_day_calc($en['lunch_rate'],$en['attendance'],(int)$en['lunch_ordered'],$en['order_amount']);
+    $csvRows[]=[
+      date('d M Y',strtotime($en['order_date'])),
+      bs_pretty($en['order_date'],false),
+      $en['name'] ?: ('#'.$en['employee_id']),
+      $en['attendance']==='present'?'Present':'Leave',
+      ((int)$en['lunch_ordered'] && $en['attendance']==='present')?'Yes':'No',
+      $c['allowance'], $c['actual'], $c['adjustment'],
+      $lunchLabel($c['status']),
+      $en['note'] ?: '',
+    ];
+  }
+  echo json_encode($csvRows);
+?>;
+function lmExportDailyCsv(filename){
+  var rows=DAILY_CSV.map(function(r){ return r.map(function(v){ var t=String(v).replace(/"/g,'""'); return '"'+t+'"'; }).join(','); });
   var blob=new Blob([rows.join('\n')],{type:'text/csv'});
   var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=filename; a.click();
 }

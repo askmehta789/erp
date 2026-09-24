@@ -45,12 +45,17 @@ $vendorsWithData = rows("SELECT s.id, s.name, COUNT(*) n FROM suppliers s
 $vid = (int)($_GET['vendor'] ?? ($vendorsWithData[0]['id'] ?? 0));
 $vendor = $vid ? row("SELECT * FROM suppliers WHERE id=?",[$vid]) : null;
 
+/* optional month filter (?pmonth=YYYY-MM) — narrows the totals/history below
+   to spend in that one calendar month for the selected vendor */
+$pmonth = preg_match('/^\d{4}-\d{2}$/', $_GET['pmonth'] ?? '') ? $_GET['pmonth'] : '';
+
 $batches=[]; $byProduct=[]; $totQty=0; $totAmt=0;
 if ($vendor) {
   $batches = rows("SELECT b.*, p.name AS product_name FROM stock_batches b
     LEFT JOIN products p ON p.id=b.product_id
     WHERE b.supplier_id=? ORDER BY b.purchase_date DESC, b.id DESC",[$vid]);
   $batches = array_values(array_filter($batches, fn($b)=>is_real_purchase_batch($b['note'])));
+  if ($pmonth !== '') $batches = array_values(array_filter($batches, fn($b)=>substr($b['purchase_date'],0,7)===$pmonth));
   foreach($batches as $b){
     $qty=(int)$b['qty_in']; $amt=$qty*(float)$b['unit_cost'];
     $totQty+=$qty; $totAmt+=$amt;
@@ -111,7 +116,7 @@ require __DIR__.'/includes/header.php';
   <p>Every product, every quantity, purchased from one supplier</p>
   <?php if($vendorsWithData || $unlinkedCount>0): ?>
   <div class="vp-picker">
-    <?php foreach($vendorsWithData as $v): ?><a href="?vendor=<?= (int)$v['id'] ?>" class="<?= ($view==='vendor'&&$vid===(int)$v['id'])?'on':'' ?>"><?= e($v['name']) ?></a><?php endforeach; ?>
+    <?php foreach($vendorsWithData as $v): ?><a href="?vendor=<?= (int)$v['id'] ?><?= $pmonth!==''?'&pmonth='.e($pmonth):'' ?>" class="<?= ($view==='vendor'&&$vid===(int)$v['id'])?'on':'' ?>"><?= e($v['name']) ?></a><?php endforeach; ?>
     <?php if($unlinkedCount>0): ?><a href="?view=unlinked" class="<?= $view==='unlinked'?'on':'' ?>" style="background:rgba(217,119,6,.35)">🏷️ Unlinked (<?= $unlinkedCount ?>)</a><?php endif; ?>
   </div>
   <?php endif; ?>
@@ -177,22 +182,33 @@ document.getElementById('assignForm').addEventListener('submit', function(e){
 <div class="vp-empty">Pick a vendor above to see their purchase detail.</div>
 <?php else: ?>
 
+<div class="vp-card" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+  <form method="get" style="display:flex;gap:8px;align-items:center">
+    <input type="hidden" name="vendor" value="<?= (int)$vid ?>">
+    <label style="font-size:12px;font-weight:700;color:#8a93a8">📅 Filter by month</label>
+    <input type="month" name="pmonth" value="<?= e($pmonth) ?>">
+    <button class="btn btn-sm btn-primary">Apply</button>
+    <?php if($pmonth!==''): ?><a class="btn btn-sm" href="?vendor=<?= (int)$vid ?>">✕ Clear</a><?php endif; ?>
+  </form>
+  <?php if($pmonth!==''): ?><span class="muted" style="font-size:12px">Showing <b><?= e(date('F Y',strtotime($pmonth.'-01'))) ?></b> only</span><?php endif; ?>
+</div>
+
 <div class="vp-stats">
-  <div class="vp-stat b"><b><?= number_format($totQty) ?></b><span>Total Pcs Purchased</span></div>
-  <div class="vp-stat g"><b><?= money($totAmt) ?></b><span>Total Spent</span></div>
+  <div class="vp-stat b"><b><?= number_format($totQty) ?></b><span>Pcs Purchased<?= $pmonth!==''?' · '.e(date('M Y',strtotime($pmonth.'-01'))):'' ?></span></div>
+  <div class="vp-stat g"><b><?= money($totAmt) ?></b><span>Total Spent<?= $pmonth!==''?' · '.e(date('M Y',strtotime($pmonth.'-01'))):'' ?></span></div>
   <div class="vp-stat t"><b><?= money($avgRate) ?></b><span>Avg Rate / Pc</span></div>
   <div class="vp-stat p"><b><?= count($batches) ?></b><span>Purchase Batches</span></div>
 </div>
 
 <div class="vp-card">
-  <h3>📦 Quantity by Product — from <?= e($vendor['name']) ?></h3>
+  <h3>📦 Quantity by Product — from <?= e($vendor['name']) ?><?= $pmonth!==''?' ('.e(date('M Y',strtotime($pmonth.'-01'))).')':'' ?></h3>
   <?php foreach($byProduct as $pn=>$pv): $pct=max(4,round($pv['qty']/$maxProdQty*100)); ?>
   <div class="vp-prow"><span class="nm" title="<?= e($pn) ?>"><?= e($pn) ?></span><div class="vp-pbar-bg"><div class="vp-pbar" style="width:<?= $pct ?>%"></div></div><span class="amt"><?= number_format($pv['qty']) ?> pcs · <?= money($pv['amt']) ?></span></div>
-  <?php endforeach; if(!$byProduct): ?><div class="vp-empty">No purchases recorded yet.</div><?php endif; ?>
+  <?php endforeach; if(!$byProduct): ?><div class="vp-empty"><?= $pmonth!==''?'No purchases from this vendor in '.e(date('F Y',strtotime($pmonth.'-01'))).'.':'No purchases recorded yet.' ?></div><?php endif; ?>
 </div>
 
 <div class="vp-card">
-  <h3>🧾 Purchase History — from <?= e($vendor['name']) ?></h3>
+  <h3>🧾 Purchase History — from <?= e($vendor['name']) ?><?= $pmonth!==''?' ('.e(date('M Y',strtotime($pmonth.'-01'))).')':'' ?></h3>
   <div class="table-wrap"><table class="tbl num-tbl">
     <thead><tr><th>Date</th><th style="text-align:left">Product</th><th class="right">Qty</th><th class="right">Rate</th><th class="right">Total</th><th style="text-align:left">Note</th></tr></thead>
     <tbody>
@@ -205,7 +221,7 @@ document.getElementById('assignForm').addEventListener('submit', function(e){
       <td class="right" style="font-weight:800"><?= money((int)$b['qty_in']*(float)$b['unit_cost']) ?></td>
       <td style="text-align:left" class="muted"><?= e($b['note']) ?></td>
     </tr>
-    <?php endforeach; if(!$batches): ?><tr><td colspan="6"><div class="vp-empty">No purchases recorded yet.</div></td></tr><?php endif; ?>
+    <?php endforeach; if(!$batches): ?><tr><td colspan="6"><div class="vp-empty"><?= $pmonth!==''?'No purchases from this vendor in '.e(date('F Y',strtotime($pmonth.'-01'))).'.':'No purchases recorded yet.' ?></div></td></tr><?php endif; ?>
     </tbody>
   </table></div>
 </div>

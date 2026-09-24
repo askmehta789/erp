@@ -1600,9 +1600,10 @@ function doDelete(){
 /* search */
 document.getElementById('sheetSearch').oninput=function(){
   var q=this.value.toLowerCase().trim();
-  if(!q){hot.loadData(DATA);document.getElementById('rowCount').textContent=DATA.length+' rows';var _r2=document.getElementById('rowCount2');if(_r2)_r2.textContent=DATA.length;return;}
+  if(!q){VIEW=DATA;hot.loadData(VIEW);document.getElementById('rowCount').textContent=DATA.length+' rows';var _r2=document.getElementById('rowCount2');if(_r2)_r2.textContent=DATA.length;return;}
   var f=DATA.filter(function(r){return ['code','customer','phone','address','product_name','sales_person_name','status','courier_name','remarks'].some(function(k){return(r[k]||'').toLowerCase().indexOf(q)>-1;});});
-  hot.loadData(f);
+  VIEW=f;
+  hot.loadData(VIEW);
   document.getElementById('rowCount').textContent=f.length+' of '+DATA.length+' rows';var _r3=document.getElementById('rowCount2');if(_r3)_r3.textContent=f.length;
 };
 /* arrived here from a link like search.php's "Open Sales →" carrying ?q= — apply that

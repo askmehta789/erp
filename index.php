@@ -69,8 +69,10 @@ $returnProc  = $returned;
 $returnRate  = $total? round(($returned)/$total*100,1):0;
 $cancelRate  = $total? round(($cancelled)/$total*100,1):0;
 $combinedRate = $total? round(($returned+$cancelled)/$total*100,1):0;
-$expenses    = (float)val("SELECT COALESCE(SUM(amount),0) FROM expenses");
-$expenseByCat = rows("SELECT category, COALESCE(SUM(amount),0) AS total FROM expenses GROUP BY category ORDER BY total DESC");
+$expWhere    = $rangeCut!==null ? "WHERE expense_date>=?" : "";
+$expParams   = $rangeCut!==null ? [$rangeCut] : [];
+$expenses    = (float)val("SELECT COALESCE(SUM(amount),0) FROM expenses $expWhere", $expParams);
+$expenseByCat = rows("SELECT category, COALESCE(SUM(amount),0) AS total FROM expenses $expWhere GROUP BY category ORDER BY total DESC", $expParams);
 $net         = $profit - $expenses;
 /* stock summary for dashboard */
 $prodRows    = rows("SELECT stock, low_stock, cost FROM products");

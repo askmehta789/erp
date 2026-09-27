@@ -443,12 +443,20 @@ if (ncm()->configured()) {
 $branchNames=[]; foreach($branches as $b){ if(!empty($b['name'])) $branchNames[]=$b['name']; }
 sort($branchNames);
 
-/* ---- our NCM orders ---- */
+/* ---- our NCM orders ----
+   Only ACTIVE orders (not yet delivered/cancelled/returned) are polled live and rendered in the
+   working table below. A finalized order never changes again, so re-fetching + re-checking every
+   order ever booked (thousands, over time) on every single page load is what made this page slow
+   to open. All-time dashboard totals come from cheap indexed COUNTs just below instead. */
 $ncmOrders = rows("SELECT o.*, p.name AS product_name, c.name AS courier_name
                    FROM orders o LEFT JOIN products p ON p.id=o.product_id LEFT JOIN couriers c ON c.id=o.courier_id
-                   WHERE c.name LIKE '%NCM%' ORDER BY o.id DESC");
+                   WHERE c.name LIKE '%NCM%' AND o.status NOT IN ('delivered','cancelled','returned')
+                   ORDER BY o.id DESC");
+$mTotalAll     = (int)val("SELECT COUNT(*) FROM orders o JOIN couriers c ON c.id=o.courier_id WHERE c.name LIKE '%NCM%'");
+$mDeliveredAll = (int)val("SELECT COUNT(*) FROM orders o JOIN couriers c ON c.id=o.courier_id WHERE c.name LIKE '%NCM%' AND o.status='delivered'");
+$mReturnedAll  = (int)val("SELECT COUNT(*) FROM orders o JOIN couriers c ON c.id=o.courier_id WHERE c.name LIKE '%NCM%' AND o.status IN ('returned','cancelled')");
 
-/* live statuses */
+/* live statuses (active orders only) */
 $liveStatus=[];
 $bookedIds=array_values(array_filter(array_map(fn($o)=>$o['ncm_order_id']??null,$ncmOrders)));
 if ($connected && $bookedIds) {
@@ -599,6 +607,9 @@ foreach($ncmOrders as $o){
 
   $rows[]=compact('o','nid','status','sl','final','inDelivery','pickupPhase','age','cmt','noResp','aging','atRisk','rstage','retFlag');
 }
+/* mDelivered/mReturned/mTotal above only reflect the active-orders loop; a finalized order was
+   never in that loop at all, so the real all-time picture comes from the indexed COUNTs instead. */
+$mTotal=$mTotalAll; $mDelivered=$mDeliveredAll; $mReturned=$mReturnedAll;
 $returnRate = $mTotal? round($mReturned/$mTotal*100,1):0;
 /* COD still to collect = value of NCM orders not yet delivered/cancelled/returned that are COD */
 $mCodPending=0;
@@ -734,42 +745,45 @@ $ncmUnits=(int)val("SELECT COALESCE(SUM(o.qty),0) FROM orders o JOIN couriers c 
 <!-- all NCM orders -->
 <?php
   /* ---- collapse multi-product orders into ONE parcel line (same order_group) ---- */
-  $grouped=[]; $seenGroup=[];
-  foreach($rows as $r){
-    $g = (is_array($r['o']) && array_key_exists('order_group',$r['o'])) ? trim((string)$r['o']['order_group']) : '';
-    if($g===''){ $grouped[]=$r; continue; }
-    if(isset($seenGroup[$g])){                       /* fold into the parcel's head row */
-      $gi=$seenGroup[$g];
-      $grouped[$gi]['_items'][]=$r['o'];
-      /* sum COD across the parcel (prepaid rows add 0) */
-      if(strtolower((string)$r['o']['payment_type'])==='cod')
-        $grouped[$gi]['_codsum'] += (float)$r['o']['sell_price']*(int)$r['o']['qty'];
-      /* if the current head has no NCM id but this sibling does, adopt it (one parcel, one id) */
-      if(($grouped[$gi]['nid']??'')==='' && ($r['nid']??'')!==''){
-        $grouped[$gi]['nid']=$r['nid'];
-        $grouped[$gi]['status']=$r['status'];
-        $grouped[$gi]['o']['ncm_order_id']=$r['o']['ncm_order_id'];
+  function ncm_group_rows($rows){
+    $grouped=[]; $seenGroup=[];
+    foreach($rows as $r){
+      $g = (is_array($r['o']) && array_key_exists('order_group',$r['o'])) ? trim((string)$r['o']['order_group']) : '';
+      if($g===''){ $grouped[]=$r; continue; }
+      if(isset($seenGroup[$g])){                       /* fold into the parcel's head row */
+        $gi=$seenGroup[$g];
+        $grouped[$gi]['_items'][]=$r['o'];
+        /* sum COD across the parcel (prepaid rows add 0) */
+        if(strtolower((string)$r['o']['payment_type'])==='cod')
+          $grouped[$gi]['_codsum'] += (float)$r['o']['sell_price']*(int)$r['o']['qty'];
+        /* if the current head has no NCM id but this sibling does, adopt it (one parcel, one id) */
+        if(($grouped[$gi]['nid']??'')==='' && ($r['nid']??'')!==''){
+          $grouped[$gi]['nid']=$r['nid'];
+          $grouped[$gi]['status']=$r['status'];
+          $grouped[$gi]['o']['ncm_order_id']=$r['o']['ncm_order_id'];
+        }
+        /* keep the LOWEST-id order as the parcel head (its code = booking vref, matches Sales) */
+        if((int)$r['o']['id'] < (int)$grouped[$gi]['o']['id']){
+          $keepItems=$grouped[$gi]['_items']; $keepCod=$grouped[$gi]['_codsum'];
+          $keepNid=$grouped[$gi]['nid']??''; $keepSt=$grouped[$gi]['status']??'';
+          $r['_group']=$g; $r['_items']=$keepItems; $r['_codsum']=$keepCod;
+          if(($r['nid']??'')==='' && $keepNid!==''){ $r['nid']=$keepNid; $r['status']=$keepSt; $r['o']['ncm_order_id']=$keepNid; }
+          $grouped[$gi]=$r;
+        }
+        continue;
       }
-      /* keep the LOWEST-id order as the parcel head (its code = booking vref, matches Sales) */
-      if((int)$r['o']['id'] < (int)$grouped[$gi]['o']['id']){
-        $keepItems=$grouped[$gi]['_items']; $keepCod=$grouped[$gi]['_codsum'];
-        $keepNid=$grouped[$gi]['nid']??''; $keepSt=$grouped[$gi]['status']??'';
-        $r['_group']=$g; $r['_items']=$keepItems; $r['_codsum']=$keepCod;
-        if(($r['nid']??'')==='' && $keepNid!==''){ $r['nid']=$keepNid; $r['status']=$keepSt; $r['o']['ncm_order_id']=$keepNid; }
-        $grouped[$gi]=$r;
-      }
-      continue;
+      /* first row of this group becomes the parcel line */
+      $r['_group']=$g;
+      $r['_items']=[$r['o']];
+      $r['_codsum']=(strtolower((string)$r['o']['payment_type'])==='cod' ? (float)$r['o']['sell_price']*(int)$r['o']['qty'] : 0);
+      $grouped[]=$r;
+      $seenGroup[$g]=count($grouped)-1;
     }
-    /* first row of this group becomes the parcel line */
-    $r['_group']=$g;
-    $r['_items']=[$r['o']];
-    $r['_codsum']=(strtolower((string)$r['o']['payment_type'])==='cod' ? (float)$r['o']['sell_price']*(int)$r['o']['qty'] : 0);
-    $grouped[]=$r;
-    $seenGroup[$g]=count($grouped)-1;
+    return $grouped;
   }
-  $rows=$grouped;   /* downstream (filter, tabs, table) now sees one row per parcel */
+  $rows=ncm_group_rows($rows);   /* the active/actionable set — downstream tab counts always read this */
 
-  $filtered = array_values(array_filter($rows, function($r) use($f){
+  $filterFn = function($r,$f){
     switch($f){
       case 'aging':     return $r['aging'];
       case 'risk':      return $r['atRisk'];
@@ -781,16 +795,29 @@ $ncmUnits=(int)val("SELECT COALESCE(SUM(o.qty),0) FROM orders o JOIN couriers c 
       case 'retcheck':  return $r['retFlag'];
       default:          return true;
     }
-  }));
+  };
   $tabs=['all'=>'All','pickup'=>'Pending Pickup','transit'=>'In Transit','delivered'=>'Delivered','cod'=>'COD to Collect','aging'=>'Aging','risk'=>'At Risk','retcheck'=>'↩ Return? (confirm)','returned'=>'↩ Returned to Vendor'];
-  $tabCount=function($k) use($rows){ return count(array_filter($rows,function($r) use($k){switch($k){
-    case 'aging':return $r['aging']; case 'risk':return $r['atRisk']; case 'transit':return $r['inDelivery'];
-    case 'pickup':return !$r['final'] && !$r['inDelivery'] && $r['pickupPhase'];
-    case 'cod':return !$r['final'] && strtolower((string)$r['o']['payment_type'])==='cod';
-    case 'delivered':return ($r['o']['status']??'')!=='returned' && !$r['retFlag'] && strpos(strtolower($r['status']),'deliver')!==false && strpos(strtolower($r['status']),'sent')===false;
-    case 'returned':return ($r['o']['status']??'')==='returned' || $r['rstage']==='final'||strpos(strtolower($r['status']),'cancel')!==false;
-    case 'retcheck':return $r['retFlag'];
-    default:return true;}})); };
+  $tabCount=function($k) use($rows,$filterFn){ return count(array_filter($rows,fn($r)=>$filterFn($r,$k))); };
+
+  /* Delivered / Returned are historical, closed-book tabs — thousands of rows over time, so instead
+     of keeping them (and every order ever finalized) in the always-live $rows above, fetch just the
+     most recent 300 on demand, only when that tab is actually opened. */
+  if (in_array($f, ['delivered','returned'], true)) {
+    $histWhere = $f==='delivered' ? "o.status='delivered'" : "o.status IN ('returned','cancelled')";
+    $histOrders = rows("SELECT o.*, p.name AS product_name, c.name AS courier_name
+                         FROM orders o LEFT JOIN products p ON p.id=o.product_id LEFT JOIN couriers c ON c.id=o.courier_id
+                         WHERE c.name LIKE '%NCM%' AND $histWhere ORDER BY o.id DESC LIMIT 300");
+    $histRows = array_map(function($o) use ($today){
+      $status = ($o['status']??'')==='returned' ? 'Returned to Vendor' : ucfirst((string)$o['status']);
+      $age = $o['order_date'] ? (int)$today->diff(new DateTime($o['order_date']))->days : 0;
+      return ['o'=>$o,'nid'=>(string)($o['ncm_order_id']??''),'status'=>$status,'sl'=>strtolower($status),
+              'final'=>true,'inDelivery'=>false,'pickupPhase'=>false,'age'=>$age,'cmt'=>null,'noResp'=>false,
+              'aging'=>false,'atRisk'=>false,'rstage'=>'final','retFlag'=>false];
+    }, $histOrders);
+    $filtered = ncm_group_rows($histRows);
+  } else {
+    $filtered = array_values(array_filter($rows, fn($r)=>$filterFn($r,$f)));
+  }
 ?>
 <div class="panel" style="margin-top:20px" id="orders">
   <div class="panel-head" style="flex-wrap:wrap;gap:10px"><h2>📦 All NCM Orders <?= $f!=="all"?"<span class=\"pill p-blue\" style=\"font-size:10px\">".e($tabs[$f]??$f)." filter</span>":"" ?></h2>
@@ -803,7 +830,7 @@ $ncmUnits=(int)val("SELECT COALESCE(SUM(o.qty),0) FROM orders o JOIN couriers c 
     </div>
   </div>
   <div class="ncm-tabs">
-    <?php foreach($tabs as $k=>$lbl): $c=$tabCount($k); ?>
+    <?php foreach($tabs as $k=>$lbl): $c = $k==='delivered' ? $mDeliveredAll : ($k==='returned' ? $mReturnedAll : $tabCount($k)); ?>
       <a class="ntab <?= $f===$k?'on':'' ?>" href="<?= $tHref($k) ?>"><?= e($lbl) ?> <span class="ntab-n"><?= $c ?></span></a>
     <?php endforeach; ?>
   </div>
@@ -1187,7 +1214,7 @@ function autoGrow(el){ el.style.height='auto'; el.style.height=Math.min(el.scrol
     ta.addEventListener('keydown',function(e){ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); if(ta.value.trim()) ta.form.submit(); } });
   }
 })();
-var NCM_ROWS=<?= json_encode(array_map(function($r){$o=$r['o'];return ['code'=>$o['code'],'customer'=>$o['customer'],'phone'=>$o['phone'],'cod'=>$o['sell_price']*$o['qty'],'age'=>$r['age'],'nid'=>$r['nid'],'status'=>$r['status']];}, $rows)) ?>;
+var NCM_ROWS=<?= json_encode(array_map(function($r){$o=$r['o'];return ['code'=>$o['code'],'customer'=>$o['customer'],'phone'=>$o['phone'],'cod'=>$o['sell_price']*$o['qty'],'age'=>$r['age'],'nid'=>$r['nid'],'status'=>$r['status']];}, $filtered)) ?>;
 var BRANCHES=<?= json_encode($branchNames) ?>;
 var NCM_LASTCOMMENT=<?= json_encode(array_map(fn($c)=>$c['text'], $commentByOrder)) ?>;
 var NCM_INFO=<?= json_encode(array_reduce($ncmOrders, function($acc,$o){ $nid=(string)($o['ncm_order_id']??''); if($nid!=='') $acc[$nid]="Order {$o['code']}, customer {$o['customer']}, phone {$o['phone']}, address {$o['address']}, status {$o['status']}"; return $acc; }, [])) ?>;

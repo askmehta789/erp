@@ -18,6 +18,9 @@ require_once __DIR__.'/functions.php';
 class NCM {
   private string $base;
   private string $key;
+  /** @var resource|\CurlHandle|null persistent handle — reused across calls in this request so
+      repeated requests to NCM keep the same TCP/TLS connection instead of re-handshaking each time */
+  private $ch = null;
 
   public function __construct() {
     $this->key  = trim((string)setting('ncm_api_key',''));
@@ -28,41 +31,12 @@ class NCM {
 
   public function configured(): bool { return $this->key !== ''; }
 
-  private function call(string $method, string $path, array $query = [], ?array $json = null) {
-    if (!$this->configured()) throw new Exception('NCM API key not set. Add it in Settings → Courier / NCM API.');
-    $url = $this->base . $path;
-    if ($query) $url .= '?' . http_build_query($query);
-    $headers = [
-      'Authorization: Token ' . $this->key,
-      'Accept: application/json',
-      'Content-Type: application/json',
-    ];
+  private function headers(): array {
+    return ['Authorization: Token ' . $this->key, 'Accept: application/json', 'Content-Type: application/json'];
+  }
 
-    if (function_exists('curl_init')) {
-      $ch = curl_init($url);
-      curl_setopt_array($ch, [
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_CUSTOMREQUEST  => $method,
-        CURLOPT_HTTPHEADER     => $headers,
-        CURLOPT_TIMEOUT        => 30,
-        CURLOPT_SSL_VERIFYPEER => true,
-      ]);
-      if ($json !== null) curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($json));
-      $body = curl_exec($ch);
-      $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
-      $err  = curl_error($ch);
-      curl_close($ch);
-      if ($body === false) throw new Exception('Could not reach NCM: ' . $err);
-    } else {
-      $opts = ['http'=>['method'=>$method,'header'=>implode("\r\n",$headers),'timeout'=>30,'ignore_errors'=>true]];
-      if ($json !== null) $opts['http']['content'] = json_encode($json);
-      $body = @file_get_contents($url, false, stream_context_create($opts));
-      $code = 200;
-      if (isset($http_response_header)) foreach ($http_response_header as $h)
-        if (preg_match('#HTTP/\S+\s+(\d+)#', $h, $m)) $code = (int)$m[1];
-      if ($body === false) throw new Exception('Could not reach NCM (cURL not available on server).');
-    }
-
+  private function decode(string $method, $body, int $code) {
+    if ($body === false) throw new Exception('Could not reach NCM.');
     $data = json_decode($body, true);
     if ($code < 200 || $code > 299) {
       $msg = $body;
@@ -80,8 +54,103 @@ class NCM {
     return $data === null ? [] : $data;
   }
 
+  private function call(string $method, string $path, array $query = [], ?array $json = null) {
+    if (!$this->configured()) throw new Exception('NCM API key not set. Add it in Settings → Courier / NCM API.');
+    $url = $this->base . $path;
+    if ($query) $url .= '?' . http_build_query($query);
+
+    if (function_exists('curl_init')) {
+      if ($this->ch === null) $this->ch = curl_init();   /* created once, reused for every call this request makes */
+      $ch = $this->ch;
+      curl_setopt_array($ch, [
+        CURLOPT_URL            => $url,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_CUSTOMREQUEST  => $method,
+        CURLOPT_HTTPHEADER     => $this->headers(),
+        CURLOPT_TIMEOUT        => 15,
+        CURLOPT_CONNECTTIMEOUT => 6,
+        CURLOPT_SSL_VERIFYPEER => true,
+        CURLOPT_POSTFIELDS     => $json !== null ? json_encode($json) : '',   /* reset on a reused handle so a GET after a POST never resends the old body */
+      ]);
+      $body = curl_exec($ch);
+      $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+      $err  = curl_error($ch);
+      if ($body === false) throw new Exception('Could not reach NCM: ' . $err);
+    } else {
+      $opts = ['http'=>['method'=>$method,'header'=>implode("\r\n",$this->headers()),'timeout'=>15,'ignore_errors'=>true]];
+      if ($json !== null) $opts['http']['content'] = json_encode($json);
+      $body = @file_get_contents($url, false, stream_context_create($opts));
+      $code = 200;
+      if (isset($http_response_header)) foreach ($http_response_header as $h)
+        if (preg_match('#HTTP/\S+\s+(\d+)#', $h, $m)) $code = (int)$m[1];
+      if ($body === false) throw new Exception('Could not reach NCM (cURL not available on server).');
+    }
+    return $this->decode($method, $body, $code);
+  }
+
+  /* Fire several independent GET/POST requests to NCM CONCURRENTLY over one round-trip instead of
+     one after another — e.g. live order statuses + the comments feed, which don't depend on each
+     other but were previously fetched back-to-back, each paying its own full network latency.
+     $requests: ['key' => ['method'=>'GET'|'POST','path'=>'/...','query'=>[],'json'=>[...]]]
+     Returns ['key' => decoded_body_or_['__error'=>true,'message'=>...]]. Never throws — a failed
+     leg just comes back flagged so the caller can fall back to what it already had. */
+  public function multiGet(array $requests): array {
+    if (!$this->configured()) throw new Exception('NCM API key not set. Add it in Settings → Courier / NCM API.');
+    if (!function_exists('curl_multi_init')) {   /* no curl → fall back to sequential calls */
+      $out=[]; foreach ($requests as $key=>$r) {
+        try { $out[$key] = $this->call($r['method'], $r['path'], $r['query'] ?? [], $r['json'] ?? null); }
+        catch (Exception $e) { $out[$key] = ['__error'=>true,'message'=>$e->getMessage()]; }
+      }
+      return $out;
+    }
+    $mh = curl_multi_init();
+    $handles = [];
+    foreach ($requests as $key => $r) {
+      $url = $this->base . $r['path'];
+      if (!empty($r['query'])) $url .= '?' . http_build_query($r['query']);
+      $ch = curl_init($url);
+      curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_CUSTOMREQUEST  => $r['method'],
+        CURLOPT_HTTPHEADER     => $this->headers(),
+        CURLOPT_TIMEOUT        => 15,
+        CURLOPT_CONNECTTIMEOUT => 6,
+        CURLOPT_SSL_VERIFYPEER => true,
+      ]);
+      if (isset($r['json'])) curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($r['json']));
+      curl_multi_add_handle($mh, $ch);
+      $handles[$key] = $ch;
+    }
+    $running = null;
+    do { $st = curl_multi_exec($mh, $running); if ($running) curl_multi_select($mh); } while ($running > 0 && $st === CURLM_OK);
+    $out = [];
+    foreach ($handles as $key => $ch) {
+      $body = curl_multi_getcontent($ch);
+      $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+      try { $out[$key] = $this->decode($requests[$key]['method'], $body, $code); }
+      catch (Exception $e) { $out[$key] = ['__error'=>true,'message'=>$e->getMessage()]; }
+      curl_multi_remove_handle($mh, $ch);
+      curl_close($ch);
+    }
+    curl_multi_close($mh);
+    return $out;
+  }
+
   /* ---- endpoints ---- */
-  public function branches(): array            { return $this->call('GET','/v2/branches'); }
+  public function branches(): array {
+    /* the branch list barely ever changes — refetching it on every single page load was
+       one more full round-trip to NCM for nothing. Cache it and only refresh every few hours. */
+    $c = kv_get('ncm_branches_cache');
+    if ($c && !empty($c['v']) && (time() - strtotime((string)$c['at'])) < 6*3600) return $c['v'];
+    try {
+      $data = $this->call('GET','/v2/branches');
+      kv_set('ncm_branches_cache', $data);
+      return $data;
+    } catch (Exception $e) {
+      if ($c && !empty($c['v'])) return $c['v'];   /* NCM unreachable right now — stale list beats none */
+      throw $e;
+    }
+  }
   public function rate($from,$to,$type)         { return $this->call('GET','/v1/shipping-rate',['creation'=>$from,'destination'=>$to,'type'=>$type]); }
   public function createOrder(array $p): array  { return $this->call('POST','/v1/order/create',[],$p); }
   public function order($id): array             { return $this->call('GET','/v1/order',['id'=>$id]); }

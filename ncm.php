@@ -456,12 +456,21 @@ $mTotalAll     = (int)val("SELECT COUNT(*) FROM orders o JOIN couriers c ON c.id
 $mDeliveredAll = (int)val("SELECT COUNT(*) FROM orders o JOIN couriers c ON c.id=o.courier_id WHERE c.name LIKE '%NCM%' AND o.status='delivered'");
 $mReturnedAll  = (int)val("SELECT COUNT(*) FROM orders o JOIN couriers c ON c.id=o.courier_id WHERE c.name LIKE '%NCM%' AND o.status IN ('returned','cancelled')");
 
-/* live statuses (active orders only) */
-$liveStatus=[];
+/* live statuses + today's comments feed — fetched CONCURRENTLY in one round-trip instead of two
+   sequential ones, each paying its own full network wait on every single page load. */
+$liveStatus=[]; $bulk=[]; $bulkErr='';
 $bookedIds=array_values(array_filter(array_map(fn($o)=>$o['ncm_order_id']??null,$ncmOrders)));
-if ($connected && $bookedIds) {
-  try { $r=ncm()->ordersStatuses(array_map('intval',$bookedIds)); if(isset($r['result'])&&is_array($r['result'])) $liveStatus=$r['result']; }
-  catch (Exception $e) {}
+if ($connected) {
+  $reqs=[];
+  if ($bookedIds) $reqs['statuses']=['method'=>'POST','path'=>'/v1/orders/statuses','json'=>['orders'=>array_map('intval',$bookedIds)]];
+  $reqs['comments']=['method'=>'GET','path'=>'/v1/order/getbulkcomments'];
+  try {
+    $res = ncm()->multiGet($reqs);
+    if (isset($res['statuses']['result']) && is_array($res['statuses']['result'])) $liveStatus = $res['statuses']['result'];
+    $cmtRes = $res['comments'] ?? [];
+    if (!empty($cmtRes['__error'])) $bulkErr = (string)($cmtRes['message'] ?? 'Could not reach NCM.');
+    elseif (is_array($cmtRes) && !isset($cmtRes['detail'])) $bulk = $cmtRes;
+  } catch (Exception $e) { $bulkErr = $e->getMessage(); }
 }
 
 /* ---- auto-sync NCM status → Sales (delivered/returned/etc update the sale) ---- */
@@ -536,23 +545,19 @@ if ($liveStatus) {
 }
 
 
-/* NCM comments feed → map ncm id → latest comment + no-response flag */
-$bulk=[]; $bulkErr=''; $commentByOrder=[]; $todayComments=[]; $today_ymd=date('Y-m-d');
-if ($connected) {
-  try {
-    $bulk = ncm()->bulkComments(); if(isset($bulk['detail'])) $bulk=[];
-    foreach($bulk as $c){ $oid=(string)($c['orderid']??($c['order']??'')); if($oid==='')continue;
-      $txt=$c['comments']??($c['comment']??'');
-      if(!isset($commentByOrder[$oid])) $commentByOrder[$oid]=['text'=>$txt,'time'=>$c['added_time']??($c['addedTime']??''),'flag'=>ncm_no_response($txt)];
-      $tstr=$c['added_time']??($c['addedTime']??''); $ts=strtotime((string)$tstr);
-      if($ts && date('Y-m-d',$ts)===$today_ymd){ $todayComments[]=$c;
-        $by=strtolower((string)($c['addedBy']??''));
-        if(strpos($by,'vendor')===false){ /* a comment from NCM's side awaiting our reply */
-          notify("NCM #$oid: new comment — reply needed", 'comment', 'ncm.php?comments='.$oid, 12);
-        }
-      }
+/* NCM comments feed → map ncm id → latest comment + no-response flag ($bulk was already
+   fetched above, concurrently with the live statuses — no second round-trip needed here) */
+$commentByOrder=[]; $todayComments=[]; $today_ymd=date('Y-m-d');
+foreach($bulk as $c){ $oid=(string)($c['orderid']??($c['order']??'')); if($oid==='')continue;
+  $txt=$c['comments']??($c['comment']??'');
+  if(!isset($commentByOrder[$oid])) $commentByOrder[$oid]=['text'=>$txt,'time'=>$c['added_time']??($c['addedTime']??''),'flag'=>ncm_no_response($txt)];
+  $tstr=$c['added_time']??($c['addedTime']??''); $ts=strtotime((string)$tstr);
+  if($ts && date('Y-m-d',$ts)===$today_ymd){ $todayComments[]=$c;
+    $by=strtolower((string)($c['addedBy']??''));
+    if(strpos($by,'vendor')===false){ /* a comment from NCM's side awaiting our reply */
+      notify("NCM #$oid: new comment — reply needed", 'comment', 'ncm.php?comments='.$oid, 12);
     }
-  } catch (Exception $e) { $bulkErr=$e->getMessage(); }
+  }
 }
 /* full-day scan cache (all of today's comments, beyond the ~25 the bulk feed returns) */
 $cmtScan = kv_get('ncm_today_comments'); $cmtScanInfo='';

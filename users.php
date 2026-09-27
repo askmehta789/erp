@@ -50,18 +50,26 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
   header('Location: users.php'); exit;
 }
 function all_access_pages() {
+  /* keep this in sync with the real sidebar in nav_items() (functions.php) — a page that's
+     live in the menu but missing here can never be granted/blocked for one specific user,
+     it's stuck on its role default for everyone. accounting.php / inventory.php / hrm.php were
+     removed: they're now just redirect stubs into payees.php / products.php / salary.php (already
+     listed below), so toggling them never did anything. */
   return [
     'index.php'=>['🏠','Dashboard','Core'], 'sales.php'=>['🛒','Sales','Core'],
-    'ncm.php'=>['📮','NCM Courier','Delivery'], 'hungryhunter.php'=>['🛵','Hungry Hunter','Delivery'],
+    'sales_dashboard.php'=>['🏆','Sales Team','Core'], 'assistant.php'=>['🤖','AI Assistant','Core'],
+    'ncm.php'=>['📮','NCM Courier','Delivery'], 'ncm_command.php'=>['🚚','NCM Command Center','Delivery'],
+    'hungryhunter.php'=>['🛵','Hungry Hunter','Delivery'],
     'dropex.php'=>['🚴','Dropex','Delivery'],
     'daraz.php'=>['🛍','Daraz','Delivery'], 'couriers.php'=>['🚚','All Couriers','Delivery'],
     'cod.php'=>['💵','COD Ledger','Money'], 'banks.php'=>['🏛','Bank Accounts','Money'], 'payees.php'=>['📣','Ads & Vendors','Money'],
-    'accounting.php'=>['📒','Accounting','Money'], 'analytics.php'=>['📈','Analytics','Money'],
+    'money_dashboard.php'=>['💰','Money Dashboard','Money'], 'analytics.php'=>['📈','Analytics','Money'],
+    'analytics_report.php'=>['📋','Daily & Monthly Report','Money'], 'analytics_returns.php'=>['↩️','Returns & Cancellations','Money'],
+    'analytics_branches.php'=>['🚚','Branch Performance','Money'],
     'expenses.php'=>['💸','Expenses','Money'], 'reports.php'=>['📊','Reports (classic)','Money'],
     'invoice.php'=>['🧾','Invoices','Core'], 'ncm_comments.php'=>['💬','NCM Comment Center','Delivery'],
     'products.php'=>['🏷️','Products','Inventory'], 'vendor_purchases.php'=>['🏭','Vendor Purchases','Inventory'],
-    'inventory.php'=>['📦','Stock Batches','Inventory'],
-    'customers.php'=>['👥','Customer Insights','People'], 'salary.php'=>['💵','Staff & Salary','People'], 'lunch_management.php'=>['🍱','Lunch Management','People'], 'hrm.php'=>['🧑‍💼','HRM','People'],
+    'customers.php'=>['👥','Customer Insights','People'], 'salary.php'=>['💵','Staff & Salary','People'], 'lunch_management.php'=>['🍱','Lunch Management','People'],
     'settings.php'=>['⚙️','Settings','System'], 'activity.php'=>['📜','Activity Logs','System'], 'labels.php'=>['🏷','Labels','System'],
   ];
 }

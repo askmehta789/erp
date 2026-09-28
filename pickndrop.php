@@ -137,6 +137,29 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
       if ($fail) $msg .= '  ·  '.count($fail).' failed: '.implode(' | ',$fail);
       flash($msg);
     }
+    elseif ($act==='link_manual') {
+      $oid=(int)($_POST['order_id'] ?? 0); $pdOid=trim((string)($_POST['pd_id'] ?? '')); $force=!empty($_POST['force']);
+      if(!$oid || $pdOid==='') throw new Exception('Enter the Pick & Drop Order ID.');
+      $o=row("SELECT * FROM orders WHERE id=?",[$oid]);
+      if(!$o) throw new Exception('Order not found.');
+      $dupe=row("SELECT code FROM orders WHERE pd_order_id=? AND id<>?",[$pdOid,$oid]);
+      if($dupe) throw new Exception('Pick & Drop order '.$pdOid.' is already linked to order '.$dupe['code'].'.');
+      $d=pickndrop()->orderDetails($pdOid);
+      if(!$d) throw new Exception('Pick & Drop order '.$pdOid.' was not found.');
+      $pdPhone=pd_extract_phone($d); $pdName=pd_extract_name($d);
+      $ourPhone=pd_norm_phone($o['phone']);
+      if(!$force){
+        if($pdPhone==='') throw new Exception('Pick & Drop order '.$pdOid.' has no readable phone — tick "link anyway" if you are sure.');
+        if($ourPhone==='' || $pdPhone!==$ourPhone)
+          throw new Exception('Phone mismatch: Pick & Drop '.$pdOid.' → '.$pdPhone.($pdName?' ('.$pdName.')':'').', but order '.$o['code'].' → '.($o['phone']?:'none').'. Tick "link anyway" to force.');
+      }
+      $chg = isset($d['delivery_amount']) && is_numeric($d['delivery_amount']) ? (float)$d['delivery_amount'] : null;
+      $rawStatus = (string)($d['status'] ?? 'Open');
+      q("UPDATE orders SET pd_order_id=?, pd_status=?, courier_id=? WHERE id=?",[$pdOid,$rawStatus,$pdId,$oid]);
+      if($chg!==null) q("UPDATE orders SET delivery_charge=? WHERE id=?",[$chg,$oid]);
+      log_activity("Linked Pick & Drop $pdOid to ".$o['code'],'Pick & Drop');
+      flash('Linked ✓ '.$o['code'].' ↔ Pick & Drop '.$pdOid.($pdName?' — '.$pdName:'').($chg!==null?(' · delivery '.money($chg).' recorded'):''));
+    }
     elseif ($act==='cancel_pd') {
       $oid=(int)($_POST['id'] ?? 0);
       $o=row("SELECT * FROM orders WHERE id=?",[$oid]);
@@ -447,8 +470,11 @@ function pdBrFilter(){
             <form method="post" style="display:inline"><input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="sync_one"><input type="hidden" name="id" value="<?= (int)$o['id'] ?>"><input type="hidden" name="m" value="<?= e($m) ?>"><button class="btn btn-sm" title="Sync live status">🔄</button></form>
             <?php if($canCancel): ?><form method="post" style="display:inline" onsubmit="return confirm('Cancel this order with Pick & Drop?')"><input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="cancel_pd"><input type="hidden" name="id" value="<?= (int)$o['id'] ?>"><input type="hidden" name="m" value="<?= e($m) ?>"><button class="btn btn-sm" style="color:var(--red)" title="Cancel with Pick & Drop">✕</button></form><?php endif; ?>
           </div>
-        <?php elseif($pdConfigured && in_array($o['status'],['pending','processing'],true)): ?>
+        <?php elseif($pdConfigured && !in_array($o['status'],['delivered','returned','cancelled'],true)): ?>
+          <?php if(in_array($o['status'],['pending','processing'],true)): ?>
           <button class="btn btn-sm btn-primary" onclick='pdBookFor(<?= json_encode(['id'=>(int)$o['id'],'name'=>$o['customer'],'phone'=>$o['phone'],'address'=>$o['address'],'cod'=>strtolower((string)$o['payment_type'])==='cod'?((float)$o['sell_price']*(int)$o['qty']):0,'package'=>trim(($o['product_name']?:'Goods').' x'.(int)$o['qty']),'ref'=>$o['code']], JSON_HEX_APOS|JSON_HEX_QUOT) ?>)'>🚀 Send</button>
+          <?php endif; ?>
+          <button class="btn btn-sm" title="Already created on the Pick & Drop website/app? Link it here" onclick='pdLinkFor(<?= (int)$o['id'] ?>,<?= json_encode((string)$o['code']) ?>,<?= json_encode((string)$o['phone']) ?>)'>🔗</button>
         <?php else: ?><span class="muted" style="font-size:11px">—</span><?php endif; ?>
       </td>
       <td>
@@ -490,6 +516,31 @@ function pdBrFilter(){
   <div class="modal-foot"><button type="button" class="btn" onclick="pdCloseBook()">Cancel</button><button class="btn btn-primary">🚀 Book on Pick & Drop</button></div>
 </form></div>
 
+<!-- link-existing-order modal -->
+<div class="modal-bg" id="pdLinkModal" style="z-index:99991"><form class="modal" method="post" style="width:460px;max-width:94vw">
+  <div class="modal-head"><span>🔗 Link Pick & Drop Order</span><span class="mx" onclick="pdCloseLink()">✕</span></div>
+  <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="link_manual"><input type="hidden" name="order_id" id="pdlk_oid"><input type="hidden" name="m" value="<?= e($m) ?>">
+  <div class="modal-body">
+    <div class="full"><div class="muted" style="font-size:12px">Order <b id="pdlk_code"></b> · phone <b id="pdlk_phone"></b></div></div>
+    <div class="full"><label>Pick & Drop Order ID</label><input name="pd_id" id="pdlk_pdid" required placeholder="e.g. XGAC-17"></div>
+    <div class="full"><label style="display:flex;gap:8px;align-items:center;font-weight:600"><input type="checkbox" name="force" value="1" style="width:auto"> Link anyway even if the phone doesn't match</label></div>
+    <div class="full muted" style="font-size:11.5px">We fetch the Pick & Drop order and verify the customer phone matches before linking — their delivery charge is recorded automatically.</div>
+  </div>
+  <div class="modal-foot"><button type="button" class="btn" onclick="pdCloseLink()">Cancel</button><button class="btn btn-primary">🔗 Verify &amp; Link</button></div>
+</form></div>
+
+<script>
+function pdLinkFor(id,code,phone){
+  document.getElementById('pdlk_oid').value=id;
+  document.getElementById('pdlk_code').textContent=code||('#'+id);
+  document.getElementById('pdlk_phone').textContent=phone||'—';
+  document.getElementById('pdlk_pdid').value='';
+  document.getElementById('pdLinkModal').classList.add('open');document.body.classList.add('modal-open');
+  setTimeout(function(){document.getElementById('pdlk_pdid').focus();},60);
+}
+function pdCloseLink(){document.getElementById('pdLinkModal').classList.remove('open');document.body.classList.remove('modal-open');}
+(function(){var mm=document.getElementById('pdLinkModal');if(mm)mm.addEventListener('click',function(e){if(e.target===mm)pdCloseLink();});})();
+</script>
 <script>
 var pdF='all';
 function pdTab(b){pdF=b.getAttribute('data-f');document.querySelectorAll('#pdChips .ntab').forEach(function(x){x.classList.toggle('on',x===b);});pdFilter();}

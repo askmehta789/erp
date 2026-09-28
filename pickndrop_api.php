@@ -45,10 +45,19 @@ class PickDrop {
     if ($code < 200 || $code > 299) {
       $msg = $body;
       if (is_array($data)) {
-        $m = $data['message'] ?? null;
-        if (is_array($m) && isset($m['message'])) $msg = $m['message'];
-        elseif (is_string($m)) $msg = $m;
-        elseif (isset($data['message']) && is_string($data['message'])) $msg = $data['message'];
+        /* raw Frappe framework error (a full Python traceback) — this shows up when the
+           API key's role lacks permission for the endpoint being called, not just on a
+           genuinely bad request. Surface a short, actionable message instead of the dump. */
+        if (isset($data['exc_type']) && $code == 401) {
+          $msg = 'Authentication rejected for this endpoint — the Api Key/Secret may not have '
+               . 'permission for this action. Ask Pick & Drop support to grant it Order API access.';
+        } else {
+          $m = $data['message'] ?? null;
+          if (is_array($m) && isset($m['message'])) $msg = $m['message'];
+          elseif (is_string($m)) $msg = $m;
+          elseif (isset($data['message']) && is_string($data['message'])) $msg = $data['message'];
+          elseif (isset($data['exc_type'])) $msg = (string)$data['exc_type'];
+        }
       }
       throw new Exception('Pick & Drop API error (' . $code . '): ' . $msg);
     }
@@ -220,6 +229,27 @@ function pd_to_local_status(string $s): ?string {
   if (str_contains($s,'return')) return 'shipped';   /* in progress — don't close the sale yet */
   if (in_array($s, ['package_pickup_assigned','waiting_for_drop_off'], true)) return 'processing';
   return 'shipped';   /* everything else is somewhere between pickup and delivery */
+}
+
+/* dig a phone number out of a Pick & Drop order-details payload (field name is
+   documented as primary_mobile_no, but walk the whole thing so minor API drift
+   doesn't break linking) */
+function pd_extract_phone($d){
+  foreach (['primary_mobile_no','primaryMobileNo','phone'] as $k)
+    if (isset($d[$k])) { $p=pd_norm_phone($d[$k]); if ($p!=='') return $p; }
+  $found='';
+  $walk=function($v)use(&$walk,&$found){
+    if($found!=='')return;
+    if(is_array($v)){foreach($v as $x)$walk($x);return;}
+    if(is_string($v)||is_numeric($v)){ $p=pd_norm_phone($v); if($p!=='')$found=$p; }
+  };
+  $walk($d);
+  return $found;
+}
+function pd_extract_name($d){
+  foreach(['customer_name','customerName','name'] as $k)
+    if(isset($d[$k]) && is_string($d[$k]) && trim($d[$k])!=='') return trim($d[$k]);
+  return '';
 }
 
 /* colour class for a Pick & Drop status label (reuses the app's pill classes) */

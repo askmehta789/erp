@@ -105,6 +105,44 @@ try {
   } else csay("NCM sync skipped: no API key");
 } catch (Exception $e) { csay("NCM sync error: ".$e->getMessage()); }
 
+/* ============ 1c) PICK & DROP AUTO-SYNC (every run) ============
+   No bulk status endpoint is documented, so this polls each open order's
+   get_order_details one at a time (capped + throttled) — a fallback for
+   whenever the registered webhook doesn't fire. */
+try {
+  require_once __DIR__.'/pickndrop_api.php';
+  if (pickndrop()->configured()) {
+    pd_ensure_cols();
+    $pdId = (int)val("SELECT id FROM couriers WHERE LOWER(name)='pick & drop'");
+    if ($pdId) {
+      $rows = rows("SELECT * FROM orders WHERE courier_id=? AND COALESCE(pd_order_id,'')<>''
+                    AND status NOT IN ('delivered','cancelled','returned') LIMIT 60",[$pdId]);
+      $n=0;
+      foreach ($rows as $o) {
+        try {
+          $d = pickndrop()->orderDetails($o['pd_order_id']);
+          $raw = (string)($d['status'] ?? '');
+          if ($raw==='') continue;
+          q("UPDATE orders SET pd_status=? WHERE id=?",[$raw,$o['id']]);
+          $mapped = pd_to_local_status($raw);
+          if ($mapped && $mapped !== $o['status']) {
+            cstock($o['product_id'],$o['qty'],$o['status'],$mapped,$o['id']);
+            if ($mapped==='delivered') q("UPDATE orders SET status='delivered',payment_status='paid' WHERE id=?",[$o['id']]);
+            else q("UPDATE orders SET status=? WHERE id=?",[$mapped,$o['id']]);
+            $oc=$o['code']?:('#'.$o['id']);
+            if($mapped==='delivered') cnotify("Pick & Drop delivered order $oc ✅",'delivered','pickndrop.php',24);
+            elseif($mapped==='returned') cnotify("Pick & Drop returned order $oc ↩️",'ncm','pickndrop.php',24);
+            elseif($mapped==='cancelled') cnotify("Pick & Drop cancelled order $oc",'ncm','pickndrop.php',24);
+            $n++;
+          }
+        } catch (Exception $e) {}
+        usleep(80000);
+      }
+      csay("Pick & Drop sync: ".count($rows)." open orders checked, $n updated");
+    } else csay("Pick & Drop sync: no courier row yet");
+  } else csay("Pick & Drop sync skipped: no API key");
+} catch (Exception $e) { csay("Pick & Drop sync error: ".$e->getMessage()); }
+
 /* ============ 2) DAILY DATABASE BACKUP ============ */
 try {
   $today = date('Y-m-d');

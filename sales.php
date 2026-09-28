@@ -1264,6 +1264,15 @@ window.addEventListener('keydown',function(e){
         setTimeout(function(){rm.focus();},80);
       },150);
     }
+    if(qs.get('new')==='pickndrop'){
+      setTimeout(function(){
+        openOrderForm();
+        var pd=COURIERS.find(function(c){return String(c.name).toLowerCase()==='pick & drop';});
+        if(pd) document.getElementById('f_courier').value=pd.id;
+        document.getElementById('f_zone').value='Inside';
+        document.getElementById('f_pay').value='COD';
+      },150);
+    }
   }catch(e){}
 })();
 

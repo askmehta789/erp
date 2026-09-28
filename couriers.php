@@ -152,6 +152,7 @@ require __DIR__.'/includes/header.php';
       <div style="margin-left:auto;display:flex;gap:6px">
         <?php if(strtolower($c['name'])==='ncm'): ?><a class="btn btn-sm" href="ncm.php">📮</a><?php endif; ?>
         <?php if(strtolower($c['name'])==='daraz'): ?><a class="btn btn-sm" href="daraz.php">🛍</a><?php endif; ?>
+        <?php if(strtolower($c['name'])==='pick & drop'): ?><a class="btn btn-sm" href="pickndrop.php">🟢</a><?php endif; ?>
         <button class="btn btn-sm" onclick='editCour(<?= json_encode($c, JSON_HEX_APOS|JSON_HEX_QUOT) ?>)'>✏️</button>
         <?php if($isAdmin): ?><form method="post" style="display:inline" onsubmit="return confirm('Delete <?= e(addslashes($c['name'])) ?>?')"><input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="delete"><input type="hidden" name="id" value="<?= $id ?>"><button class="btn btn-sm">🗑</button></form><?php endif; ?>
       </div>

@@ -47,6 +47,12 @@ $groups = [
     'ncm_aging_days'     => ['Aging Alert After (days)','number'],
     'ncm_atrisk_days'    => ['At-Risk Alert After (days)','number'],
   ],
+  'Courier / Pick & Drop' => [
+    'pd_api_key'         => ['Pick & Drop Api Key','text'],
+    'pd_api_secret'      => ['Pick & Drop Api Secret','text'],
+    'pd_sandbox'         => ['Use Test Environment','select',['no','yes']],
+    'pd_pickup_address'  => ['Default Pickup Business Address (must match a registered address — set up on the Pick & Drop page)','text'],
+  ],
   'Automation (cron, backups, weekly email)' => [
     'cron_token'   => ['Cron Secret Token (auto-generated)','text'],
     'report_email' => ['Weekly Report Email (blank = Business Email)','text'],
@@ -160,7 +166,7 @@ if (trim((string)setting('cron_token','')) === '') {
 $PAGE_TITLE='Settings'; require __DIR__.'/includes/header.php';
 
 /* which fields render full-width */
-$fullFields = ['store_name','store_address','store_tagline','ncm_api_key','ai_api_key','gemini_api_key','product_categories','expense_categories','gdrive_client_id','gdrive_client_secret'];
+$fullFields = ['store_name','store_address','store_tagline','ncm_api_key','pd_api_key','pd_api_secret','pd_pickup_address','ai_api_key','gemini_api_key','product_categories','expense_categories','gdrive_client_id','gdrive_client_secret'];
 ?>
 <div class="page-head"><div><h1>⚙️ Settings</h1><p>Configure your store, finances, courier, AI and appearance</p></div></div>
 <?php if($fl=flash()) echo '<div class="flash">'.e($fl).'</div>'; ?>
@@ -168,7 +174,7 @@ $fullFields = ['store_name','store_address','store_tagline','ncm_api_key','ai_ap
 <form method="post">
 <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="save">
 <?php foreach($groups as $title=>$fields): ?>
-  <div class="panel" style="margin-bottom:18px;scroll-margin-top:18px"<?= str_starts_with($title,'AI Assistant')?' id="ai-assistant"':(($title==='Notifications')?' id="notifications"':'') ?>>
+  <div class="panel" style="margin-bottom:18px;scroll-margin-top:18px"<?= str_starts_with($title,'AI Assistant')?' id="ai-assistant"':(($title==='Notifications')?' id="notifications"':(($title==='Courier / Pick & Drop')?' id="pd-settings"':'')) ?>>
     <div class="panel-head"><h2><?= e($title) ?></h2></div>
     <div class="panel-body">
       <div class="form-grid" style="grid-template-columns:1fr 1fr">

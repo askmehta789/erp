@@ -52,6 +52,7 @@ $groups = [
     'pd_api_secret'      => ['Pick & Drop Api Secret','text'],
     'pd_sandbox'         => ['Use Test Environment','select',['no','yes']],
     'pd_pickup_address'  => ['Default Pickup Business Address (must match a registered address — set up on the Pick & Drop page)','text'],
+    'pd_aging_days'      => ['Aging Alert After (days)','number'],
   ],
   'Automation (cron, backups, weekly email)' => [
     'cron_token'   => ['Cron Secret Token (auto-generated)','text'],

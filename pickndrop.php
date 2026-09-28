@@ -266,6 +266,59 @@ foreach ($orders as $o) {
 $codRow=['collected'=>0,'charges'=>0,'net'=>0,'released'=>0,'held'=>0];
 foreach (cod_holdings() as $h) if ((int)$h['cid']===$pdId) { $codRow=$h; break; }
 
+/* ---- working orders table (NCM-style): ALL-TIME, not month-scoped.
+   Only ACTIVE orders (not yet delivered/cancelled/returned) are kept live in the
+   render loop — a finalized order never changes again, so re-checking every order
+   ever booked on every page load would only make this page slow for no reason.
+   Delivered/Returned are fetched on demand (LIMIT 300) only when that tab is open. */
+$pdAgingDays = max(1, (int)setting('pd_aging_days', 5));
+$todayDt = new DateTime('today');
+
+$pdActiveOrders = rows("SELECT o.*, p.name AS product_name FROM orders o LEFT JOIN products p ON p.id=o.product_id
+                        WHERE o.courier_id=? AND o.status NOT IN ('delivered','cancelled','returned')
+                        ORDER BY o.id DESC",[$pdId]);
+$pdTotalAll     = (int)val("SELECT COUNT(*) FROM orders WHERE courier_id=?",[$pdId]);
+$pdDeliveredAll = (int)val("SELECT COUNT(*) FROM orders WHERE courier_id=? AND status='delivered'",[$pdId]);
+$pdReturnedAll  = (int)val("SELECT COUNT(*) FROM orders WHERE courier_id=? AND status IN ('returned','cancelled')",[$pdId]);
+
+$pdRowify = function(array $orders) use ($todayDt) {
+  $out=[];
+  foreach ($orders as $o) {
+    $age = $o['order_date'] ? (int)$todayDt->diff(new DateTime($o['order_date']))->days : 0;
+    $cod = strtolower((string)$o['payment_type'])==='cod' ? (float)$o['sell_price']*(int)$o['qty'] : 0;
+    $out[] = ['o'=>$o,'age'=>$age,'cod'=>$cod];
+  }
+  return $out;
+};
+$pdRows = $pdRowify($pdActiveOrders);
+
+$f = $_GET['f'] ?? 'all';
+$pdTHref = function($k) use ($f) { return 'pickndrop.php?f='.($f===$k?'all':$k).'#orders'; };
+$pdTOn   = function($k) use ($f) { return $f===$k ? ' on' : ''; };
+$pdFilterFn = function($r,$f) use ($pdAgingDays) {
+  $st = $r['o']['status'];
+  switch($f){
+    case 'pending':    return $st==='pending';
+    case 'processing': return $st==='processing';
+    case 'shipped':    return $st==='shipped';
+    case 'aging':      return $r['age']>=$pdAgingDays;
+    case 'cod':        return $r['cod']>0;
+    default:           return true;
+  }
+};
+$pdTabs = ['all'=>'All','pending'=>'Pending','processing'=>'Processing','shipped'=>'In Transit',
+           'aging'=>"Aging {$pdAgingDays}d+",'cod'=>'COD to Collect','delivered'=>'Delivered','returned'=>'↩ Returned/Cancelled'];
+$pdTabCount = function($k) use ($pdRows,$pdFilterFn) { return count(array_filter($pdRows, fn($r)=>$pdFilterFn($r,$k))); };
+
+if (in_array($f, ['delivered','returned'], true)) {
+  $histWhere = $f==='delivered' ? "o.status='delivered'" : "o.status IN ('returned','cancelled')";
+  $pdHistOrders = rows("SELECT o.*, p.name AS product_name FROM orders o LEFT JOIN products p ON p.id=o.product_id
+                         WHERE o.courier_id=? AND $histWhere ORDER BY o.id DESC LIMIT 300",[$pdId]);
+  $pdFiltered = $pdRowify($pdHistOrders);
+} else {
+  $pdFiltered = array_values(array_filter($pdRows, fn($r)=>$pdFilterFn($r,$f)));
+}
+
 /* ---- live data (only if API key/secret set) ---- */
 $pdConfigured = pickndrop()->configured();
 $branches = []; $branchErr = '';
@@ -291,6 +344,8 @@ echo delivery_disabled_banner('pickndrop.php');
 .pd-branch-chip{display:inline-flex;align-items:center;gap:5px;background:#f0fdf4;color:#166534;border:1px solid #bbf7d0;border-radius:99px;padding:4px 11px;font-size:11px;font-weight:700;margin:3px}
 .pd-bulkbar{display:none;align-items:center;gap:12px;background:#f0fdf4;border:1.5px solid #86efac;border-radius:13px;padding:9px 16px;margin:0 18px 10px}
 .pd-bulkbar.on{display:flex}
+.age-pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:800}
+.age-old{background:var(--red-bg);color:var(--red)}.age-mid{background:var(--amber-bg);color:var(--amber)}.age-ok{background:var(--surface-2);color:var(--muted)}
 </style>
 
 <div class="pd-hero">
@@ -421,16 +476,20 @@ function pdBrFilter(){
 </script>
 <?php endif; ?>
 
-<div class="panel">
-  <div class="panel-head" style="flex-wrap:wrap;gap:10px"><h2>📦 Pick & Drop Orders — <?= e(date('F Y',strtotime($mStart))) ?></h2>
-    <input id="pdSearch" placeholder="🔍 Search order code, customer, phone, product…" style="max-width:280px" oninput="pdFilter()">
-    <form method="get" style="display:flex;gap:6px;align-items:center"><input type="month" name="m" value="<?= e($m) ?>"><button class="btn btn-sm">Go</button></form>
-    <span class="muted" style="font-size:12px"><?= $mRet ?> returned/cancelled · edit any order in <a href="sales.php">Sales</a></span></div>
-  <div style="display:flex;gap:6px;flex-wrap:wrap;padding:0 18px 10px" id="pdChips">
-  <?php $pdCounts=['all'=>count($orders)]; foreach($orders as $oC){ $pdCounts[$oC['status']]=($pdCounts[$oC['status']]??0)+1; }
-  foreach(['all'=>'All','pending'=>'Pending','processing'=>'Processing','shipped'=>'Shipped','delivered'=>'Delivered','returned'=>'Returned','cancelled'=>'Cancelled'] as $k=>$lbl): if($k!=='all'&&empty($pdCounts[$k]))continue; ?>
-    <button class="ntab<?= $k==='all'?' on':'' ?>" data-f="<?= $k ?>" onclick="pdTab(this)"><?= $lbl ?> <span class="ntab-n"><?= (int)($pdCounts[$k]??0) ?></span></button>
-  <?php endforeach; ?>
+<div class="panel" id="orders">
+  <div class="panel-head" style="flex-wrap:wrap;gap:10px"><h2>📦 All Pick & Drop Orders <?= $f!=='all'?'<span class="pill p-blue" style="font-size:10px">'.e($pdTabs[$f]??$f).' filter</span>':'' ?></h2>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <input id="pdSearch" class="ncm-search" placeholder="🔍 Search order, name, phone, PD #…" oninput="pdFilter()">
+      <select id="pdPer" class="pgsel" onchange="PDPG.per=parseInt(this.value)||25;PDPG.page=1;pdRenderPage()" title="rows per page">
+        <option value="25">25 / page</option><option value="50">50 / page</option><option value="100">100 / page</option><option value="100000">All</option>
+      </select>
+      <button class="btn btn-sm" onclick="pdExportCSV()">⬇ CSV</button>
+    </div>
+  </div>
+  <div class="ncm-tabs">
+    <?php foreach($pdTabs as $k=>$lbl): $c = $k==='delivered' ? $pdDeliveredAll : ($k==='returned' ? $pdReturnedAll : $pdTabCount($k)); ?>
+      <a class="ntab <?= $f===$k?'on':'' ?>" href="<?= $pdTHref($k) ?>"><?= e($lbl) ?> <span class="ntab-n"><?= $c ?></span></a>
+    <?php endforeach; ?>
   </div>
   <?php if($pdConfigured): ?>
   <div class="pd-bulkbar" id="pdBulkBar">
@@ -442,57 +501,63 @@ function pdBrFilter(){
     <button class="btn btn-sm" type="button" onclick="pdSelClear()">✕ Clear</button>
   </div>
   <?php endif; ?>
-  <div class="table-wrap"><table class="tbl led-tbl"><thead><tr>
-    <?php if($pdConfigured): ?><th style="width:24px"><input type="checkbox" onchange="pdSelAll(this)" title="Select all visible"></th><?php endif; ?>
-    <th>Order</th><th>Date</th><th>Customer</th><th>Product</th><th>Qty</th><th>Price</th><th>Pick & Drop</th><th>Status</th>
-  </tr></thead><tbody>
-  <?php foreach($orders as $o):
-    $isDel=$o['status']==='delivered';
-    $prof=order_profit($o);
-    $pot=((float)$o['sell_price']-(float)$o['cost_price'])*(int)$o['qty']-(float)$o['delivery_charge'];
-    $booked = !empty($o['pd_order_id']);
-    $canCancel = $booked && !in_array($o['status'],['delivered','returned','cancelled'],true);
-  ?>
-    <tr data-s="<?= e(strtolower($o['code'].' '.($o['customer']??'').' '.($o['phone']??'').' '.($o['product_name']??''))) ?>" data-st="<?= e($o['status']) ?>">
-      <?php if($pdConfigured): ?><td><?php if(!$booked && in_array($o['status'],['pending','processing'],true)): ?><input type="checkbox" class="pdSel" value="<?= (int)$o['id'] ?>" onchange="pdSelCount()"><?php endif; ?></td><?php endif; ?>
-      <td class="muted"><?= e($o['code']) ?></td>
-      <td><?= e($o['order_date']) ?></td>
-      <td><b><?= e($o['customer'] ?: '—') ?></b></td>
-      <td><b><?= e($o['product_name'] ?: '—') ?></b></td>
-      <td style="text-align:right"><?= (int)$o['qty'] ?></td>
-      <td style="text-align:right"><?= money($o['sell_price']) ?></td>
-      <td>
-        <?php if($booked): ?>
-          <b style="font-size:11.5px"><?= e($o['pd_order_id']) ?></b>
-          <?php if(!empty($o['pd_status'])): ?><div><span class="pill <?= pd_status_class($o['pd_status']) ?>" style="font-size:9.5px"><?= e($o['pd_status']) ?></span></div><?php endif; ?>
-          <?php if(!empty($o['pd_tracking_url'])): ?><a href="<?= e($o['pd_tracking_url']) ?>" target="_blank" rel="noopener" style="font-size:10px">Track ↗</a><?php endif; ?>
-          <div style="display:flex;gap:4px;margin-top:3px">
+  <div class="table-wrap tw-sticky"><table class="tbl">
+    <thead><tr>
+      <?php if($pdConfigured): ?><th style="width:24px"><input type="checkbox" onchange="pdSelAll(this)" title="Select all visible"></th><?php endif; ?>
+      <th>Order</th><th>Customer</th><th>Phone</th><th class="right">COD</th><th>Age</th><th>PD ID</th><th>Status</th><th></th>
+    </tr></thead>
+    <tbody id="pdRows">
+    <?php foreach($pdFiltered as $r): $o=$r['o'];
+      $booked = !empty($o['pd_order_id']);
+      $canCancel = $booked && !in_array($o['status'],['delivered','returned','cancelled'],true);
+      $unbooked = !$booked && !in_array($o['status'],['delivered','returned','cancelled'],true);
+      $ap = $r['age']>=$pdAgingDays ? 'age-old' : ($r['age']>=max(1,(int)round($pdAgingDays*0.6)) ? 'age-mid' : 'age-ok');
+    ?>
+      <tr class="<?= $r['age']>=$pdAgingDays?'row-danger':'' ?>" data-s="<?= e(strtolower($o['code'].' '.($o['customer']??'').' '.($o['phone']??'').' '.($o['pd_order_id']??'').' '.$o['status'])) ?>">
+        <?php if($pdConfigured): ?><td><?php if($unbooked && in_array($o['status'],['pending','processing'],true)): ?><input type="checkbox" class="pdSel" value="<?= (int)$o['id'] ?>" onchange="pdSelCount()"><?php endif; ?></td><?php endif; ?>
+        <td><b><?= e($o['code']) ?></b></td>
+        <td><div class="ncm-cust"><span class="cav"><?= e(strtoupper(mb_substr(trim((string)$o['customer'])?:'?',0,1))) ?></span>
+          <span><span class="cn"><?= e($o['customer']?:'—') ?></span><span class="ca"><?= e(mb_strimwidth((string)$o['address'],0,34,'…')) ?></span>
+          <span class="ca" style="color:#16a34a;font-weight:600"><?= e($o['product_name']?:'Goods') ?> ×<?= (int)$o['qty'] ?></span></span></div></td>
+        <td class="num nowrap"><?= e($o['phone']?:'—') ?>
+          <?php if($o['phone']): ?><button class="mini" title="Copy" onclick="pdCpy('<?= e($o['phone']) ?>',this)">⧉</button><a class="mini" title="WhatsApp" target="_blank" rel="noopener" href="https://wa.me/<?= e(wa_phone($o['phone'])) ?>">💬</a><?php endif; ?></td>
+        <td class="num right"><?= $r['cod']>0 ? '<b>'.money($r['cod']).'</b>' : '<span class="muted">prepaid</span>' ?></td>
+        <td><span class="age-pill <?= $ap ?>"><?= $r['age'] ?>d</span></td>
+        <td><?= $booked ? ('<b style="font-size:11.5px">'.e($o['pd_order_id']).'</b>'.(!empty($o['pd_tracking_url'])?' <a href="'.e($o['pd_tracking_url']).'" target="_blank" rel="noopener" style="font-size:10px">↗</a>':'')) : '<span class="muted">—</span>' ?></td>
+        <td>
+          <span class="pill <?= $booked && !empty($o['pd_status']) ? pd_status_class($o['pd_status']) : status_class($o['status']) ?>"><?= e($booked && !empty($o['pd_status']) ? $o['pd_status'] : ucfirst($o['status'])) ?></span>
+          <?php if($isAdmin || true): ?>
+          <details style="margin-top:4px"><summary class="muted" style="font-size:10px;cursor:pointer;list-style:none">✏️ change</summary>
+            <form method="post" style="display:flex;gap:4px;align-items:center;margin-top:4px">
+              <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="set_status">
+              <input type="hidden" name="id" value="<?= (int)$o['id'] ?>"><input type="hidden" name="m" value="<?= e($m) ?>">
+              <select name="status" style="font-size:11px">
+                <?php foreach(['pending','processing','shipped','delivered','returned','cancelled'] as $st): ?>
+                  <option value="<?= $st ?>"<?= $o['status']===$st?' selected':'' ?>><?= ucfirst($st) ?></option>
+                <?php endforeach; ?>
+              </select>
+              <input type="number" name="delivery_charge" value="<?= (float)$o['delivery_charge']>0?e((float)$o['delivery_charge']):'' ?>" placeholder="Chg" step="any" min="0" style="width:56px;font-size:11px" title="Delivery charge (Rs.)">
+              <button class="btn btn-sm" style="padding:3px 8px" title="Save">💾</button>
+            </form>
+          </details>
+          <?php endif; ?>
+        </td>
+        <td class="right nowrap">
+          <?php if($booked): ?>
             <form method="post" style="display:inline"><input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="sync_one"><input type="hidden" name="id" value="<?= (int)$o['id'] ?>"><input type="hidden" name="m" value="<?= e($m) ?>"><button class="btn btn-sm" title="Sync live status">🔄</button></form>
             <?php if($canCancel): ?><form method="post" style="display:inline" onsubmit="return confirm('Cancel this order with Pick & Drop?')"><input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="cancel_pd"><input type="hidden" name="id" value="<?= (int)$o['id'] ?>"><input type="hidden" name="m" value="<?= e($m) ?>"><button class="btn btn-sm" style="color:var(--red)" title="Cancel with Pick & Drop">✕</button></form><?php endif; ?>
-          </div>
-        <?php elseif($pdConfigured && !in_array($o['status'],['delivered','returned','cancelled'],true)): ?>
-          <?php if(in_array($o['status'],['pending','processing'],true)): ?>
-          <button class="btn btn-sm btn-primary" onclick='pdBookFor(<?= json_encode(['id'=>(int)$o['id'],'name'=>$o['customer'],'phone'=>$o['phone'],'address'=>$o['address'],'cod'=>strtolower((string)$o['payment_type'])==='cod'?((float)$o['sell_price']*(int)$o['qty']):0,'package'=>trim(($o['product_name']?:'Goods').' x'.(int)$o['qty']),'ref'=>$o['code']], JSON_HEX_APOS|JSON_HEX_QUOT) ?>)'>🚀 Send</button>
+          <?php elseif($pdConfigured && $unbooked): ?>
+            <?php if(in_array($o['status'],['pending','processing'],true)): ?>
+            <button class="btn btn-sm btn-primary" onclick='pdBookFor(<?= json_encode(['id'=>(int)$o['id'],'name'=>$o['customer'],'phone'=>$o['phone'],'address'=>$o['address'],'cod'=>$r['cod'],'package'=>trim(($o['product_name']?:'Goods').' x'.(int)$o['qty']),'ref'=>$o['code']], JSON_HEX_APOS|JSON_HEX_QUOT) ?>)'>Book</button>
+            <?php endif; ?>
+            <button class="btn btn-sm" title="Already created on the Pick & Drop website/app? Link it here" onclick='pdLinkFor(<?= (int)$o['id'] ?>,<?= json_encode((string)$o['code']) ?>,<?= json_encode((string)$o['phone']) ?>)'>🔗</button>
           <?php endif; ?>
-          <button class="btn btn-sm" title="Already created on the Pick & Drop website/app? Link it here" onclick='pdLinkFor(<?= (int)$o['id'] ?>,<?= json_encode((string)$o['code']) ?>,<?= json_encode((string)$o['phone']) ?>)'>🔗</button>
-        <?php else: ?><span class="muted" style="font-size:11px">—</span><?php endif; ?>
-      </td>
-      <td>
-        <form method="post" style="display:flex;gap:5px;align-items:center">
-          <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="set_status">
-          <input type="hidden" name="id" value="<?= (int)$o['id'] ?>"><input type="hidden" name="m" value="<?= e($m) ?>">
-          <select name="status" class="pd-st st-<?= e($o['status']) ?>">
-            <?php foreach(['pending','processing','shipped','delivered','returned','cancelled'] as $st): ?>
-              <option value="<?= $st ?>"<?= $o['status']===$st?' selected':'' ?>><?= ucfirst($st) ?></option>
-            <?php endforeach; ?>
-          </select>
-          <input type="number" name="delivery_charge" value="<?= (float)$o['delivery_charge']>0?e((float)$o['delivery_charge']):'' ?>" placeholder="Chg" step="any" min="0" style="width:64px" title="Delivery charge (Rs.)">
-          <button class="btn btn-sm" title="Save — syncs Sales instantly">💾</button>
-        </form>
-      </td>
-    </tr>
-  <?php endforeach; if(!$orders) echo '<tr><td colspan="9"><div class="empty">No Pick & Drop orders this month — click "＋ New Order".</div></td></tr>'; ?>
-  </tbody></table></div>
+        </td>
+      </tr>
+    <?php endforeach; if(!$pdFiltered) echo '<tr><td colspan="9"><div class="empty">No orders in this view.</div></td></tr>'; ?>
+    </tbody>
+  </table></div>
+  <div id="pdPager" class="pager" style="padding:10px 18px"></div>
 </div>
 
 <!-- booking modal -->
@@ -542,15 +607,52 @@ function pdCloseLink(){document.getElementById('pdLinkModal').classList.remove('
 (function(){var mm=document.getElementById('pdLinkModal');if(mm)mm.addEventListener('click',function(e){if(e.target===mm)pdCloseLink();});})();
 </script>
 <script>
-var pdF='all';
-function pdTab(b){pdF=b.getAttribute('data-f');document.querySelectorAll('#pdChips .ntab').forEach(function(x){x.classList.toggle('on',x===b);});pdFilter();}
-function pdFilter(){
-  var q=(document.getElementById('pdSearch').value||'').toLowerCase().trim();
-  document.querySelectorAll('tr[data-s]').forEach(function(tr){
-    var okS=!q||tr.getAttribute('data-s').indexOf(q)>-1;
-    var okF=pdF==='all'||tr.getAttribute('data-st')===pdF;
-    tr.style.display=(okS&&okF)?'':'none';
+/* ---- search + client-side pagination (same pattern as the NCM Courier page) ---- */
+var PDPG={page:1,per:25};
+function pdPgRender(rows,st,pagerId){
+  var total=rows.length, pages=Math.max(1,Math.ceil(total/st.per));
+  if(st.page>pages)st.page=pages;
+  var a=(st.page-1)*st.per, b=Math.min(total,a+st.per);
+  rows.forEach(function(tr,i){ tr.style.display=(i>=a&&i<b)?'':'none'; });
+  var el=document.getElementById(pagerId); if(!el)return;
+  if(total<=st.per){ el.innerHTML=total?('<span class="pg-info">Showing all '+total+'</span>'):''; return; }
+  var h='<span class="pg-info">Showing '+(a+1)+'–'+b+' of '+total+'</span><span class="pg-btns">';
+  h+='<button class="pg-b" '+(st.page<=1?'disabled':'')+' data-p="'+(st.page-1)+'">◀</button>';
+  var win=[],last=0;
+  for(var p=1;p<=pages;p++){ if(p===1||p===pages||Math.abs(p-st.page)<=2) win.push(p); }
+  win.forEach(function(p){
+    if(last&&p-last>1)h+='<span class="pg-dots">…</span>';
+    h+='<button class="pg-b'+(p===st.page?' on':'')+'" data-p="'+p+'">'+p+'</button>'; last=p;
   });
+  h+='<button class="pg-b" '+(st.page>=pages?'disabled':'')+' data-p="'+(st.page+1)+'">▶</button></span>';
+  el.innerHTML=h;
+  el.querySelectorAll('.pg-b[data-p]').forEach(function(btn){
+    btn.onclick=function(){ st.page=parseInt(btn.getAttribute('data-p'))||1;
+      pdPgRender(rows,st,pagerId);
+      var top=el.closest('.panel'); if(top)top.scrollIntoView({behavior:'smooth',block:'start'}); };
+  });
+}
+function pdOrdRows(){
+  var q=(document.getElementById('pdSearch').value||'').toLowerCase().trim();
+  var all=Array.prototype.slice.call(document.querySelectorAll('#pdRows tr[data-s]'));
+  document.querySelectorAll('#pdRows tr:not([data-s])').forEach(function(tr){tr.style.display=q?'none':'';});
+  return all.filter(function(tr){
+    var hit=(!q||tr.getAttribute('data-s').indexOf(q)!==-1);
+    if(!hit)tr.style.display='none';
+    return hit;
+  });
+}
+function pdRenderPage(){ pdPgRender(pdOrdRows(),PDPG,'pdPager'); }
+function pdFilter(){ PDPG.page=1; pdRenderPage(); }
+document.addEventListener('DOMContentLoaded',pdRenderPage);
+function pdCpy(t,btn){ (navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject()).then(function(){ var o=btn.textContent; btn.textContent='✓'; setTimeout(function(){btn.textContent=o;},900); }).catch(function(){ prompt('Copy:',t); }); }
+var PD_ROWS=<?= json_encode(array_map(function($r){$o=$r['o']; $st=(!empty($o['pd_order_id'])&&!empty($o['pd_status']))?$o['pd_status']:ucfirst($o['status']); return ['code'=>$o['code'],'customer'=>$o['customer'],'phone'=>$o['phone'],'cod'=>$r['cod'],'age'=>$r['age'],'pdid'=>$o['pd_order_id'],'status'=>$st];}, $pdFiltered)) ?>;
+function pdExportCSV(){
+  var h=['Order','Customer','Phone','COD','Age(days)','PD ID','Status'];
+  var lines=[h.join(',')];
+  PD_ROWS.forEach(function(r){lines.push([r.code,r.customer,r.phone,r.cod,r.age,r.pdid,r.status].map(function(v){return '"'+String(v==null?'':v).replace(/"/g,'""')+'"';}).join(','));});
+  var blob=new Blob([lines.join('\n')],{type:'text/csv'});
+  var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='pickndrop_orders.csv';a.click();
 }
 function pdBestBranch(addr){
   addr=(addr||'').toUpperCase();

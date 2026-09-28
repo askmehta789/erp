@@ -366,13 +366,37 @@ echo delivery_disabled_banner('pickndrop.php');
     <?php elseif(!$branches): ?>
       <p class="muted" style="font-size:12.5px">No branches returned yet.</p>
     <?php else: ?>
-      <?php foreach($branches as $b): ?>
-        <span class="pd-branch-chip">📍 <?= e($b['branch_name'] ?? ($b['name'] ?? '?')) ?><?= !empty($b['branch_code']) ? ' · '.e($b['branch_code']) : '' ?></span>
-      <?php endforeach; ?>
+      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+        <div><b style="font-size:24px;display:block;line-height:1"><?= number_format(count($branches)) ?></b><span class="muted" style="font-size:10.5px;font-weight:700;text-transform:uppercase">active branches</span></div>
+        <input id="pdBrSearch" placeholder="🔍 Search a branch by name, code or district…" style="flex:1;min-width:220px" oninput="pdBrFilter()">
+      </div>
+      <div id="pdBrResults" style="margin-top:10px"></div>
     <?php endif; ?>
   </div>
 </div>
 <datalist id="pdBrList"><?php foreach($branches as $b): ?><option value="<?= e($b['name'] ?? '') ?>"><?php endforeach; ?></datalist>
+<?php if($pdConfigured && $branches): ?>
+<script>
+/* trimmed branch data for the on-demand search below — kept out of the DOM by
+   default (rendering all <?= count($branches) ?> as chips is what was lagging the page) */
+var PD_BRANCHES=<?= json_encode(array_map(fn($b)=>[$b['branch_name']??($b['name']??'?'),$b['branch_code']??'',$b['district']??''],$branches)) ?>;
+function pdBrFilter(){
+  var q=(document.getElementById('pdBrSearch').value||'').toLowerCase().trim();
+  var box=document.getElementById('pdBrResults');
+  if(!q){ box.innerHTML=''; return; }
+  var hits=[];
+  for(var i=0;i<PD_BRANCHES.length && hits.length<30;i++){
+    var b=PD_BRANCHES[i];
+    if((b[0]+' '+b[1]+' '+b[2]).toLowerCase().indexOf(q)>-1) hits.push(b);
+  }
+  if(!hits.length){ box.innerHTML='<span class="muted" style="font-size:12px">No match.</span>'; return; }
+  var esc=function(s){ return String(s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); };
+  box.innerHTML=hits.map(function(b){
+    return '<span class="pd-branch-chip">📍 '+esc(b[0])+(b[1]?' · '+esc(b[1]):'')+(b[2]?' · '+esc(b[2]):'')+'</span>';
+  }).join('');
+}
+</script>
+<?php endif; ?>
 
 <div class="panel">
   <div class="panel-head" style="flex-wrap:wrap;gap:10px"><h2>📦 Pick & Drop Orders — <?= e(date('F Y',strtotime($mStart))) ?></h2>

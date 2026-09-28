@@ -224,11 +224,15 @@ function pd_to_local_status(string $s): ?string {
   $s = strtolower(trim($s));
   if ($s==='') return null;
   if (str_contains($s,'cancel')) return 'cancelled';
-  if ($s==='delivered') return 'delivered';
-  if (in_array($s, ['package_returned','package_returned_from_lastmile_sation_to_transporter'], true)) return 'returned';
-  if (str_contains($s,'return')) return 'shipped';   /* in progress — don't close the sale yet */
-  if (in_array($s, ['package_pickup_assigned','waiting_for_drop_off'], true)) return 'processing';
-  return 'shipped';   /* everything else is somewhere between pickup and delivery */
+  /* two different vocabularies show up in practice: get_order_details' coarse
+     order-level status ("Open","Processing","Completed","Failed Attempt",…) and the
+     webhook's granular snake_case tracking codes ("delivered","out_for_delivery",…).
+     "Completed" is their word for delivered — handle both spellings. */
+  if (in_array($s, ['completed','delivered'], true)) return 'delivered';
+  if (in_array($s, ['package_returned','package_returned_from_lastmile_sation_to_transporter','returned'], true)) return 'returned';
+  if (str_contains($s,'return')) return 'shipped';   /* mid-transit return attempt — don't close the sale yet */
+  if (in_array($s, ['open','package_pickup_assigned','waiting_for_drop_off'], true)) return 'processing';
+  return 'shipped';   /* everything else (in transit, failed attempt, etc.) is somewhere between pickup and delivery */
 }
 
 /* dig a phone number out of a Pick & Drop order-details payload (field name is

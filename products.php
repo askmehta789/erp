@@ -384,8 +384,6 @@ body.dark .pd3-foot a.view{background:rgba(59,130,246,.18);color:#7dd3fc}
   $sp=$stockPos($p); $st=$sp['hand'];
   $isOut=$st<=0; $isLow=!$isOut && $st<=(int)$p['low_stock'];
   $spTotal=max(1,$sp['hand']+$sp['out']+$sp['hh']+$sp['dx']);
-  $marginRs=(float)$p['price']-(float)$p['cost']-$overheadPerPc;
-  $margin=$p['price']>0?round($marginRs/$p['price']*100):0;
   $adsP=$adsFor($p); $gross=$a['profit']; $prof=$gross-$adsP;
   $roas=$adsP>0 ? round($a['rev']/$adsP,2) : null;
   $adsVerdict=$adsVerdicts[$p['id']]['verdict'] ?? null;
@@ -432,7 +430,6 @@ body.dark .pd3-foot a.view{background:rgba(59,130,246,.18);color:#7dd3fc}
     </div>
 
     <div class="pd3-statrow"><span>Price</span><b><?= money($p['price']) ?></b></div>
-    <div class="pd3-statrow"><span title="Price − Cost − Rs <?= $overheadPerPc ?> overhead (Ads + Delivery + Office + Returns) — edit in Settings → Finance &amp; Tax">Margin / pc</span><b style="color:<?= $marginRs>=0?'var(--green)':'var(--red)' ?>"><?= money($marginRs) ?> <span style="font-weight:600;color:var(--muted);font-size:10.5px">(<?= $margin ?>%)</span></b></div>
     <div class="pd3-statrow"><span>Profit</span><b style="color:<?= $prof>=0?'var(--green)':'var(--red)' ?>"><?= money($prof) ?></b></div>
     <?php if(array_sum($spk)>0): ?>
     <div class="pd3-statrow"><span>Trend</span><div class="pd3-spark<?= $spkTrend<0?' down':'' ?>" title="units sold, last 6 weeks"><?php foreach($spk as $wv): ?><div style="height:<?= max(8,round($wv/$spkMax*100)) ?>%"></div><?php endforeach; ?></div></div>

@@ -64,8 +64,14 @@ handle_crud('products');
 $PAGE_TITLE='Products & Stock';
 
 $products = rows("SELECT * FROM products ORDER BY name");
-foreach($products as $p) batches_migrate((int)$p['id']);
-$products = rows("SELECT * FROM products ORDER BY name");   /* re-read after migration */
+/* batches_migrate() only backfills an opening batch — it never mutates products
+   itself — so re-reading $products afterward was always a no-op. Also, running
+   it for every product on every page load only matters once per product ever;
+   gate the whole pass behind a settings flag instead of re-checking each time. */
+if (setting('batches_migrated','') !== '1') {
+  foreach($products as $p) batches_migrate((int)$p['id']);
+  set_setting('batches_migrated','1');
+}
 $vendorList = rows("SELECT id,name FROM suppliers ORDER BY name");
 /* batches per product + weighted avg cost of remaining stock */
 $reorder = reorder_suggestions();
@@ -91,6 +97,10 @@ foreach($allBatches as $b){ $pid=(int)$b['product_id']; $bat[$pid][]=$b;
 }
 foreach($bat as $pid=>$list){ $units=array_sum(array_map(fn($b)=>(int)$b['qty_left'],$list));
   $batAvg[$pid]=$units>0?round(($batVal[$pid]??0)/$units,2):null; }
+/* oldest OPEN batch per product (list is already ordered oldest-first) — drives the
+   "Oldest batch: Xd" age display and the Aging filter */
+$oldestOpenBatch = [];
+foreach($bat as $pid=>$list) foreach($list as $b) if((int)$b['qty_left']>0) { $oldestOpenBatch[$pid]=$b['purchase_date']; break; }
 /* Hungry Hunter movement history per product, for the flow panel */
 $hhMoves=[];
 foreach(rows("SELECT * FROM hh_stock ORDER BY product_id, created_at, id") as $m){ $hhMoves[(int)$m['product_id']][]=$m; }
@@ -163,13 +173,32 @@ foreach($orders as $o){
     $agg[$pid]['profit'] -= (float)$o['cancel_charge'];   /* match order_profit(): a return/cancel is a loss, not zero */
   }
 }
+/* ---- 28-day sales velocity (days-of-cover for every product, not just reorder
+   candidates) and the dead-stock lookback window ---- */
+$stockAgeWarnDays = max(1,(int)setting('stock_age_warn_days', 90));
+$deadStockDays    = max(1,(int)setting('dead_stock_days', 60));
+$vel28 = [];
+foreach (rows("SELECT product_id, SUM(qty) AS q FROM orders
+               WHERE status='delivered' AND order_date >= DATE_SUB(CURDATE(), INTERVAL 28 DAY)
+               GROUP BY product_id") as $r) {
+  $vel28[(int)$r['product_id']] = (float)$r['q'] / 28.0;
+}
+$soldRecent = [];
+foreach (rows("SELECT product_id, SUM(qty) AS q FROM orders
+               WHERE status='delivered' AND order_date >= ?
+               GROUP BY product_id", [date('Y-m-d', strtotime("-{$deadStockDays} days"))]) as $r) {
+  $soldRecent[(int)$r['product_id']] = (int)$r['q'];
+}
+
 /* totals */
 $tProducts=count($products);
 $tStockUnits=array_sum(array_column($products,'stock'));
 $tOnHand=0;$tOut=0;$tRes=0;$tHH=0;$tDX=0;$tLow=0;
-foreach($products as $__p){ $__s=$stockPos($__p);
+$deadStockValue=0; $deadStockCount=0;
+foreach($products as $__p){ $__s=$stockPos($__p); $__pid=(int)$__p['id'];
   $tOnHand+=$__s['hand']; $tOut+=$__s['out']; $tRes+=$__s['res']; $tHH+=$__s['hh']; $tDX+=$__s['dx'];
-  if($__s['hand']<=(int)$__p['low_stock']) $tLow++;
+  if($__s['free']<=(int)$__p['low_stock']) $tLow++;
+  if($__s['hand']>0 && (($soldRecent[$__pid] ?? 0) === 0)) { $deadStockValue += $batVal[$__pid] ?? 0; $deadStockCount++; }
 }
 $tStockValue=array_sum($batVal);
 $tLifeQty=array_sum($lifeQty); $tLifeAmt=array_sum($lifeAmt);
@@ -201,7 +230,10 @@ $worstReturnPid=null; $worstReturnVal=-1;
 foreach($products as $__p){
   $__a=$agg[$__p['id']]??['sold'=>0,'orders'=>0,'returned'=>0];
   if((float)$__p['price']>0){
-    $__m=round(((float)$__p['price']-(float)$__p['cost']-$overheadPerPc)/(float)$__p['price']*100);
+    /* true margin uses the weighted-avg cost of stock actually still on hand,
+       not the product's sticker cost — falls back to it when no batch exists */
+    $__trueCost = $batAvg[(int)$__p['id']] ?? (float)$__p['cost'];
+    $__m=round(((float)$__p['price']-$__trueCost-$overheadPerPc)/(float)$__p['price']*100);
     if($__a['sold']>0 && $__m>$bestMarginVal){ $bestMarginVal=$__m; $bestMarginPid=(int)$__p['id']; }
   }
   if($__a['orders']>=5){   // minimum sample size so one unlucky order doesn't look like a crisis
@@ -228,7 +260,20 @@ foreach($products as $__p){
   if($__prof<0) $__v='stop';
   elseif(($__roas!==null && $__roas<$adsWatchRoas) || $__rr>=$adsWatchRet) $__v='watch';
   if($__v){ $adsVerdicts[$__p['id']]=['verdict'=>$__v,'returnRate'=>$__rr,'prof'=>$__prof];
-    if($__v==='stop'){ $adsStopCount++; $why=$__prof<0?('losing '.money(abs($__prof)).' after ads'):''; notify("📣 Stop ads suggested: {$__p['name']} — $why",'alert','products.php',24); }
+    if($__v==='stop'){
+      $adsStopCount++;
+      $why = 'losing '.money(abs($__prof)).' after ads';
+      /* notify()'s own dedupe matches on exact message text, and this message embeds
+         the live loss amount — a shifting number breaks that match and lets the same
+         product re-notify daily. Gate it on a per-product/day cache key instead. */
+      $__notifyKey = 'ads_stop_notify_'.$__p['id'];
+      $__last = kv_get($__notifyKey);
+      $__today = date('Y-m-d');
+      if (!$__last || ($__last['v'] ?? '') !== $__today) {
+        notify("📣 Stop ads suggested: {$__p['name']} — $why",'alert','products.php',24);
+        kv_set($__notifyKey, $__today);
+      }
+    }
     else $adsWatchCount++;
   }
 }
@@ -256,8 +301,9 @@ require __DIR__.'/includes/header.php';
 .pd3-flag .l{font-size:10px;opacity:.85;font-weight:800;text-transform:uppercase}
 .pd3-flag .v{font-size:14px;font-weight:900;margin-top:3px}
 
-.pd3-toolbar{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:12px 16px;box-shadow:0 5px 14px rgba(30,41,80,.05);margin-bottom:10px;display:flex;gap:10px;align-items:center}
-.pd3-toolbar input{flex:1;border:0;background:var(--surface-2);color:var(--ink);border-radius:9px;padding:9px 14px;font-size:13px;font:inherit}
+.pd3-toolbar{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:12px 16px;box-shadow:0 5px 14px rgba(30,41,80,.05);margin-bottom:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.pd3-toolbar input{flex:1;min-width:160px;border:0;background:var(--surface-2);color:var(--ink);border-radius:9px;padding:9px 14px;font-size:13px;font:inherit}
+.pd3-toolbar select{border:0;background:var(--surface-2);color:var(--ink);border-radius:9px;padding:9px 12px;font-size:12.5px;font:inherit;cursor:pointer}
 .pd3-filterbar{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:14px}
 .pd3-fchip{background:var(--surface);border:1px solid var(--border);color:var(--ink);border-radius:99px;padding:6px 13px;font-size:11.5px;font-weight:700;box-shadow:0 3px 8px rgba(30,41,80,.04);cursor:pointer}
 .pd3-fchip.on{background:#0369a1;border-color:#0369a1;color:#fff}
@@ -306,6 +352,9 @@ require __DIR__.'/includes/header.php';
 .pd3-verdict{font-size:10.5px;font-weight:800;border-radius:8px;padding:6px 10px;margin-top:10px}
 .pd3-verdict.stop{background:var(--red-bg,#fee2e2);color:#c0392b}
 .pd3-verdict.watch{background:var(--amber-bg,#fef3c7);color:#b45309}
+.pd3-agerow{font-size:10.5px;color:var(--muted);font-weight:700;margin-top:6px}
+.pd3-agerow.warn{color:var(--red,#c0392b)}
+.pd3-deadbanner{background:var(--amber-bg,#fef3c7);color:var(--amber,#b45309);font-size:10.5px;font-weight:800;border-radius:8px;padding:6px 10px;margin-top:8px}
 .pd3-foot{display:flex;gap:7px;margin-top:12px}
 .pd3-foot button,.pd3-foot a{flex:1;background:var(--surface-2);border:0;border-radius:9px;padding:8px;font-size:10.5px;font-weight:800;color:var(--ink);cursor:pointer;text-align:center;text-decoration:none;display:block}
 .pd3-foot a.view{background:#dbeafe;color:#0369a1}
@@ -348,6 +397,7 @@ body.dark .pd3-foot a.view{background:rgba(59,130,246,.18);color:#7dd3fc}
   <div class="pd3-tile b"><b><?= number_format($tDX) ?></b><span>At Dropex</span></div>
   <div class="pd3-tile b"><b><?= number_format($tRes) ?></b><span>Reserved</span></div>
   <div class="pd3-tile t"><b><?= money($tStockValue) ?></b><span>Stock Value</span></div>
+  <div class="pd3-tile r"><b><?= money($deadStockValue) ?></b><span>Dead Stock Value<?= $deadStockCount ? ' ('.$deadStockCount.')' : '' ?></span></div>
   <div class="pd3-tile b"><b><?= number_format($tLifeQty) ?></b><span>Lifetime Purchased</span></div>
   <div class="pd3-tile t"><b><?= money($tLifeAmt) ?></b><span>Purchase Amount</span></div>
   <div class="pd3-tile a"><b><?= number_format($tSold) ?></b><span>Units Sold</span></div>
@@ -360,13 +410,26 @@ body.dark .pd3-foot a.view{background:rgba(59,130,246,.18);color:#7dd3fc}
 <?php elseif($adsWatchCount>0): ?><div class="flash" style="background:var(--amber-bg,#fef3c7);color:var(--amber)">🟡 <b><?= $adsWatchCount ?></b> product<?= $adsWatchCount>1?'s':'' ?> worth watching — weak ROAS or a higher return rate while running ads.</div>
 <?php endif; ?>
 
-<div class="pd3-toolbar">🔍 <input id="pd3Search" placeholder="Search products…"></div>
+<div class="pd3-toolbar">🔍 <input id="pd3Search" placeholder="Search products…">
+  <select id="pd3Sort" title="Sort products">
+    <option value="name-asc">Sort: Name A–Z</option>
+    <option value="profit-desc">Sort: Profit (high→low)</option>
+    <option value="sold-desc">Sort: Units sold</option>
+    <option value="cover-asc">Sort: Days of cover</option>
+    <option value="retrate-desc">Sort: Return rate</option>
+    <option value="age-desc">Sort: Stock age (oldest first)</option>
+    <option value="value-desc">Sort: Stock value</option>
+  </select>
+  <button type="button" class="btn btn-sm" onclick="pd3ExportCSV()">⬇ CSV</button>
+</div>
 <div class="pd3-filterbar">
   <button type="button" class="pd3-fchip on" data-f="all">All (<?= count($products) ?>)</button>
   <button type="button" class="pd3-fchip" data-f="out">🔴 Out of Stock</button>
   <button type="button" class="pd3-fchip" data-f="low">🟡 Low Stock</button>
   <button type="button" class="pd3-fchip" data-f="profit">📈 Profitable</button>
   <button type="button" class="pd3-fchip" data-f="loss">📉 Losing Money</button>
+  <button type="button" class="pd3-fchip" data-f="dead">💀 Dead Stock</button>
+  <button type="button" class="pd3-fchip" data-f="aging">⏳ Aging <?= $stockAgeWarnDays ?>d+</button>
 </div>
 
 <form method="post" id="pd3BulkForm">
@@ -382,7 +445,7 @@ body.dark .pd3-foot a.view{background:rgba(59,130,246,.18);color:#7dd3fc}
 <div class="pd3-grid" id="pd3Grid">
 <?php foreach($products as $p): $a=$agg[$p['id']]??['sold'=>0,'rev'=>0,'profit'=>0,'orders'=>0,'returned'=>0];
   $sp=$stockPos($p); $st=$sp['hand'];
-  $isOut=$st<=0; $isLow=!$isOut && $st<=(int)$p['low_stock'];
+  $isOut=$st<=0; $isLow=!$isOut && $sp['free']<=(int)$p['low_stock'];
   $spTotal=max(1,$sp['hand']+$sp['out']+$sp['hh']+$sp['dx']);
   $adsP=$adsFor($p); $gross=$a['profit']; $prof=$gross-$adsP;
   $roas=$adsP>0 ? round($a['rev']/$adsP,2) : null;
@@ -390,6 +453,14 @@ body.dark .pd3-foot a.view{background:rgba(59,130,246,.18);color:#7dd3fc}
   $spk = $spark[$p['id']] ?? [0,0,0,0,0,0];
   $spkMax = max(1,max($spk));
   $spkTrend = (array_sum(array_slice($spk,3))) <=> (array_sum(array_slice($spk,0,3)));
+  /* stock age, days-of-cover, return rate, dead-stock — feed sort, filter chips & CSV export */
+  $ageDays = isset($oldestOpenBatch[$p['id']]) ? (int)floor((strtotime('today') - strtotime($oldestOpenBatch[$p['id']]))/86400) : -1;
+  $pd28 = $vel28[$p['id']] ?? 0;
+  $coverDays = $pd28>0 ? (int)floor($st/$pd28) : 999999;
+  $retRate = $a['orders']>0 ? round($a['returned']/$a['orders']*100,1) : 0;
+  $stockValue = $batVal[$p['id']] ?? 0;
+  $deadStock = $st>0 && (($soldRecent[$p['id']] ?? 0) === 0);
+  $agingFlag = $ageDays>=0 && $ageDays>=$stockAgeWarnDays;
   $profitFilter = $a['sold']>0 ? ($prof>=0?'profit':'loss') : '';
   $stockFilter = $isOut?'out':($isLow?'low':'');
   $cardCls = ($isOut||($prof<0&&$a['sold']>0)) ? 'warn' : '';
@@ -397,7 +468,7 @@ body.dark .pd3-foot a.view{background:rgba(59,130,246,.18);color:#7dd3fc}
   $hueSeed = crc32($p['name']) % 5;
   $hueBg = [['#93c5fd','#0369a1'],['#c7d2fe','#4338ca'],['#fde68a','#d97706'],['#a7f3d0','#0d9488'],['#fbcfe8','#be185d']][$hueSeed];
 ?>
-<div class="pd3-card <?= $cardCls ?>" data-name="<?= e(mb_strtolower($p['name'].' '.$p['sku'])) ?>" data-stock="<?= $stockFilter ?>" data-profit="<?= $profitFilter ?>">
+<div class="pd3-card <?= $cardCls ?>" data-name="<?= e(mb_strtolower($p['name'].' '.$p['sku'])) ?>" data-dispname="<?= e($p['name']) ?>" data-sku="<?= e($p['sku']) ?>" data-category="<?= e($p['category']) ?>" data-stock="<?= $stockFilter ?>" data-profit="<?= $profitFilter ?>" data-dead="<?= $deadStock?'1':'0' ?>" data-aging="<?= $agingFlag?'1':'0' ?>" data-onhand="<?= (int)$st ?>" data-courier="<?= (int)$sp['out'] ?>" data-hh="<?= (int)$sp['hh'] ?>" data-dx="<?= (int)$sp['dx'] ?>" data-reserved="<?= (int)$sp['res'] ?>" data-value="<?= round($stockValue,2) ?>" data-sold="<?= (int)$a['sold'] ?>" data-profitval="<?= round($prof,2) ?>" data-roas="<?= $roas!==null?$roas:'' ?>" data-age="<?= $ageDays ?>" data-cover="<?= $coverDays ?>" data-retrate="<?= $retRate ?>">
   <input type="checkbox" class="pd3-chk pd3-sel" value="<?= (int)$p['id'] ?>">
   <div class="pd3-imgband<?= $p['image']?' has-photo':'' ?>" style="<?= $p['image']?'':'background:linear-gradient(135deg,'.$hueBg[0].','.$hueBg[1].')' ?>">
     <?php if($p['image']): ?><img src="<?= e($p['image']) ?>" alt="<?= e($p['name']) ?>" loading="lazy">
@@ -428,6 +499,8 @@ body.dark .pd3-foot a.view{background:rgba(59,130,246,.18);color:#7dd3fc}
       <?php if($sp['dx']): ?><span><i style="background:#0369a1"></i><?= $sp['dx'] ?> Dropex</span><?php endif; ?>
       <?php if($sp['res']): ?><span>· <?= $sp['res'] ?> reserved</span><?php endif; ?>
     </div>
+    <?php if($ageDays>=0): ?><div class="pd3-agerow<?= $agingFlag?' warn':'' ?>">📅 Oldest batch: <?= $ageDays ?>d</div><?php endif; ?>
+    <?php if($deadStock): ?><div class="pd3-deadbanner">💀 0 sold in <?= $deadStockDays ?>d — <?= money($stockValue) ?> tied up</div><?php endif; ?>
 
     <div class="pd3-statrow"><span>Price</span><b><?= money($p['price']) ?></b></div>
     <div class="pd3-statrow"><span>Profit</span><b style="color:<?= $prof>=0?'var(--green)':'var(--red)' ?>"><?= money($prof) ?></b></div>
@@ -504,8 +577,55 @@ function pd3ApplyFilters(){
     else if(pd3ActiveFilter==='low') okFilter = card.getAttribute('data-stock')==='low';
     else if(pd3ActiveFilter==='profit') okFilter = card.getAttribute('data-profit')==='profit';
     else if(pd3ActiveFilter==='loss') okFilter = card.getAttribute('data-profit')==='loss';
+    else if(pd3ActiveFilter==='dead') okFilter = card.getAttribute('data-dead')==='1';
+    else if(pd3ActiveFilter==='aging') okFilter = card.getAttribute('data-aging')==='1';
     card.style.display = (okSearch && okFilter) ? '' : 'none';
   });
+}
+
+/* ---- sort (reorders the DOM nodes only — independent of the display:none
+   filtering above, so the two compose without fighting each other) ---- */
+var PD3_SORT_MAP = {
+  'name-asc':    {attr:'data-name',      num:false, dir:1},
+  'profit-desc': {attr:'data-profitval', num:true,  dir:-1},
+  'sold-desc':   {attr:'data-sold',      num:true,  dir:-1},
+  'cover-asc':   {attr:'data-cover',     num:true,  dir:1},
+  'retrate-desc':{attr:'data-retrate',   num:true,  dir:-1},
+  'age-desc':    {attr:'data-age',       num:true,  dir:-1},
+  'value-desc':  {attr:'data-value',     num:true,  dir:-1}
+};
+function pd3ApplySort(){
+  var k = PD3_SORT_MAP[document.getElementById('pd3Sort').value] || PD3_SORT_MAP['name-asc'];
+  var grid = document.getElementById('pd3Grid');
+  var cards = Array.prototype.slice.call(grid.querySelectorAll('.pd3-card'));
+  cards.sort(function(a,b){
+    var av=a.getAttribute(k.attr), bv=b.getAttribute(k.attr);
+    if(k.num){ av=parseFloat(av)||0; bv=parseFloat(bv)||0; return (av-bv)*k.dir; }
+    av=(av||'').toLowerCase(); bv=(bv||'').toLowerCase();
+    return av<bv ? -1*k.dir : (av>bv ? 1*k.dir : 0);
+  });
+  cards.forEach(function(c){ grid.appendChild(c); });
+}
+document.getElementById('pd3Sort').addEventListener('change', pd3ApplySort);
+
+/* ---- CSV export: currently visible cards, in current (sorted) DOM order ---- */
+function pd3ExportCSV(){
+  var h=['Name','SKU','Category','On Hand','Courier','HH','Dropex','Reserved','Stock Value','Sold','Profit','ROAS','Stock Age (d)'];
+  var lines=[h.join(',')];
+  document.querySelectorAll('#pd3Grid .pd3-card').forEach(function(card){
+    if(card.style.display==='none') return;
+    var age = card.getAttribute('data-age'); if(age==='-1') age='';
+    var row=[
+      card.getAttribute('data-dispname')||'', card.getAttribute('data-sku')||'', card.getAttribute('data-category')||'',
+      card.getAttribute('data-onhand')||'0', card.getAttribute('data-courier')||'0',
+      card.getAttribute('data-hh')||'0', card.getAttribute('data-dx')||'0', card.getAttribute('data-reserved')||'0',
+      card.getAttribute('data-value')||'0', card.getAttribute('data-sold')||'0', card.getAttribute('data-profitval')||'0',
+      card.getAttribute('data-roas')||'', age
+    ];
+    lines.push(row.map(function(v){ return '"'+String(v).replace(/"/g,'""')+'"'; }).join(','));
+  });
+  var blob=new Blob([lines.join('\n')],{type:'text/csv'});
+  var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='products_export.csv'; a.click();
 }
 
 function pd3RefreshBulk(){

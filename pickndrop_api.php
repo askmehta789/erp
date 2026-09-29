@@ -205,18 +205,6 @@ function pd_match_branch($name,$names){
   foreach ($names as $b) if (mb_strpos(mb_strtoupper($b),$t)!==false || mb_strpos($t,mb_strtoupper($b))!==false) return $b;
   return '';
 }
-/* guess destination branch from a free-text address */
-function pd_guess_branch($addr,$names){
-  $A = mb_strtoupper((string)$addr);
-  if ($A==='') return '';
-  $best=''; $bestLen=0;
-  foreach ($names as $b) {
-    $B = mb_strtoupper($b);
-    if ($B!=='' && mb_strpos($A,$B)!==false && mb_strlen($B)>$bestLen) { $best=$b; $bestLen=mb_strlen($B); }
-  }
-  return $best;
-}
-
 /* map a Pick & Drop status string (from get_order_details or the webhook payload) to our
    Sales status. Terminal "returned" states only fire once the parcel is actually back —
    mid-journey return attempts are left as 'shipped' so a retry doesn't kill a live sale. */

@@ -112,28 +112,34 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
       $ids = array_slice($ids, 0, 40);
       if(function_exists('set_time_limit')) @set_time_limit(300);
       $bn=[]; foreach (pickndrop()->branches() as $b) if(!empty($b['name'])) $bn[]=$b['name'];
+      /* valley-only ops: one destination branch for the whole batch instead of
+         guessing it from each order's free-text address (that guess failed too
+         often and dumped orders into "book manually") */
+      $branchIn = trim((string)($_POST['branch'] ?? ''));
+      if ($branchIn==='') throw new Exception('Pick the destination branch for this batch first.');
+      $branch = pd_match_branch($branchIn, $bn);
+      if ($branch==='') throw new Exception('"'.$branchIn.'" is not a Pick & Drop branch — pick one from the list.');
+      set_setting('pd_default_branch', $branch);
       $pickup = trim((string)setting('pd_pickup_address',''));
       $ok=[]; $fail=[];
       foreach ($ids as $oid) {
         $o = row("SELECT o.*, p.name AS product_name FROM orders o LEFT JOIN products p ON p.id=o.product_id WHERE o.id=?",[$oid]);
         if (!$o) { $fail[]="#$oid: not found"; continue; }
         if (!empty($o['pd_order_id'])) { $fail[]=e($o['code']).": already booked"; continue; }
-        $dest = pd_guess_branch($o['address'], $bn);
-        if ($dest==='') { $fail[]=e($o['code']).": no branch match in address — book manually"; continue; }
         try {
           [$nid,$chg,$trackUrl] = pd_book_one([
             'name'=>$o['customer'],'phone'=>$o['phone'],
             'cod'=>(strtolower((string)$o['payment_type'])==='cod' ? (float)$o['sell_price']*(int)$o['qty'] : 0),
-            'address'=>$o['address'],'branch'=>$dest,'pickup'=>$pickup,
+            'address'=>$o['address'],'branch'=>$branch,'pickup'=>$pickup,
             'package'=>trim(($o['product_name']?:'Goods').' x'.(int)$o['qty']),'ref'=>$o['code'],
           ], $bn);
           q("UPDATE orders SET pd_order_id=?, pd_status='Open', pd_tracking_url=?, courier_id=? WHERE id=?", [$nid,$trackUrl,$pdId,$oid]);
           if ($chg!==null) q("UPDATE orders SET delivery_charge=? WHERE id=?", [$chg,$oid]);
-          $ok[]=e($o['code'])."→$nid ($dest)";
+          $ok[]=e($o['code'])."→$nid";
         } catch (Exception $ex) { $fail[]=e($o['code']).': '.$ex->getMessage(); }
       }
-      log_activity('Bulk Pick & Drop booking: '.count($ok).' ok, '.count($fail).' failed','Pick & Drop');
-      $msg = count($ok).' booked ✓'.($ok?(' — '.implode(', ',$ok)):'');
+      log_activity('Bulk Pick & Drop booking to '.$branch.': '.count($ok).' ok, '.count($fail).' failed','Pick & Drop');
+      $msg = count($ok)." booked to $branch ✓".($ok?(' — '.implode(', ',$ok)):'');
       if ($fail) $msg .= '  ·  '.count($fail).' failed: '.implode(' | ',$fail);
       flash($msg);
     }
@@ -329,6 +335,7 @@ if ($pdConfigured) {
 }
 $pickupAddr = trim((string)setting('pd_pickup_address',''));
 $webhookUrl = trim((string)setting('pd_webhook_url',''));
+$pdDefaultBranch = trim((string)setting('pd_default_branch',''));
 
 require __DIR__.'/includes/header.php';
 echo delivery_disabled_banner('pickndrop.php');
@@ -494,9 +501,10 @@ function pdBrFilter(){
   <?php if($pdConfigured): ?>
   <div class="pd-bulkbar" id="pdBulkBar">
     <span><b id="pdSelN">0</b> selected</span>
+    <input id="pdBulkBranch" form="pdBulkForm" name="branch" list="pdBrList" placeholder="Destination branch (used for all)" value="<?= e($pdDefaultBranch) ?>" required style="min-width:190px">
     <form method="post" id="pdBulkForm" style="display:inline">
       <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="book_bulk"><input type="hidden" name="ids" id="pdBulkIds"><input type="hidden" name="m" value="<?= e($m) ?>">
-      <button class="btn btn-sm btn-primary" type="submit" onclick="return confirm('Book all selected orders on Pick & Drop? Destination branch is guessed from each address.')">🚀 Book Selected</button>
+      <button class="btn btn-sm btn-primary" type="submit" onclick="return pdBulkConfirm()">🚀 Book Selected</button>
     </form>
     <button class="btn btn-sm" type="button" onclick="pdSelClear()">✕ Clear</button>
   </div>
@@ -654,6 +662,7 @@ function pdExportCSV(){
   var blob=new Blob([lines.join('\n')],{type:'text/csv'});
   var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='pickndrop_orders.csv';a.click();
 }
+var PD_DEFAULT_BRANCH=<?= json_encode($pdDefaultBranch) ?>;
 function pdBestBranch(addr){
   addr=(addr||'').toUpperCase();
   var opts=document.querySelectorAll('#pdBrList option'), best='',bl=0;
@@ -668,8 +677,13 @@ function pdBookFor(o){
   document.getElementById('pdbk_cod').value=o.cod||0;
   document.getElementById('pdbk_ref').value=o.ref||'';
   document.getElementById('pdbk_pkg').value=o.package||'';
-  document.getElementById('pdbk_branch').value=pdBestBranch(o.address);
+  document.getElementById('pdbk_branch').value=pdBestBranch(o.address)||PD_DEFAULT_BRANCH;
   document.getElementById('pdBookModal').classList.add('open');document.body.classList.add('modal-open');
+}
+function pdBulkConfirm(){
+  var br=(document.getElementById('pdBulkBranch').value||'').trim();
+  if(!br){ alert('Pick the destination branch first — it\'s used for every selected order.'); return false; }
+  return confirm('Book all selected orders on Pick & Drop → branch: '+br+'?');
 }
 function pdCloseBook(){document.getElementById('pdBookModal').classList.remove('open');document.body.classList.remove('modal-open');}
 (function(){var mm=document.getElementById('pdBookModal');if(mm)mm.addEventListener('click',function(e){if(e.target===mm)pdCloseBook();});})();

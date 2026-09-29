@@ -73,7 +73,6 @@ if (setting('batches_migrated','') !== '1') {
   set_setting('batches_migrated','1');
 }
 $vendorList = rows("SELECT id,name FROM suppliers ORDER BY name");
-$supplierNames = []; foreach($vendorList as $v) $supplierNames[(int)$v['id']] = $v['name'];
 /* batches per product + weighted avg cost of remaining stock */
 $reorder = reorder_suggestions();
 $reoMap = []; foreach($reorder as $r) $reoMap[$r['id']] = $r;
@@ -155,19 +154,19 @@ $stockPos = function($p) use($commit,$hhPos,$dxPos){
 };
 
 /* aggregate per-product performance (delivered = realised) */
-$agg=[]; $deliveredByCourier=[]; $returnedByCourier=[];
+$agg=[]; $deliveredByCourier=[];
 foreach($orders as $o){
   $pid=(int)$o['product_id']; if(!$pid) continue;
   if(!isset($agg[$pid])) $agg[$pid]=['sold'=>0,'rev'=>0,'cogs'=>0,'del'=>0,'profit'=>0,'orders'=>0,'returned'=>0,'cancelChg'=>0,'retDelChg'=>0];
   $agg[$pid]['orders']++;
   $q=(int)$o['qty'];
-  $cname = $courierNames[(int)$o['courier_id']] ?? 'Self / Other';
   if($o['status']==='delivered'){
     $agg[$pid]['sold']   += $q;
     $agg[$pid]['rev']    += (float)$o['sell_price']*$q;
     $agg[$pid]['cogs']   += (float)$o['cost_price']*$q;
     $agg[$pid]['del']    += (float)$o['delivery_charge'];
     $agg[$pid]['profit'] += ((float)$o['sell_price']-(float)$o['cost_price'])*$q - (float)$o['delivery_charge'];
+    $cname = $courierNames[(int)$o['courier_id']] ?? 'Self / Other';
     $deliveredByCourier[$pid][$cname] = ($deliveredByCourier[$pid][$cname] ?? 0) + $q;
   } elseif(in_array($o['status'],['returned','cancelled'],true)){
     $agg[$pid]['returned']++;
@@ -175,7 +174,6 @@ foreach($orders as $o){
     /* RTO cost inputs: what the courier charged us for a parcel that came back */
     $agg[$pid]['cancelChg'] += (float)$o['cancel_charge'];
     $agg[$pid]['retDelChg'] += (float)$o['delivery_charge'];
-    $returnedByCourier[$pid][$cname] = ($returnedByCourier[$pid][$cname] ?? 0) + $q;
   }
 }
 /* ---- 28-day sales velocity (days-of-cover for every product, not just reorder
@@ -478,24 +476,6 @@ body.dark .pd3-foot a.view{background:rgba(59,130,246,.18);color:#7dd3fc}
   $avgDeliveryPc = $a['sold']>0 ? round($a['del']/$a['sold'],2) : 0;
   $marginPc = (float)$p['price'] - $trueCost - $avgDeliveryPc - $rtoCost;
   $breakEvenRoas = $marginPc>0 ? round((float)$p['price']/$marginPc,2) : null;
-  /* returns by courier — top 3 by volume, using the same qty units on both sides */
-  $courierRet = [];
-  foreach(array_unique(array_merge(array_keys($deliveredByCourier[$p['id']] ?? []), array_keys($returnedByCourier[$p['id']] ?? []))) as $cn){
-    $cDel=$deliveredByCourier[$p['id']][$cn] ?? 0; $cRet=$returnedByCourier[$p['id']][$cn] ?? 0; $cTot=$cDel+$cRet;
-    if($cTot<=0) continue;
-    $courierRet[] = ['name'=>$cn,'pct'=>round($cRet/$cTot*100),'tot'=>$cTot];
-  }
-  usort($courierRet, fn($x,$y)=>$y['tot']<=>$x['tot']);
-  $courierRet = array_slice($courierRet,0,3);
-  /* best vendor rate vs the latest purchase — vendor-purchase batches only */
-  $vendorBatches = array_values(array_filter($bat[$p['id']] ?? [], fn($b)=>is_vendor_purchase_batch($b['note']) && !empty($b['supplier_id'])));
-  $bestVendor=null; $latestVendor=null;
-  if($vendorBatches){
-    $byCost = $vendorBatches; usort($byCost, fn($x,$y)=>(float)$x['unit_cost']<=>(float)$y['unit_cost']);
-    $bestVendor = $byCost[0];
-    $byDate = $vendorBatches; usort($byDate, fn($x,$y)=>strtotime($y['purchase_date'])<=>strtotime($x['purchase_date']) ?: (int)$y['id']<=>(int)$x['id']);
-    $latestVendor = $byDate[0];
-  }
   $profitFilter = $a['sold']>0 ? ($prof>=0?'profit':'loss') : '';
   $stockFilter = $isOut?'out':($isLow?'low':'');
   $cardCls = ($isOut||($prof<0&&$a['sold']>0)) ? 'warn' : '';
@@ -545,15 +525,6 @@ body.dark .pd3-foot a.view{background:rgba(59,130,246,.18);color:#7dd3fc}
         <?= $breakEvenRoas!==null ? ($breakEvenRoas.'× · now '.$roas.'×') : '⚠️ losing before ads' ?>
       </b>
     </div>
-    <?php endif; ?>
-    <?php if($courierRet): ?>
-    <div class="pd3-statrow"><span>Returns by Courier</span><b style="font-weight:700;font-size:11px"><?= implode(' · ', array_map(fn($c)=>e($c['name']).' '.$c['pct'].'%', $courierRet)) ?></b></div>
-    <?php endif; ?>
-    <?php if($bestVendor): ?>
-    <div class="pd3-statrow"><span>Best Vendor Rate</span><b style="font-weight:700;font-size:11px">
-      <?= money($bestVendor['unit_cost']) ?> (<?= e($supplierNames[(int)$bestVendor['supplier_id']] ?? '?') ?>)
-      <?php if((int)$bestVendor['id']!==(int)$latestVendor['id']): ?><span class="muted" style="font-weight:600"> vs latest <?= money($latestVendor['unit_cost']) ?> (<?= e($supplierNames[(int)$latestVendor['supplier_id']] ?? '?') ?>)</span><?php endif; ?>
-    </b></div>
     <?php endif; ?>
     <?php if(array_sum($spk)>0): ?>
     <div class="pd3-statrow"><span>Trend</span><div class="pd3-spark<?= $spkTrend<0?' down':'' ?>" title="units sold, last 6 weeks"><?php foreach($spk as $wv): ?><div style="height:<?= max(8,round($wv/$spkMax*100)) ?>%"></div><?php endforeach; ?></div></div>

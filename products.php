@@ -73,6 +73,7 @@ if (setting('batches_migrated','') !== '1') {
   set_setting('batches_migrated','1');
 }
 $vendorList = rows("SELECT id,name FROM suppliers ORDER BY name");
+$supplierNames = []; foreach($vendorList as $v) $supplierNames[(int)$v['id']] = $v['name'];
 /* batches per product + weighted avg cost of remaining stock */
 $reorder = reorder_suggestions();
 $reoMap = []; foreach($reorder as $r) $reoMap[$r['id']] = $r;
@@ -154,29 +155,34 @@ $stockPos = function($p) use($commit,$hhPos,$dxPos){
 };
 
 /* aggregate per-product performance (delivered = realised) */
-$agg=[]; $deliveredByCourier=[];
+$agg=[]; $deliveredByCourier=[]; $returnedByCourier=[];
 foreach($orders as $o){
   $pid=(int)$o['product_id']; if(!$pid) continue;
-  if(!isset($agg[$pid])) $agg[$pid]=['sold'=>0,'rev'=>0,'cogs'=>0,'del'=>0,'profit'=>0,'orders'=>0,'returned'=>0];
+  if(!isset($agg[$pid])) $agg[$pid]=['sold'=>0,'rev'=>0,'cogs'=>0,'del'=>0,'profit'=>0,'orders'=>0,'returned'=>0,'cancelChg'=>0,'retDelChg'=>0];
   $agg[$pid]['orders']++;
   $q=(int)$o['qty'];
+  $cname = $courierNames[(int)$o['courier_id']] ?? 'Self / Other';
   if($o['status']==='delivered'){
     $agg[$pid]['sold']   += $q;
     $agg[$pid]['rev']    += (float)$o['sell_price']*$q;
     $agg[$pid]['cogs']   += (float)$o['cost_price']*$q;
     $agg[$pid]['del']    += (float)$o['delivery_charge'];
     $agg[$pid]['profit'] += ((float)$o['sell_price']-(float)$o['cost_price'])*$q - (float)$o['delivery_charge'];
-    $cname = $courierNames[(int)$o['courier_id']] ?? 'Self / Other';
     $deliveredByCourier[$pid][$cname] = ($deliveredByCourier[$pid][$cname] ?? 0) + $q;
   } elseif(in_array($o['status'],['returned','cancelled'],true)){
     $agg[$pid]['returned']++;
     $agg[$pid]['profit'] -= (float)$o['cancel_charge'];   /* match order_profit(): a return/cancel is a loss, not zero */
+    /* RTO cost inputs: what the courier charged us for a parcel that came back */
+    $agg[$pid]['cancelChg'] += (float)$o['cancel_charge'];
+    $agg[$pid]['retDelChg'] += (float)$o['delivery_charge'];
+    $returnedByCourier[$pid][$cname] = ($returnedByCourier[$pid][$cname] ?? 0) + $q;
   }
 }
 /* ---- 28-day sales velocity (days-of-cover for every product, not just reorder
    candidates) and the dead-stock lookback window ---- */
 $stockAgeWarnDays = max(1,(int)setting('stock_age_warn_days', 90));
 $deadStockDays    = max(1,(int)setting('dead_stock_days', 60));
+$highRtoPerPc     = max(0,(float)setting('high_rto_per_pc', 100));
 $vel28 = [];
 foreach (rows("SELECT product_id, SUM(qty) AS q FROM orders
                WHERE status='delivered' AND order_date >= DATE_SUB(CURDATE(), INTERVAL 28 DAY)
@@ -430,6 +436,7 @@ body.dark .pd3-foot a.view{background:rgba(59,130,246,.18);color:#7dd3fc}
   <button type="button" class="pd3-fchip" data-f="loss">📉 Losing Money</button>
   <button type="button" class="pd3-fchip" data-f="dead">💀 Dead Stock</button>
   <button type="button" class="pd3-fchip" data-f="aging">⏳ Aging <?= $stockAgeWarnDays ?>d+</button>
+  <button type="button" class="pd3-fchip" data-f="highrto">🔁 High RTO</button>
 </div>
 
 <form method="post" id="pd3BulkForm">
@@ -461,6 +468,34 @@ body.dark .pd3-foot a.view{background:rgba(59,130,246,.18);color:#7dd3fc}
   $stockValue = $batVal[$p['id']] ?? 0;
   $deadStock = $st>0 && (($soldRecent[$p['id']] ?? 0) === 0);
   $agingFlag = $ageDays>=0 && $ageDays>=$stockAgeWarnDays;
+  /* RTO cost/pc: what returned/cancelled parcels for this product cost us (courier's
+     cancel + delivery charge on those parcels), spread across units actually delivered */
+  $rtoCost = $a['sold']>0 ? round((($a['cancelChg'] ?? 0)+($a['retDelChg'] ?? 0))/$a['sold'],2) : 0;
+  $highRto = $rtoCost>=$highRtoPerPc && $highRtoPerPc>0;
+  /* break-even ROAS: the ROAS at which ad spend exactly eats the per-unit margin
+     (true cost + avg delivery/pc + RTO/pc already deducted) */
+  $trueCost = $batAvg[$p['id']] ?? (float)$p['cost'];
+  $avgDeliveryPc = $a['sold']>0 ? round($a['del']/$a['sold'],2) : 0;
+  $marginPc = (float)$p['price'] - $trueCost - $avgDeliveryPc - $rtoCost;
+  $breakEvenRoas = $marginPc>0 ? round((float)$p['price']/$marginPc,2) : null;
+  /* returns by courier — top 3 by volume, using the same qty units on both sides */
+  $courierRet = [];
+  foreach(array_unique(array_merge(array_keys($deliveredByCourier[$p['id']] ?? []), array_keys($returnedByCourier[$p['id']] ?? []))) as $cn){
+    $cDel=$deliveredByCourier[$p['id']][$cn] ?? 0; $cRet=$returnedByCourier[$p['id']][$cn] ?? 0; $cTot=$cDel+$cRet;
+    if($cTot<=0) continue;
+    $courierRet[] = ['name'=>$cn,'pct'=>round($cRet/$cTot*100),'tot'=>$cTot];
+  }
+  usort($courierRet, fn($x,$y)=>$y['tot']<=>$x['tot']);
+  $courierRet = array_slice($courierRet,0,3);
+  /* best vendor rate vs the latest purchase — vendor-purchase batches only */
+  $vendorBatches = array_values(array_filter($bat[$p['id']] ?? [], fn($b)=>is_vendor_purchase_batch($b['note']) && !empty($b['supplier_id'])));
+  $bestVendor=null; $latestVendor=null;
+  if($vendorBatches){
+    $byCost = $vendorBatches; usort($byCost, fn($x,$y)=>(float)$x['unit_cost']<=>(float)$y['unit_cost']);
+    $bestVendor = $byCost[0];
+    $byDate = $vendorBatches; usort($byDate, fn($x,$y)=>strtotime($y['purchase_date'])<=>strtotime($x['purchase_date']) ?: (int)$y['id']<=>(int)$x['id']);
+    $latestVendor = $byDate[0];
+  }
   $profitFilter = $a['sold']>0 ? ($prof>=0?'profit':'loss') : '';
   $stockFilter = $isOut?'out':($isLow?'low':'');
   $cardCls = ($isOut||($prof<0&&$a['sold']>0)) ? 'warn' : '';
@@ -468,7 +503,7 @@ body.dark .pd3-foot a.view{background:rgba(59,130,246,.18);color:#7dd3fc}
   $hueSeed = crc32($p['name']) % 5;
   $hueBg = [['#93c5fd','#0369a1'],['#c7d2fe','#4338ca'],['#fde68a','#d97706'],['#a7f3d0','#0d9488'],['#fbcfe8','#be185d']][$hueSeed];
 ?>
-<div class="pd3-card <?= $cardCls ?>" data-name="<?= e(mb_strtolower($p['name'].' '.$p['sku'])) ?>" data-dispname="<?= e($p['name']) ?>" data-sku="<?= e($p['sku']) ?>" data-category="<?= e($p['category']) ?>" data-stock="<?= $stockFilter ?>" data-profit="<?= $profitFilter ?>" data-dead="<?= $deadStock?'1':'0' ?>" data-aging="<?= $agingFlag?'1':'0' ?>" data-onhand="<?= (int)$st ?>" data-courier="<?= (int)$sp['out'] ?>" data-hh="<?= (int)$sp['hh'] ?>" data-dx="<?= (int)$sp['dx'] ?>" data-reserved="<?= (int)$sp['res'] ?>" data-value="<?= round($stockValue,2) ?>" data-sold="<?= (int)$a['sold'] ?>" data-profitval="<?= round($prof,2) ?>" data-roas="<?= $roas!==null?$roas:'' ?>" data-age="<?= $ageDays ?>" data-cover="<?= $coverDays ?>" data-retrate="<?= $retRate ?>">
+<div class="pd3-card <?= $cardCls ?>" data-name="<?= e(mb_strtolower($p['name'].' '.$p['sku'])) ?>" data-dispname="<?= e($p['name']) ?>" data-sku="<?= e($p['sku']) ?>" data-category="<?= e($p['category']) ?>" data-stock="<?= $stockFilter ?>" data-profit="<?= $profitFilter ?>" data-dead="<?= $deadStock?'1':'0' ?>" data-aging="<?= $agingFlag?'1':'0' ?>" data-onhand="<?= (int)$st ?>" data-courier="<?= (int)$sp['out'] ?>" data-hh="<?= (int)$sp['hh'] ?>" data-dx="<?= (int)$sp['dx'] ?>" data-reserved="<?= (int)$sp['res'] ?>" data-value="<?= round($stockValue,2) ?>" data-sold="<?= (int)$a['sold'] ?>" data-profitval="<?= round($prof,2) ?>" data-roas="<?= $roas!==null?$roas:'' ?>" data-age="<?= $ageDays ?>" data-cover="<?= $coverDays ?>" data-retrate="<?= $retRate ?>" data-highrto="<?= $highRto?'1':'0' ?>">
   <input type="checkbox" class="pd3-chk pd3-sel" value="<?= (int)$p['id'] ?>">
   <div class="pd3-imgband<?= $p['image']?' has-photo':'' ?>" style="<?= $p['image']?'':'background:linear-gradient(135deg,'.$hueBg[0].','.$hueBg[1].')' ?>">
     <?php if($p['image']): ?><img src="<?= e($p['image']) ?>" alt="<?= e($p['name']) ?>" loading="lazy">
@@ -504,6 +539,22 @@ body.dark .pd3-foot a.view{background:rgba(59,130,246,.18);color:#7dd3fc}
 
     <div class="pd3-statrow"><span>Price</span><b><?= money($p['price']) ?></b></div>
     <div class="pd3-statrow"><span>Profit</span><b style="color:<?= $prof>=0?'var(--green)':'var(--red)' ?>"><?= money($prof) ?></b></div>
+    <?php if($adsP>0): ?>
+    <div class="pd3-statrow"><span title="Price ÷ (price − true cost − avg delivery/pc − RTO/pc)">Break-even ROAS</span>
+      <b style="color:<?= $breakEvenRoas!==null && $roas>=$breakEvenRoas?'var(--green)':'var(--red)' ?>">
+        <?= $breakEvenRoas!==null ? ($breakEvenRoas.'× · now '.$roas.'×') : '⚠️ losing before ads' ?>
+      </b>
+    </div>
+    <?php endif; ?>
+    <?php if($courierRet): ?>
+    <div class="pd3-statrow"><span>Returns by Courier</span><b style="font-weight:700;font-size:11px"><?= implode(' · ', array_map(fn($c)=>e($c['name']).' '.$c['pct'].'%', $courierRet)) ?></b></div>
+    <?php endif; ?>
+    <?php if($bestVendor): ?>
+    <div class="pd3-statrow"><span>Best Vendor Rate</span><b style="font-weight:700;font-size:11px">
+      <?= money($bestVendor['unit_cost']) ?> (<?= e($supplierNames[(int)$bestVendor['supplier_id']] ?? '?') ?>)
+      <?php if((int)$bestVendor['id']!==(int)$latestVendor['id']): ?><span class="muted" style="font-weight:600"> vs latest <?= money($latestVendor['unit_cost']) ?> (<?= e($supplierNames[(int)$latestVendor['supplier_id']] ?? '?') ?>)</span><?php endif; ?>
+    </b></div>
+    <?php endif; ?>
     <?php if(array_sum($spk)>0): ?>
     <div class="pd3-statrow"><span>Trend</span><div class="pd3-spark<?= $spkTrend<0?' down':'' ?>" title="units sold, last 6 weeks"><?php foreach($spk as $wv): ?><div style="height:<?= max(8,round($wv/$spkMax*100)) ?>%"></div><?php endforeach; ?></div></div>
     <?php endif; ?>
@@ -511,6 +562,7 @@ body.dark .pd3-foot a.view{background:rgba(59,130,246,.18);color:#7dd3fc}
       <span class="pd3-chip"><?= (int)$a['sold'] ?> sold</span>
       <?php if($roas!==null): ?><span class="pd3-chip <?= $roas>=2?'ok':'out' ?>"><?= $roas ?>× ROAS</span><?php endif; ?>
       <?php if(isset($reoMap[$p['id']])): ?><span class="pd3-chip out">🛒 ~<?= $reoMap[$p['id']]['cover_days'] ?>d cover</span><?php endif; ?>
+      <?php if($a['sold']>0): ?><span class="pd3-chip <?= $highRto?'out':'' ?>">🔁 <?= money($rtoCost) ?>/pc RTO</span><?php endif; ?>
     </div>
     <?php if($adsVerdict==='stop'): ?><div class="pd3-verdict stop">🔴 Stop ads suggested</div>
     <?php elseif($adsVerdict==='watch'): ?><div class="pd3-verdict watch">🟡 Watch ad spend</div><?php endif; ?>
@@ -579,6 +631,7 @@ function pd3ApplyFilters(){
     else if(pd3ActiveFilter==='loss') okFilter = card.getAttribute('data-profit')==='loss';
     else if(pd3ActiveFilter==='dead') okFilter = card.getAttribute('data-dead')==='1';
     else if(pd3ActiveFilter==='aging') okFilter = card.getAttribute('data-aging')==='1';
+    else if(pd3ActiveFilter==='highrto') okFilter = card.getAttribute('data-highrto')==='1';
     card.style.display = (okSearch && okFilter) ? '' : 'none';
   });
 }

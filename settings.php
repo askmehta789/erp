@@ -26,6 +26,7 @@ $groups = [
     'product_overhead_per_pc' => ['Per-Piece Overhead (Rs.) — avg Ads + Delivery + Office + Returns, deducted from Margin/pc on Products','number'],
     'stock_age_warn_days' => ['Stock Age Warning — flag a batch red after (days)','number'],
     'dead_stock_days'     => ['Dead Stock — flag a product with 0 deliveries in the last (days)','number'],
+    'high_rto_per_pc'     => ['High RTO — flag a product when its return cost per piece exceeds (Rs.)','number'],
   ],
   'Orders & Sales Defaults' => [
     'order_prefix'          => ['Order Code Prefix','text'],

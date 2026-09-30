@@ -209,7 +209,7 @@ body.hide-remarks .f-remarks{display:none}body.hide-sp .f-sp{display:none}body.h
         <?php else: ?><span class="printbadge pending">Not printed yet</span><?php endif; ?>
       </span>
     </div>
-    <div class="bcwrap"><svg class="bc" data-code="<?= e($o['ncm_order_id']?:$o['code']) ?>"></svg></div>
+    <div class="bcwrap"><svg class="bc" data-code="<?= e($o['ncm_order_id'] ?: ($o['pd_order_id'] ?: $o['code'])) ?>"></svg></div>
     <div class="foot"><span>From: <?= e($store) ?> · <?= e($phone) ?></span><span><?= e($o['order_date']) ?></span></div>
   </div>
 <?php endforeach; if(!$orders) echo '<div style="grid-column:1/-1;background:#fff;border-radius:10px;padding:40px;text-align:center;color:#667085">No orders for labels in this view.</div>'; ?>

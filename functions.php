@@ -44,7 +44,7 @@ function delivery_partner_pages() {
     'ncm_command.php' => ['🚚','NCM Command Center'],
     'hungryhunter.php'=> ['🛵','Hungry Hunter'],
     'dropex.php'      => ['🚴','Dropex'],
-    'daraz.php'       => ['🛍','Daraz'],
+    'daraz.php'       => ['<img src="assets/daraz-icon.ico" alt="Daraz" style="height:16px;vertical-align:-3px">','Daraz'],
     'pickndrop.php'   => ['<img src="assets/pickndrop-icon.png" alt="Pick &amp; Drop" style="height:16px;vertical-align:-3px">','Pick & Drop'],
   ];
 }

@@ -88,7 +88,7 @@ require __DIR__.'/includes/header.php';
 echo delivery_disabled_banner('daraz.php');
 ?>
 <div class="page-head">
-  <div><h1>🛍 Daraz</h1><p>Channel dashboard — orders come from Sales with Courier = <b>Daraz</b> · Daraz Order ID goes in Remarks</p></div>
+  <div><h1><img src="assets/daraz-icon.ico" alt="Daraz" style="height:26px;vertical-align:-5px;margin-right:4px">Daraz</h1><p>Channel dashboard — orders come from Sales with Courier = <b>Daraz</b> · Daraz Order ID goes in Remarks</p></div>
   <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
     <form method="get" style="display:flex;gap:6px;align-items:center">
       <input type="month" name="m" value="<?= e($m) ?>"><button class="btn btn-sm">Go</button>

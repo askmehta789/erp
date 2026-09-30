@@ -47,9 +47,13 @@ $LS = array_merge(
 );
 $format = in_array($_GET['format'] ?? '', ['a4','thermal'], true) ? $_GET['format'] : $LS['format'];
 
-/* one label (?id=), a batch (?ids=), a status view, or bulk (?status=processing / pending / shipped / unprinted) */
+/* one label (?id=), a batch (?ids=), a status view, or bulk (?status=processing / pending / shipped / unprinted), optionally narrowed by ?courier= */
 $id=(int)($_GET['id']??0); $st=$_GET['status']??'';
 $idsRaw=trim((string)($_GET['ids']??''));
+$courierFilter=(int)($_GET['courier']??0);
+$couriersList=rows("SELECT id,name,COALESCE(color,'#64748b') AS color FROM couriers WHERE status='active' ORDER BY name");
+$extraWhere=''; $extraParams=[];
+if($courierFilter){ $extraWhere=' AND o.courier_id=?'; $extraParams[]=$courierFilter; }
 $SEL="o.*, p.name AS product_name, c.name AS courier_name, c.color AS courier_color, sp.name AS sales_person_name";
 $JOIN="LEFT JOIN products p ON p.id=o.product_id LEFT JOIN couriers c ON c.id=o.courier_id LEFT JOIN employees sp ON sp.id=o.sales_person_id";
 if($idsRaw!==''){
@@ -62,9 +66,10 @@ if($idsRaw!==''){
   $qp=['ids'=>$idsRaw];
 }
 elseif($id){ $orders=rows("SELECT $SEL FROM orders o $JOIN WHERE o.id=?",[$id]); $qp=['id'=>$id]; }
-elseif($st==='unprinted'){ $orders=rows("SELECT $SEL FROM orders o $JOIN WHERE o.label_printed_at IS NULL AND o.status IN ('pending','processing') ORDER BY o.id DESC LIMIT 60"); $qp=['status'=>$st]; }
-elseif(in_array($st,['pending','processing','shipped'],true)){ $orders=rows("SELECT $SEL FROM orders o $JOIN WHERE o.status=? ORDER BY o.id DESC LIMIT 60",[$st]); $qp=['status'=>$st]; }
-else { $orders=rows("SELECT $SEL FROM orders o $JOIN WHERE o.status IN ('pending','processing') ORDER BY o.id DESC LIMIT 60"); $qp=[]; }
+elseif($st==='unprinted'){ $orders=rows("SELECT $SEL FROM orders o $JOIN WHERE o.label_printed_at IS NULL AND o.status IN ('pending','processing')$extraWhere ORDER BY o.id DESC LIMIT 60",$extraParams); $qp=['status'=>$st]; }
+elseif(in_array($st,['pending','processing','shipped'],true)){ $orders=rows("SELECT $SEL FROM orders o $JOIN WHERE o.status=?$extraWhere ORDER BY o.id DESC LIMIT 60",array_merge([$st],$extraParams)); $qp=['status'=>$st]; }
+else { $orders=rows("SELECT $SEL FROM orders o $JOIN WHERE o.status IN ('pending','processing')$extraWhere ORDER BY o.id DESC LIMIT 60",$extraParams); $qp=[]; }
+if($courierFilter) $qp['courier']=$courierFilter;
 $store=setting('store_name','Luprah Trading'); $phone=setting('store_phone','');
 $defWeight=setting('ncm_default_weight','');
 function label_link($extra=[]){ global $qp; $q=array_merge($qp,$extra); return 'labels.php'.($q?('?'.http_build_query($q)):''); }
@@ -80,39 +85,59 @@ function label_link($extra=[]){ global $qp; $q=array_merge($qp,$extra); return '
 .actions{display:flex;gap:8px;flex-wrap:wrap}
 .btn{background:#3b82f6;color:#fff;border:0;border-radius:8px;padding:9px 14px;font-weight:700;cursor:pointer;text-decoration:none;font-size:12.5px}
 .btn.gray{background:#64748b}.btn.ghost{background:#fff;color:#334155;border:1.5px solid #d7dce3}
-.wrap{max-width:900px;margin:0 auto;display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.courier-pick{background:#fff;border:1.5px solid #d7dce3;color:#334155;border-radius:20px;padding:6px 10px;font-size:12px;font-weight:700;cursor:pointer}
+.wrap{max-width:900px;margin:0 auto;display:grid;grid-template-columns:1fr 1fr;gap:16px}
 body.fmt-thermal .wrap{grid-template-columns:1fr;max-width:400px}
-.label{position:relative;background:#fff;border:2px solid #111;border-radius:10px;padding:14px;page-break-inside:avoid}
+.label{position:relative;background:#fff;border:2px solid #111;border-radius:14px;padding:16px 18px;page-break-inside:avoid;box-shadow:0 1px 4px rgba(15,23,42,.08)}
 body.fmt-thermal .label{page-break-after:always}
 .label.selected{outline:3px solid #3b82f6;outline-offset:2px}
-.pick{position:absolute;top:10px;right:10px;width:18px;height:18px;cursor:pointer}
-.lhead{display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #111;padding-bottom:8px;margin-bottom:8px}
-.lhead img{height:26px}.lhead b{font-size:14px}
-.to{font-size:15px;font-weight:800}.addr{font-size:13px;margin:2px 0 6px}
-.row{display:flex;justify-content:space-between;font-size:12px;margin-top:4px}
-.cod{font-size:16px;font-weight:900;border:2px solid #111;border-radius:8px;padding:4px 10px;display:inline-block;margin-top:6px}
-.courier-badge{font-size:11px;font-weight:800;color:#fff;border-radius:6px;padding:2px 8px;display:inline-block}
-.printbadge{font-size:10.5px;font-weight:700;border-radius:6px;padding:2px 7px;display:inline-block;margin-top:6px}
+.pick{position:absolute;top:12px;right:12px;width:18px;height:18px;cursor:pointer;z-index:2}
+.lhead{display:flex;justify-content:space-between;align-items:center;border-bottom:2.5px solid #111;padding-bottom:10px;margin-bottom:10px}
+.lhead .brand{display:flex;gap:8px;align-items:center}
+.lhead img{height:28px}.lhead b{font-size:14px;letter-spacing:.2px}
+.lhead .code{font-family:'Consolas','Courier New',monospace;font-size:14px;font-weight:800;background:#f1f5f9;padding:4px 10px;border-radius:6px;letter-spacing:.5px}
+.section-lbl{font-size:9.5px;font-weight:800;letter-spacing:1.1px;color:#94a3b8;text-transform:uppercase;margin-bottom:3px}
+.to{font-size:17px;font-weight:800;color:#0f172a}
+.addr{font-size:13px;margin:3px 0 10px;line-height:1.45;color:#334155}
+.row{display:flex;justify-content:space-between;gap:8px;font-size:12px;margin-top:5px;color:#334155}
+.row b{color:#0f172a}
+.divider{border-top:1.5px dashed #cbd5e1;margin:10px 0}
+.cod-wrap{display:flex;justify-content:space-between;align-items:center;margin-top:8px;gap:8px;flex-wrap:wrap}
+.cod{font-size:16px;font-weight:900;border-radius:8px;padding:5px 12px;display:inline-block;letter-spacing:.3px}
+.cod.due{background:#fef2f2;color:#991b1b;border:2px solid #dc2626}
+.cod.paid{background:#f0fdf4;color:#166534;border:2px solid #16a34a}
+.courier-badge{font-size:11px;font-weight:800;color:#fff;border-radius:6px;padding:3px 10px;display:inline-block}
+.printbadge{font-size:10.5px;font-weight:700;border-radius:6px;padding:2px 7px;display:inline-block;margin-top:8px}
 .printbadge.done{background:#dcfce7;color:#166534}.printbadge.pending{background:#f1f5f9;color:#64748b}
-svg.bc{width:100%;height:52px;margin-top:6px}
+.bcwrap{margin-top:10px;padding-top:10px;border-top:1.5px dashed #cbd5e1;text-align:center}
+svg.bc{width:100%;height:54px}
+.foot{display:flex;justify-content:space-between;font-size:10.5px;color:#94a3b8;margin-top:8px;font-style:italic}
 .settings{display:none;max-width:900px;margin:0 auto 14px;background:#fff;border:1px solid #e5e9f0;border-radius:12px;padding:16px}
 .settings.open{display:block}
 .settings label{display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:600;margin-bottom:8px}
 .settings label input{width:auto}
 @media print{
   body{background:#fff;padding:0}.bar,.settings,.noprint{display:none}.wrap{max-width:none}
+  .label{box-shadow:none}
   .label.hide-for-print{display:none}
 }
 body.hide-remarks .f-remarks{display:none}body.hide-sp .f-sp{display:none}body.hide-weight .f-weight{display:none}body.hide-logo .f-logo{display:none}
 </style></head><body class="fmt-<?= e($format) ?><?= $LS['show_remarks']==='0'?' hide-remarks':'' ?><?= $LS['show_sales_person']==='0'?' hide-sp':'' ?><?= $LS['show_weight']==='0'?' hide-weight':'' ?><?= $LS['show_logo']==='0'?' hide-logo':'' ?>">
 <style id="pageSize"></style>
 <div class="bar noprint">
+  <?php $curQS = $courierFilter ? ('&courier='.$courierFilter) : ''; ?>
   <div class="chips">
-    <a class="chip<?= $st===''&&!$id&&!$idsRaw?' on':'' ?>" href="labels.php?format=<?= e($format) ?>">Default</a>
-    <a class="chip<?= $st==='pending'?' on':'' ?>" href="labels.php?status=pending&format=<?= e($format) ?>">Pending</a>
-    <a class="chip<?= $st==='processing'?' on':'' ?>" href="labels.php?status=processing&format=<?= e($format) ?>">Processing</a>
-    <a class="chip<?= $st==='shipped'?' on':'' ?>" href="labels.php?status=shipped&format=<?= e($format) ?>">Shipped</a>
-    <a class="chip<?= $st==='unprinted'?' on':'' ?>" href="labels.php?status=unprinted&format=<?= e($format) ?>">🖶 Unprinted</a>
+    <a class="chip<?= $st===''&&!$id&&!$idsRaw?' on':'' ?>" href="labels.php?format=<?= e($format) ?><?= $curQS ?>">Default</a>
+    <a class="chip<?= $st==='pending'?' on':'' ?>" href="labels.php?status=pending&format=<?= e($format) ?><?= $curQS ?>">Pending</a>
+    <a class="chip<?= $st==='processing'?' on':'' ?>" href="labels.php?status=processing&format=<?= e($format) ?><?= $curQS ?>">Processing</a>
+    <a class="chip<?= $st==='shipped'?' on':'' ?>" href="labels.php?status=shipped&format=<?= e($format) ?><?= $curQS ?>">Shipped</a>
+    <a class="chip<?= $st==='unprinted'?' on':'' ?>" href="labels.php?status=unprinted&format=<?= e($format) ?><?= $curQS ?>">🖶 Unprinted</a>
+    <select class="courier-pick" id="courierPick" onchange="pickCourier(this.value)">
+      <option value="">🚚 All couriers</option>
+      <?php foreach($couriersList as $c): ?>
+        <option value="<?= (int)$c['id'] ?>" <?= $courierFilter===(int)$c['id']?'selected':'' ?>><?= e($c['name']) ?></option>
+      <?php endforeach; ?>
+    </select>
   </div>
   <div class="actions">
     <a class="btn ghost<?= $format==='a4'?' on':'' ?>" href="<?= label_link(['format'=>'a4']) ?>" onclick="persistFormat('a4')">A4 Sheet</a>
@@ -143,27 +168,33 @@ body.hide-remarks .f-remarks{display:none}body.hide-sp .f-sp{display:none}body.h
   <div class="label" data-id="<?= (int)$o['id'] ?>">
     <input type="checkbox" class="pick noprint" onclick="event.stopPropagation();togglePick(this)">
     <div class="lhead">
-      <span class="f-logo" style="display:flex;gap:8px;align-items:center"><img src="assets/luprah-logo.png"><b><?= e($store) ?></b></span>
-      <b><?= e($o['code']) ?></b>
+      <span class="f-logo brand"><img src="assets/luprah-logo.png"><b><?= e($store) ?></b></span>
+      <span class="code"><?= e($o['code']) ?></span>
     </div>
     <div class="row" style="margin-top:0">
       <?php if($isNcm): ?><span class="courier-badge" style="background:#14b8a6">📦 NCM #<?= e($o['ncm_order_id']) ?></span>
       <?php else: ?><span class="courier-badge" style="background:<?= e($ccolor) ?>">🚚 <?= e($o['courier_name']?:'No courier') ?></span><?php endif; ?>
       <span></span>
     </div>
-    <div class="to">📦 <?= e($o['customer']?:'—') ?></div>
-    <div class="addr"><?= e($o['address']?:'—') ?> · <?= e(ucfirst($o['zone'])) ?> Valley</div>
-    <div class="row"><span>📞 <?= e($o['phone']?:'—') ?></span><span><?= e($o['product_name']?:'') ?> ×<?= (int)$o['qty'] ?></span></div>
+    <div style="margin-top:10px">
+      <div class="section-lbl">Ship to</div>
+      <div class="to">📦 <?= e($o['customer']?:'—') ?></div>
+      <div class="addr"><?= e($o['address']?:'—') ?> · <?= e(ucfirst($o['zone'])) ?> Valley</div>
+    </div>
+    <div class="row"><span>📞 <b><?= e($o['phone']?:'—') ?></b></span><span><?= e($o['product_name']?:'') ?> ×<?= (int)$o['qty'] ?></span></div>
     <?php if($o['remarks']): ?><div class="row f-remarks"><span>📝 <?= e($o['remarks']) ?></span><span></span></div><?php endif; ?>
     <?php if($o['sales_person_name']): ?><div class="row f-sp"><span>Sales: <?= e($o['sales_person_name']) ?></span><span></span></div><?php endif; ?>
     <?php if($defWeight!==''): ?><div class="row f-weight"><span>Weight: ~<?= e($defWeight) ?> kg</span><span></span></div><?php endif; ?>
-    <?php if($cod>0): ?><div class="cod">COD: <?= money($cod) ?></div><?php else: ?><div class="cod" style="border-style:dashed">PREPAID ✓</div><?php endif; ?>
-    <svg class="bc" data-code="<?= e($o['ncm_order_id']?:$o['code']) ?>"></svg>
-    <div class="row" style="color:#667085"><span>From: <?= e($store) ?> · <?= e($phone) ?></span><span><?= e($o['order_date']) ?></span></div>
-    <div class="noprint">
-      <?php if($printed): ?><span class="printbadge done">🖨 Printed <?= (int)$o['label_print_count'] ?>× · last <?= e(date('d M, H:i', strtotime($o['label_printed_at']))) ?></span>
-      <?php else: ?><span class="printbadge pending">Not printed yet</span><?php endif; ?>
+    <div class="divider"></div>
+    <div class="cod-wrap">
+      <?php if($cod>0): ?><span class="cod due">COD DUE: <?= money($cod) ?></span><?php else: ?><span class="cod paid">✓ PREPAID</span><?php endif; ?>
+      <span class="noprint">
+        <?php if($printed): ?><span class="printbadge done">🖨 Printed <?= (int)$o['label_print_count'] ?>× · last <?= e(date('d M, H:i', strtotime($o['label_printed_at']))) ?></span>
+        <?php else: ?><span class="printbadge pending">Not printed yet</span><?php endif; ?>
+      </span>
     </div>
+    <div class="bcwrap"><svg class="bc" data-code="<?= e($o['ncm_order_id']?:$o['code']) ?>"></svg></div>
+    <div class="foot"><span>From: <?= e($store) ?> · <?= e($phone) ?></span><span><?= e($o['order_date']) ?></span></div>
   </div>
 <?php endforeach; if(!$orders) echo '<div style="grid-column:1/-1;background:#fff;border-radius:10px;padding:40px;text-align:center;color:#667085">No orders for labels in this view.</div>'; ?>
 </div>
@@ -177,6 +208,11 @@ function setPageSize(){
     ? '@page{size:4in 6in;margin:2mm}' : '@page{size:auto;margin:10mm}';
 }
 setPageSize();
+function pickCourier(v){
+  var u=new URL(window.location.href);
+  if(v) u.searchParams.set('courier', v); else u.searchParams.delete('courier');
+  window.location.href=u.toString();
+}
 function persistFormat(fmt){
   fetch('labels.php?ajax=save_settings',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
     body:'csrf='+encodeURIComponent(CSRF)+'&format='+encodeURIComponent(fmt)});

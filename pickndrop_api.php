@@ -102,13 +102,25 @@ class PickDrop {
     return $this->decode($body, $code);
   }
 
-  /* GET get_branches -> {message:{data:{branches:[...]}}} — cached 6h */
+  /* Frappe/logi360 endpoints are documented as {message:{data:{...}}}, but
+     create_order's real response (confirmed from a live error log) is
+     {status,message:"Order created successfully.",data:{...}} — "message" is a
+     plain human-readable string there, not the nested object the old code
+     assumed, and the real payload sits at the top-level "data" key instead.
+     Checking is_array() before treating "message" as a container makes that
+     explicit instead of leaning on PHP's null-coalescing to paper over it. */
+  private function msgArray($raw) {
+    return (is_array($raw) && isset($raw['message']) && is_array($raw['message'])) ? $raw['message'] : null;
+  }
+
+  /* GET get_branches -> {data:{branches:[...]}} (or nested under message) — cached 6h */
   public function branches(): array {
     $c = kv_get('pickndrop_branches_cache');
     if ($c && !empty($c['v']) && (time() - strtotime((string)$c['at'])) < 6*3600) return $c['v'];
     try {
       $data = $this->call('GET', '/api/method/logi360.api.get_branches');
-      $list = $data['message']['data']['branches'] ?? ($data['data']['branches'] ?? []);
+      $m = $this->msgArray($data);
+      $list = $data['data']['branches'] ?? ($m['data']['branches'] ?? []);
       kv_set('pickndrop_branches_cache', $list);
       return $list;
     } catch (Exception $e) {
@@ -117,17 +129,19 @@ class PickDrop {
     }
   }
 
-  /* GET business_address -> {message:{data:{vendor_name,addresses:[...]}}} */
+  /* GET business_address -> {data:{vendor_name,addresses:[...]}} (or nested under message) */
   public function businessAddresses(): array {
     $data = $this->call('GET', '/api/method/logi360.api.business_address');
-    return $data['message']['data'] ?? ($data['data'] ?? ['vendor_name'=>'','addresses'=>[]]);
+    $m = $this->msgArray($data);
+    return $data['data'] ?? ($m['data'] ?? ['vendor_name'=>'','addresses'=>[]]);
   }
 
   /* GET get_vendor_address_info -> {data:{vendor_address_info:{address_info:[...]}}} */
   public function vendorLocations(): array {
     $data = $this->call('GET', '/api/method/logi360.api.get_vendor_address_info');
+    $m = $this->msgArray($data);
     return $data['data']['vendor_address_info']['address_info']
-        ?? ($data['message']['data']['vendor_address_info']['address_info'] ?? []);
+        ?? ($m['data']['vendor_address_info']['address_info'] ?? []);
   }
 
   /* POST create_vendor_address_info */
@@ -135,16 +149,17 @@ class PickDrop {
     return $this->call('POST', '/api/method/logi360.api.create_vendor_address_info', [], $p);
   }
 
-  /* GET get_delivery_rate (sent as query params) -> {message:{data:{delivery_amount}}} */
+  /* GET get_delivery_rate (sent as query params) -> {data:{delivery_amount}} (or nested under message) */
   public function rate(array $p): array {
     $data = $this->call('GET', '/api/method/logi360.api.get_delivery_rate', $p);
-    return $data['message'] ?? $data;
+    return $this->msgArray($data) ?? $data;
   }
 
-  /* POST /api/v2/method/logi360.api.create_order -> {message:{data:{orderID,delivery_charge,status,tracking_url}}} */
+  /* POST /api/v2/method/logi360.api.create_order -> {status,message:"...",data:{orderID,delivery_charge,status,tracking_url}} */
   public function createOrder(array $p): array {
     $data = $this->call('POST', '/api/v2/method/logi360.api.create_order', [], $p);
-    return $data['message']['data'] ?? ($data['data'] ?? []);
+    $m = $this->msgArray($data);
+    return $data['data'] ?? ($m['data'] ?? []);
   }
 
   /* PUT cancel_order {orderID} */
@@ -152,10 +167,11 @@ class PickDrop {
     return $this->call('PUT', '/api/method/logi360.api.cancel_order', [], ['orderID'=>$orderId]);
   }
 
-  /* GET get_order_details?order_id= -> {message:{data:[{...}]}} */
+  /* GET get_order_details?order_id= -> {data:[{...}]} (or nested under message) */
   public function orderDetails(string $orderId): array {
     $data = $this->call('GET', '/api/method/logi360.api.get_order_details', ['order_id'=>$orderId]);
-    $d = $data['message']['data'] ?? ($data['data'] ?? []);
+    $m = $this->msgArray($data);
+    $d = $data['data'] ?? ($m['data'] ?? []);
     return is_array($d) && isset($d[0]) ? $d[0] : $d;
   }
 
@@ -252,19 +268,28 @@ function pd_extract_phone($d){
    that needs an order id / delivery charge / tracking link walks all the known
    spellings instead of trusting a single key. This is what lets an order that
    Pick & Drop DID create get linked even when their response shape drifts. */
+/* Every extractor below also falls back to a nested "data" key, one level deep,
+   if none of the direct keys match — so these still work even when whatever
+   called them handed over the whole {status,message,data:{...}} wrapper instead
+   of the already-unwrapped inner object (e.g. because createOrder()'s own
+   unwrapping got skipped by a stale/partial deploy of just one of these two
+   files). Cheap safety net, no reason it should ever hurt. */
 function pd_extract_order_id($d){
   foreach (['orderID','order_id','orderId','order_no','orderNo','name','id'] as $k)
     if (isset($d[$k]) && trim((string)$d[$k])!=='') return (string)$d[$k];
+  if (isset($d['data']) && is_array($d['data'])) return pd_extract_order_id($d['data']);
   return '';
 }
 function pd_extract_charge($d){
   foreach (['delivery_charge','delivery_amount','deliveryCharge','delivery_fee','deliveryAmount'] as $k)
     if (isset($d[$k]) && is_numeric($d[$k])) return (float)$d[$k];
+  if (isset($d['data']) && is_array($d['data'])) return pd_extract_charge($d['data']);
   return null;
 }
 function pd_extract_tracking_url($d){
   foreach (['tracking_url','trackingUrl','tracking_link','trackingLink'] as $k)
     if (isset($d[$k]) && trim((string)$d[$k])!=='') return (string)$d[$k];
+  if (isset($d['data']) && is_array($d['data'])) return pd_extract_tracking_url($d['data']);
   return '';
 }
 /* order type as Pick & Drop itself reports it back (order details / webhook) —
@@ -272,6 +297,7 @@ function pd_extract_tracking_url($d){
 function pd_extract_order_type($d){
   foreach (['orderType','order_type'] as $k)
     if (isset($d[$k]) && trim((string)$d[$k])!=='') return pd_order_type_norm($d[$k]);
+  if (isset($d['data']) && is_array($d['data'])) return pd_extract_order_type($d['data']);
   return null;
 }
 function pd_extract_name($d){

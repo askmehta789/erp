@@ -40,12 +40,12 @@ function order_profit($o) {
    courier manager) is intentionally never toggle-able here. */
 function delivery_partner_pages() {
   return [
-    'ncm.php'         => ['📮','NCM Courier'],
+    'ncm.php'         => ['<img src="assets/ncm-icon.png" alt="NCM" style="height:16px;vertical-align:-3px">','NCM Courier'],
     'ncm_command.php' => ['🚚','NCM Command Center'],
     'hungryhunter.php'=> ['🛵','Hungry Hunter'],
     'dropex.php'      => ['🚴','Dropex'],
     'daraz.php'       => ['🛍','Daraz'],
-    'pickndrop.php'   => ['🟢','Pick & Drop'],
+    'pickndrop.php'   => ['<img src="assets/pickndrop-icon.png" alt="Pick &amp; Drop" style="height:16px;vertical-align:-3px">','Pick & Drop'],
   ];
 }
 function disabled_delivery_pages() {

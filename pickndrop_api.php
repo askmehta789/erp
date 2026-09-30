@@ -178,6 +178,7 @@ function pd_ensure_cols(){ static $ok=false; if($ok)return;
     'pd_order_id'      => "ALTER TABLE orders ADD COLUMN pd_order_id VARCHAR(40) NULL",
     'pd_status'        => "ALTER TABLE orders ADD COLUMN pd_status VARCHAR(64) NULL",
     'pd_tracking_url'  => "ALTER TABLE orders ADD COLUMN pd_tracking_url VARCHAR(255) NULL",
+    'pd_order_type'    => "ALTER TABLE orders ADD COLUMN pd_order_type VARCHAR(16) NULL",
   ];
   foreach($need as $col=>$ddl){
     try {
@@ -196,6 +197,13 @@ function pd_norm_phone($p){
   $d=ltrim($d,'0');
   if(strlen($d)>10) $d=substr($d,-10);
   return (strlen($d)===10 && $d[0]==='9') ? $d : '';
+}
+/* Pick & Drop's create_order "orderType" field — Regular is their normal/standard
+   tier (the only value this app sent before Express support was added), Express is
+   their named faster tier (per pickndropnepal.com's "Express Delivery" service).
+   Anything else falls back to Regular so a bad/missing value never blocks a booking. */
+function pd_order_type_norm($v){
+  return strtolower(trim((string)$v))==='express' ? 'Express' : 'Regular';
 }
 /* match free text to Pick & Drop's exact branch name (case-insensitive, then substring) */
 function pd_match_branch($name,$names){
@@ -258,6 +266,13 @@ function pd_extract_tracking_url($d){
   foreach (['tracking_url','trackingUrl','tracking_link','trackingLink'] as $k)
     if (isset($d[$k]) && trim((string)$d[$k])!=='') return (string)$d[$k];
   return '';
+}
+/* order type as Pick & Drop itself reports it back (order details / webhook) —
+   returns null (leave our stored value alone) when the field isn't present at all */
+function pd_extract_order_type($d){
+  foreach (['orderType','order_type'] as $k)
+    if (isset($d[$k]) && trim((string)$d[$k])!=='') return pd_order_type_norm($d[$k]);
+  return null;
 }
 function pd_extract_name($d){
   foreach(['customer_name','customerName','name'] as $k)

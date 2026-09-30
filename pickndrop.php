@@ -21,7 +21,7 @@ if (!$pdCourier) {
 }
 $pdId = (int)($pdCourier['id'] ?? 0);
 
-/* build + fire one Pick & Drop order; returns [orderID, deliveryCharge, trackingUrl]; throws on failure */
+/* build + fire one Pick & Drop order; returns [orderID, deliveryCharge, trackingUrl, orderType]; throws on failure */
 function pd_book_one(array $bk, array $branchNames) {
   $phone = pd_norm_phone($bk['phone'] ?? '');
   if ($phone==='') throw new Exception('invalid phone "'.($bk['phone']??'').'" — Pick & Drop needs a 10-digit mobile');
@@ -30,6 +30,7 @@ function pd_book_one(array $bk, array $branchNames) {
   $addr = trim((string)($bk['address'] ?? ''));
   $pickup = trim((string)($bk['pickup'] ?? '')) ?: trim((string)setting('pd_pickup_address',''));
   if ($pickup==='') throw new Exception('no pickup business address set — add one on this page first');
+  $orderType = pd_order_type_norm($bk['order_type'] ?? 'Regular');
   $payload = [
     'customerName'      => trim((string)($bk['name'] ?? '')) ?: 'Customer',
     'primaryMobileNo'   => $phone,
@@ -38,7 +39,7 @@ function pd_book_one(array $bk, array $branchNames) {
     'orderDescription'  => trim((string)($bk['package'] ?? '')) ?: 'Goods',
     'destinationCityArea' => $addr,
     'businessAddress'   => $pickup,
-    'orderType'         => 'Regular',
+    'orderType'         => $orderType,
   ];
   $p2 = pd_norm_phone($bk['phone2'] ?? ''); if ($p2!=='') $payload['secondaryMobileNo']=$p2;
   if ($addr!=='') $payload['landmark']=$addr;
@@ -58,7 +59,7 @@ function pd_book_one(array $bk, array $branchNames) {
   }
   $charge = pd_extract_charge($res);
   $trackUrl = pd_extract_tracking_url($res);
-  return [$orderId, $charge, $trackUrl];
+  return [$orderId, $charge, $trackUrl, $orderType];
 }
 
 /* ---- POST actions ---- */
@@ -95,24 +96,24 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
     }
     if ($act==='book') {
       $bn=[]; foreach (pickndrop()->branches() as $b) if(!empty($b['name'])) $bn[]=$b['name'];
-      [$pdOrderId,$charge,$trackUrl] = pd_book_one([
+      [$pdOrderId,$charge,$trackUrl,$orderType] = pd_book_one([
         'name'=>$_POST['name']??'','phone'=>$_POST['phone']??'','phone2'=>$_POST['phone2']??'',
         'cod'=>$_POST['cod_charge']??0,'address'=>$_POST['address']??'','branch'=>$_POST['branch']??'',
         'pickup'=>$_POST['pickup']??'','package'=>$_POST['package']??'','weight'=>$_POST['weight']??'',
-        'ref'=>$_POST['vref_id']??'','instruction'=>$_POST['instruction']??'',
+        'ref'=>$_POST['vref_id']??'','instruction'=>$_POST['instruction']??'','order_type'=>$_POST['order_type']??'Regular',
       ], $bn);
       $oid=(int)($_POST['order_id'] ?? 0);
       if ($oid) {
-        q("UPDATE orders SET pd_order_id=?, pd_status='Open', pd_tracking_url=?, courier_id=? WHERE id=?",
-          [$pdOrderId,$trackUrl,$pdId,$oid]);
+        q("UPDATE orders SET pd_order_id=?, pd_status='Open', pd_tracking_url=?, pd_order_type=?, courier_id=? WHERE id=?",
+          [$pdOrderId,$trackUrl,$orderType,$pdId,$oid]);
         if ($charge!==null) q("UPDATE orders SET delivery_charge=? WHERE id=?",[$charge,$oid]);
         if ((string)($_POST['also_ship'] ?? '')==='1') {
           $o=row("SELECT * FROM orders WHERE id=?",[$oid]);
           if ($o && $o['status']==='pending') { fifo_status_change($oid,(int)$o['product_id'],(int)$o['qty'],'pending','processing'); q("UPDATE orders SET status='processing' WHERE id=?",[$oid]); }
         }
       }
-      log_activity('Booked Pick & Drop order '.$pdOrderId,'Pick & Drop');
-      flash("Booked on Pick & Drop ✓ Order ID: $pdOrderId".($charge!==null?(' · delivery '.money($charge).' added to sale'):''));
+      log_activity('Booked Pick & Drop order '.$pdOrderId." ($orderType)",'Pick & Drop');
+      flash("Booked on Pick & Drop ✓ Order ID: $pdOrderId".($orderType==='Express'?' · ⚡ Express':'').($charge!==null?(' · delivery '.money($charge).' added to sale'):''));
     }
     elseif ($act==='book_bulk') {
       $ids = array_filter(array_map('intval', explode(',', (string)($_POST['ids'] ?? ''))));
@@ -128,25 +129,26 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
       if ($branch==='') throw new Exception('"'.$branchIn.'" is not a Pick & Drop branch — pick one from the list.');
       set_setting('pd_default_branch', $branch);
       $pickup = trim((string)setting('pd_pickup_address',''));
+      $orderType = $_POST['order_type'] ?? 'Regular';
       $ok=[]; $fail=[];
       foreach ($ids as $oid) {
         $o = row("SELECT o.*, p.name AS product_name FROM orders o LEFT JOIN products p ON p.id=o.product_id WHERE o.id=?",[$oid]);
         if (!$o) { $fail[]="#$oid: not found"; continue; }
         if (!empty($o['pd_order_id'])) { $fail[]=e($o['code']).": already booked"; continue; }
         try {
-          [$nid,$chg,$trackUrl] = pd_book_one([
+          [$nid,$chg,$trackUrl,$typeUsed] = pd_book_one([
             'name'=>$o['customer'],'phone'=>$o['phone'],
             'cod'=>(strtolower((string)$o['payment_type'])==='cod' ? (float)$o['sell_price']*(int)$o['qty'] : 0),
             'address'=>$o['address'],'branch'=>$branch,'pickup'=>$pickup,
-            'package'=>trim(($o['product_name']?:'Goods').' x'.(int)$o['qty']),'ref'=>$o['code'],
+            'package'=>trim(($o['product_name']?:'Goods').' x'.(int)$o['qty']),'ref'=>$o['code'],'order_type'=>$orderType,
           ], $bn);
-          q("UPDATE orders SET pd_order_id=?, pd_status='Open', pd_tracking_url=?, courier_id=? WHERE id=?", [$nid,$trackUrl,$pdId,$oid]);
+          q("UPDATE orders SET pd_order_id=?, pd_status='Open', pd_tracking_url=?, pd_order_type=?, courier_id=? WHERE id=?", [$nid,$trackUrl,$typeUsed,$pdId,$oid]);
           if ($chg!==null) q("UPDATE orders SET delivery_charge=? WHERE id=?", [$chg,$oid]);
           $ok[]=e($o['code'])."→$nid";
         } catch (Exception $ex) { $fail[]=e($o['code']).': '.$ex->getMessage(); }
       }
-      log_activity('Bulk Pick & Drop booking to '.$branch.': '.count($ok).' ok, '.count($fail).' failed','Pick & Drop');
-      $msg = count($ok)." booked to $branch ✓".($ok?(' — '.implode(', ',$ok)):'');
+      log_activity('Bulk Pick & Drop booking to '.$branch." ($orderType): ".count($ok).' ok, '.count($fail).' failed','Pick & Drop');
+      $msg = count($ok)." booked to $branch".($orderType==='Express'?' ⚡ Express':'')." ✓".($ok?(' — '.implode(', ',$ok)):'');
       if ($fail) $msg .= '  ·  '.count($fail).' failed: '.implode(' | ',$fail);
       flash($msg);
     }
@@ -168,7 +170,8 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
       }
       $chg = pd_extract_charge($d);
       $rawStatus = (string)($d['status'] ?? 'Open');
-      q("UPDATE orders SET pd_order_id=?, pd_status=?, courier_id=? WHERE id=?",[$pdOid,$rawStatus,$pdId,$oid]);
+      $pdType = pd_extract_order_type($d);
+      q("UPDATE orders SET pd_order_id=?, pd_status=?, pd_order_type=COALESCE(?,pd_order_type), courier_id=? WHERE id=?",[$pdOid,$rawStatus,$pdType,$pdId,$oid]);
       if($chg!==null) q("UPDATE orders SET delivery_charge=? WHERE id=?",[$chg,$oid]);
       log_activity("Linked Pick & Drop $pdOid to ".$o['code'],'Pick & Drop');
       flash('Linked ✓ '.$o['code'].' ↔ Pick & Drop '.$pdOid.($pdName?' — '.$pdName:'').($chg!==null?(' · delivery '.money($chg).' recorded'):''));
@@ -517,6 +520,7 @@ function pdBrFilter(){
   <div class="pd-bulkbar" id="pdBulkBar">
     <span><b id="pdSelN">0</b> selected</span>
     <input id="pdBulkBranch" form="pdBulkForm" name="branch" list="pdBrList" placeholder="Destination branch (used for all)" value="<?= e($pdDefaultBranch) ?>" required style="min-width:190px">
+    <select form="pdBulkForm" name="order_type" title="Delivery type (used for all selected)"><option value="Regular">Standard</option><option value="Express">⚡ Express</option></select>
     <form method="post" id="pdBulkForm" style="display:inline">
       <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="book_bulk"><input type="hidden" name="ids" id="pdBulkIds"><input type="hidden" name="m" value="<?= e($m) ?>">
       <button class="btn btn-sm btn-primary" type="submit" onclick="return pdBulkConfirm()">🚀 Book Selected</button>
@@ -546,7 +550,7 @@ function pdBrFilter(){
           <?php if($o['phone']): ?><button class="mini" title="Copy" onclick="pdCpy('<?= e($o['phone']) ?>',this)">⧉</button><a class="mini" title="WhatsApp" target="_blank" rel="noopener" href="https://wa.me/<?= e(wa_phone($o['phone'])) ?>">💬</a><?php endif; ?></td>
         <td class="num right"><?= $r['cod']>0 ? '<b>'.money($r['cod']).'</b>' : '<span class="muted">prepaid</span>' ?></td>
         <td><span class="age-pill <?= $ap ?>"><?= $r['age'] ?>d</span></td>
-        <td><?= $booked ? ('<b style="font-size:11.5px">'.e($o['pd_order_id']).'</b>'.(!empty($o['pd_tracking_url'])?' <a href="'.e($o['pd_tracking_url']).'" target="_blank" rel="noopener" style="font-size:10px">↗</a>':'')) : '<span class="muted">—</span>' ?></td>
+        <td><?= $booked ? ('<b style="font-size:11.5px">'.e($o['pd_order_id']).'</b>'.(($o['pd_order_type']??'')==='Express'?' <span class="pill p-yellow" style="font-size:9.5px;padding:1px 6px">⚡ Express</span>':'').(!empty($o['pd_tracking_url'])?' <a href="'.e($o['pd_tracking_url']).'" target="_blank" rel="noopener" style="font-size:10px">↗</a>':'')) : '<span class="muted">—</span>' ?></td>
         <td>
           <span class="pill <?= $booked && !empty($o['pd_status']) ? pd_status_class($o['pd_status']) : status_class($o['status']) ?>"><?= e($booked && !empty($o['pd_status']) ? $o['pd_status'] : ucfirst($o['status'])) ?></span>
           <?php if($isAdmin || true): ?>
@@ -595,6 +599,7 @@ function pdBrFilter(){
     <div class="full"><label>Delivery Address / Landmark</label><input name="address" id="pdbk_address"></div>
     <div><label>Pickup Business Address</label><input name="pickup" id="pdbk_pickup" value="<?= e($pickupAddr) ?>" required></div>
     <div><label>Destination Branch</label><input name="branch" id="pdbk_branch" list="pdBrList" required></div>
+    <div><label>Delivery Type</label><select name="order_type" id="pdbk_order_type"><option value="Regular">Standard</option><option value="Express">⚡ Express</option></select></div>
     <div><label>Weight (kg)</label><input name="weight" value="1"></div>
     <div><label>Package / Contents</label><input name="package" id="pdbk_pkg" placeholder="e.g. Heel Guard Plus x2"></div>
     <div><label>Your Ref (order code)</label><input name="vref_id" id="pdbk_ref"></div>
@@ -693,6 +698,7 @@ function pdBookFor(o){
   document.getElementById('pdbk_ref').value=o.ref||'';
   document.getElementById('pdbk_pkg').value=o.package||'';
   document.getElementById('pdbk_branch').value=pdBestBranch(o.address)||PD_DEFAULT_BRANCH;
+  document.getElementById('pdbk_order_type').value='Regular';
   document.getElementById('pdBookModal').classList.add('open');document.body.classList.add('modal-open');
 }
 function pdBulkConfirm(){

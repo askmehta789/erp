@@ -65,17 +65,26 @@ $helpLine  = setting('help_line', '01-5970736');
       <?php endforeach; ?>
     </nav>
     <script>
+    /* accordion: opening a section closes any other open section, so the sidebar
+       can't silently accumulate into one long fully-expanded list over time —
+       that used to be possible (every section you ever clicked stayed open
+       forever) and is what made the menu look cluttered. */
     function sgToggle(g){
-      g.classList.toggle('open');
+      var willOpen = !g.classList.contains('open');
+      document.querySelectorAll('#sideNav .sg.open').forEach(function(o){ if(o!==g) o.classList.remove('open'); });
+      g.classList.toggle('open', willOpen);
       try{
-        var st=JSON.parse(localStorage.getItem('navOpen')||'{}');
-        st[g.getAttribute('data-g')]=g.classList.contains('open')?1:0;
+        var st={}; st[g.getAttribute('data-g')] = willOpen ? 1 : 0;
         localStorage.setItem('navOpen',JSON.stringify(st));
       }catch(e){}
     }
     (function(){
       try{
         var st=JSON.parse(localStorage.getItem('navOpen')||'{}');
+        /* one-time heal: older versions of this page could leave several
+           sections marked open at once — collapse that stale state back to
+           the clean default instead of carrying the clutter forward forever */
+        if(Object.keys(st).filter(function(k){return st[k];}).length>1){ st={}; localStorage.setItem('navOpen',JSON.stringify(st)); }
         document.querySelectorAll('#sideNav .sg').forEach(function(g){
           var k=g.getAttribute('data-g');
           if(g.classList.contains('cur')) return;      /* group of current page always open */

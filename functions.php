@@ -64,7 +64,7 @@ function delivery_disabled_banner($page) {
     .' — you\'re only seeing this page because you came here directly. Data below still works normally.</div>';
 }
 
-function nav_items() {
+function nav_items_raw() {
   $deliveryKids = [];
   foreach (delivery_partner_pages() as $page=>[$icon,$label]) {
     if (delivery_page_enabled($page)) $deliveryKids[] = [$page,$icon,$label];
@@ -103,6 +103,50 @@ function nav_items() {
       ['activity.php','📜','Activity Logs'],
     ]],
   ];
+}
+
+/* Settings → Sidebar Menu lets an admin reorder and show/hide sidebar entries for
+   everyone (store-wide layout, unlike the per-user page-access permissions in
+   users.php — a hidden item here isn't a permission, just decluttering; the page
+   itself stays reachable by direct link). Prefs are stored as three small JSON
+   settings and applied on top of nav_items_raw() every time the sidebar renders. */
+function nav_menu_prefs() {
+  $order = json_decode((string)setting('nav_menu_order',''), true);
+  $hidden = json_decode((string)setting('nav_menu_hidden',''), true);
+  $childOrder = json_decode((string)setting('nav_menu_child_order',''), true);
+  return [
+    'order'      => is_array($order) ? $order : [],
+    'hidden'     => is_array($hidden) ? array_flip($hidden) : [],
+    'childOrder' => is_array($childOrder) ? $childOrder : [],
+  ];
+}
+/* apply saved order + hidden-set to a flat list of [key => item] pairs, keeping
+   any item not mentioned in $savedOrder in its original relative position at the end */
+function nav_apply_order(array $byKey, array $savedOrder) {
+  $known = array_keys($byKey);
+  $ordered = array_values(array_intersect($savedOrder, $known));
+  $rest = array_values(array_diff($known, $ordered));
+  return array_merge($ordered, $rest);
+}
+function nav_items() {
+  $raw = nav_items_raw();
+  $prefs = nav_menu_prefs();
+  $byKey = [];
+  foreach ($raw as $n) $byKey[$n[0]==='grp' ? ('grp:'.$n[1]) : $n[0]] = $n;
+  $out = [];
+  foreach (nav_apply_order($byKey, $prefs['order']) as $key) {
+    if (isset($prefs['hidden'][$key])) continue;
+    $n = $byKey[$key];
+    if ($n[0] !== 'grp') { $out[] = $n; continue; }
+    [$_,$gid,$gicon,$glabel,$kids] = $n;
+    $kByKey = []; foreach ($kids as $k) $kByKey[$k[0]] = $k;
+    $newKids = [];
+    foreach (nav_apply_order($kByKey, $prefs['childOrder'][$gid] ?? []) as $ck) {
+      if (!isset($prefs['hidden'][$ck])) $newKids[] = $kByKey[$ck];
+    }
+    if ($newKids) $out[] = ['grp',$gid,$gicon,$glabel,$newKids];
+  }
+  return $out;
 }
 
 /* ===================================================================

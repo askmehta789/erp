@@ -129,6 +129,29 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
     header('Location: settings.php#delivery-partners'); exit;
   }
 
+  if ($act === 'save_nav_menu') {
+    $order = json_decode((string)($_POST['order'] ?? '[]'), true);
+    $childOrder = json_decode((string)($_POST['child_order'] ?? '{}'), true);
+    $enabled = array_map('strval', (array)($_POST['enabled'] ?? []));
+    $all = [];
+    foreach (nav_items_raw() as $n) {
+      if ($n[0]==='grp') { $all[]='grp:'.$n[1]; foreach ($n[4] as $k) $all[]=$k[0]; }
+      else $all[] = $n[0];
+    }
+    $hidden = array_values(array_diff($all, $enabled));
+    set_setting('nav_menu_order', json_encode(is_array($order) ? array_values($order) : []));
+    set_setting('nav_menu_hidden', json_encode($hidden));
+    set_setting('nav_menu_child_order', json_encode(is_array($childOrder) ? $childOrder : []));
+    log_activity('Updated sidebar menu layout','Settings'); flash('Sidebar menu updated.');
+    header('Location: settings.php#sidebar-menu'); exit;
+  }
+
+  if ($act === 'reset_nav_menu') {
+    foreach (['nav_menu_order','nav_menu_hidden','nav_menu_child_order'] as $k) { try { q("DELETE FROM settings WHERE skey=?",[$k]); } catch (Exception $e) {} }
+    log_activity('Reset sidebar menu to default','Settings'); flash('Sidebar menu reset to default.');
+    header('Location: settings.php#sidebar-menu'); exit;
+  }
+
   if ($act === 'gdrive_disconnect') {
     require_once __DIR__.'/gdrive_api.php';
     gdrive_disconnect();
@@ -205,6 +228,56 @@ $fullFields = ['store_name','store_address','store_tagline','ncm_api_key','pd_ap
   <button class="btn btn-primary" style="margin-bottom:24px">💾 Save All Settings</button>
 </form>
 
+
+<?php $navRaw = nav_items_raw(); $navHiddenSet = nav_menu_prefs()['hidden']; ?>
+<div class="panel" id="sidebar-menu" style="margin-bottom:18px;scroll-margin-top:18px">
+  <div class="panel-head"><h2>🧭 Sidebar Menu</h2></div>
+  <div class="panel-body">
+    <p class="muted" style="margin-bottom:12px">Tick what should appear in the sidebar and use ▲▼ to set its order — applies to everyone immediately. A group left with nothing ticked inside it disappears entirely; a hidden page still opens fine by direct link, it's just off the menu.</p>
+    <form method="post" id="navMenuForm" onsubmit="return navMenuSubmit()">
+      <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="save_nav_menu">
+      <input type="hidden" name="order" id="navOrderInput"><input type="hidden" name="child_order" id="navChildOrderInput">
+      <ul class="ne-list" id="navEditorList">
+        <?php foreach ($navRaw as $n): ?>
+          <?php if ($n[0]==='grp'): [, $gid, $gicon, $glabel, $kids] = $n; $key = 'grp:'.$gid; ?>
+          <li class="ne-item ne-group" data-key="<?= e($key) ?>">
+            <div class="ne-row">
+              <input type="checkbox" class="ne-check" name="enabled[]" value="<?= e($key) ?>" <?= isset($navHiddenSet[$key])?'':'checked' ?>>
+              <span class="ne-ico"><?= $gicon ?></span><span class="ne-label"><?= e($glabel) ?></span>
+              <span class="ne-tag">group</span>
+              <span class="ne-arrows"><button type="button" class="ne-btn" onclick="neMove(this,-1)">▲</button><button type="button" class="ne-btn" onclick="neMove(this,1)">▼</button></span>
+            </div>
+            <ul class="ne-children">
+              <?php foreach ($kids as $k): ?>
+              <li class="ne-item" data-key="<?= e($k[0]) ?>">
+                <div class="ne-row">
+                  <input type="checkbox" class="ne-check" name="enabled[]" value="<?= e($k[0]) ?>" <?= isset($navHiddenSet[$k[0]])?'':'checked' ?>>
+                  <span class="ne-ico"><?= $k[1] ?></span><span class="ne-label"><?= e($k[2]) ?></span>
+                  <span class="ne-arrows"><button type="button" class="ne-btn" onclick="neMove(this,-1)">▲</button><button type="button" class="ne-btn" onclick="neMove(this,1)">▼</button></span>
+                </div>
+              </li>
+              <?php endforeach; ?>
+            </ul>
+          </li>
+          <?php else: $key = $n[0]; ?>
+          <li class="ne-item" data-key="<?= e($key) ?>">
+            <div class="ne-row">
+              <input type="checkbox" class="ne-check" name="enabled[]" value="<?= e($key) ?>" <?= isset($navHiddenSet[$key])?'':'checked' ?>>
+              <span class="ne-ico"><?= $n[1] ?></span><span class="ne-label"><?= e($n[2]) ?></span>
+              <span class="ne-arrows"><button type="button" class="ne-btn" onclick="neMove(this,-1)">▲</button><button type="button" class="ne-btn" onclick="neMove(this,1)">▼</button></span>
+            </div>
+          </li>
+          <?php endif; ?>
+        <?php endforeach; ?>
+      </ul>
+      <button class="btn btn-primary" style="margin-top:14px">💾 Save Sidebar Menu</button>
+    </form>
+    <form method="post" style="display:inline-block;margin-top:14px;margin-left:10px" onsubmit="return confirm('Reset the sidebar to its default order with everything shown?')">
+      <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="reset_nav_menu">
+      <button class="btn">↺ Reset to Default</button>
+    </form>
+  </div>
+</div>
 
 <div class="panel" id="delivery-partners" style="margin-bottom:18px;scroll-margin-top:18px">
   <div class="panel-head"><h2>🚚 Delivery Partners</h2></div>
@@ -316,4 +389,39 @@ $gdHasCreds  = trim((string)setting('gdrive_client_id','')) !== '' && trim((stri
   </div>
 </div>
 <?php endif; ?>
+
+<style>
+.ne-list,.ne-children{list-style:none;margin:0;padding:0}
+.ne-item{border:1px solid var(--border);border-radius:9px;margin-bottom:6px;background:var(--surface)}
+.ne-row{display:flex;align-items:center;gap:10px;padding:8px 10px}
+.ne-check{width:auto;flex:none}
+.ne-ico{font-size:15px;flex:none}
+.ne-label{font-weight:700;font-size:13.5px;flex:1}
+.ne-tag{font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--muted-2);background:var(--surface-2);border-radius:6px;padding:2px 7px;flex:none}
+.ne-arrows{display:flex;gap:4px;flex:none}
+.ne-btn{width:26px;height:26px;border:1px solid var(--border);background:var(--surface-2);border-radius:7px;cursor:pointer;font-size:11px;color:var(--muted)}
+.ne-btn:hover{background:var(--side-active-bg);color:var(--side-active)}
+.ne-children{margin:0 10px 8px 34px;padding-left:10px;border-left:2px solid var(--surface-2)}
+.ne-children .ne-item{margin-top:6px;margin-bottom:0}
+li.ne-item:has(> .ne-row > .ne-check:not(:checked)) > .ne-row .ne-label{color:var(--muted-2);text-decoration:line-through}
+</style>
+<script>
+function neMove(btn,dir){
+  var li=btn.closest('li.ne-item');
+  var list=li.parentElement;
+  if(dir<0){ var prev=li.previousElementSibling; if(prev) list.insertBefore(li,prev); }
+  else { var next=li.nextElementSibling; if(next) list.insertBefore(next,li); }
+}
+function navMenuSubmit(){
+  var order=Array.prototype.slice.call(document.querySelectorAll('#navEditorList > li.ne-item')).map(function(li){return li.getAttribute('data-key');});
+  document.getElementById('navOrderInput').value=JSON.stringify(order);
+  var childOrder={};
+  document.querySelectorAll('#navEditorList > li.ne-group').forEach(function(g){
+    var gid=g.getAttribute('data-key').replace(/^grp:/,'');
+    childOrder[gid]=Array.prototype.slice.call(g.querySelectorAll('.ne-children > li.ne-item')).map(function(li){return li.getAttribute('data-key');});
+  });
+  document.getElementById('navChildOrderInput').value=JSON.stringify(childOrder);
+  return true;
+}
+</script>
 <?php require __DIR__.'/includes/footer.php'; ?>

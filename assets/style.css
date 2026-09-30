@@ -1099,11 +1099,13 @@ body.dark .qstrip{background:rgba(17,25,44,.5);border-color:rgba(148,163,184,.16
 
 /* ============ collapsible sidebar groups ============ */
 .sg{margin-bottom:2px}
+.sg:first-of-type{margin-top:10px;padding-top:12px;border-top:1px solid var(--border)}
 .sg-h{display:flex;align-items:center;gap:12px;padding:9px 12px;border-radius:9px;color:var(--side-ink);font-weight:700;cursor:pointer;font-size:13px;user-select:none;transition:background .15s}
 .sg-h:hover{background:var(--surface-2);color:var(--ink)}
 .sg-h .ico{width:20px;text-align:center;font-size:15px}
 .sg-car{margin-left:auto;font-size:10px;color:var(--side-head);transition:transform .18s}
 .sg.open .sg-car{transform:rotate(90deg)}
+.sg.open > .sg-h{background:var(--surface-2);color:var(--ink)}
 .sg.cur > .sg-h{color:var(--side-active)}
 .sg-b{display:none;margin:2px 0 6px 15px;padding-left:9px;border-left:2px solid var(--surface-2)}
 .sg.open .sg-b{display:block;animation:sgin .16s ease}

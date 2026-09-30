@@ -375,7 +375,7 @@ echo delivery_disabled_banner('pickndrop.php');
 
 <div class="pd-hero">
   <div class="pd-hero-top">
-    <span style="font-size:28px">🟢</span>
+    <img src="assets/pickndrop-logo.svg" alt="Pick & Drop" style="height:30px">
     <div><h1>Pick & Drop</h1><p>Orders come from Sales with Courier = <b>Pick & Drop</b> · auto-booked on their live API</p></div>
     <div class="pd-hero-links">
       <a class="pd-hlink" href="sales.php?new=pickndrop">＋ New Order</a>

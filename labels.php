@@ -30,6 +30,7 @@ if (isset($_GET['ajax'])) {
     $cur = json_decode((string)setting('label_settings',''), true) ?: [];
     foreach (['show_remarks','show_sales_person','show_weight','show_logo'] as $k) $cur[$k] = !empty($_POST[$k]) ? '1' : '0';
     if (isset($_POST['format'])) $cur['format'] = $_POST['format']==='thermal' ? 'thermal' : 'a4';
+    if (isset($_POST['a4_cols'])) $cur['a4_cols'] = (string)max(1,min(3,(int)$_POST['a4_cols']));
     q("INSERT INTO settings(skey,svalue) VALUES('label_settings',?) ON DUPLICATE KEY UPDATE svalue=VALUES(svalue)", [json_encode($cur)]);
     log_activity('Updated label print settings', 'Labels');
     echo json_encode(['ok'=>true,'settings'=>$cur]); exit;
@@ -42,10 +43,11 @@ if (isset($_GET['ajax'])) {
    label template preferences (persisted in settings, key = label_settings)
    --------------------------------------------------------------------- */
 $LS = array_merge(
-  ['format'=>'a4','show_remarks'=>'1','show_sales_person'=>'0','show_weight'=>'0','show_logo'=>'1'],
+  ['format'=>'a4','show_remarks'=>'1','show_sales_person'=>'0','show_weight'=>'0','show_logo'=>'1','a4_cols'=>'2'],
   (json_decode((string)setting('label_settings',''), true) ?: [])
 );
 $format = in_array($_GET['format'] ?? '', ['a4','thermal'], true) ? $_GET['format'] : $LS['format'];
+$a4Cols = max(1,min(3,(int)$LS['a4_cols']));
 
 /* one label (?id=), a batch (?ids=), a status view, or bulk (?status=processing / pending / shipped / unprinted), optionally narrowed by ?courier= */
 $id=(int)($_GET['id']??0); $st=$_GET['status']??'';
@@ -93,8 +95,10 @@ body.fmt-thermal .label{page-break-after:always}
 .label.selected{outline:3px solid #3b82f6;outline-offset:2px}
 .pick{position:absolute;top:12px;right:12px;width:18px;height:18px;cursor:pointer;z-index:2}
 .lhead{display:flex;justify-content:space-between;align-items:center;border-bottom:2.5px solid #111;padding-bottom:10px;margin-bottom:10px}
-.lhead .brand{display:flex;gap:8px;align-items:center}
-.lhead img{height:28px}.lhead b{font-size:14px;letter-spacing:.2px}
+.lhead .brand{display:flex;gap:10px;align-items:center}
+.lhead .logo-box{width:38px;height:38px;flex:0 0 auto;border-radius:8px;background:#eef2f7;border:1.5px solid #d7dce3;display:flex;align-items:center;justify-content:center;padding:5px}
+.lhead .logo-box img{width:100%;height:100%;object-fit:contain;filter:contrast(1.2)}
+.lhead b{font-size:14px;letter-spacing:.2px}
 .lhead .code{font-family:'Consolas','Courier New',monospace;font-size:14px;font-weight:800;background:#f1f5f9;padding:4px 10px;border-radius:6px;letter-spacing:.5px}
 .section-lbl{font-size:9.5px;font-weight:800;letter-spacing:1.1px;color:#94a3b8;text-transform:uppercase;margin-bottom:3px}
 .to{font-size:17px;font-weight:800;color:#0f172a}
@@ -119,6 +123,7 @@ svg.bc{width:100%;height:54px}
 @media print{
   body{background:#fff;padding:0}.bar,.settings,.noprint{display:none}.wrap{max-width:none}
   .label{box-shadow:none}
+  .lhead .logo-box img{filter:grayscale(1) contrast(1.6) brightness(.8)}
   .label.hide-for-print{display:none}
 }
 body.hide-remarks .f-remarks{display:none}body.hide-sp .f-sp{display:none}body.hide-weight .f-weight{display:none}body.hide-logo .f-logo{display:none}
@@ -155,10 +160,17 @@ body.hide-remarks .f-remarks{display:none}body.hide-sp .f-sp{display:none}body.h
   <label><input type="checkbox" id="s_sp" <?= $LS['show_sales_person']==='1'?'checked':'' ?> onchange="toggleField('sp',this.checked)"> Show sales person</label>
   <label><input type="checkbox" id="s_weight" <?= $LS['show_weight']==='1'?'checked':'' ?> onchange="toggleField('weight',this.checked)"> Show default parcel weight</label>
   <label><input type="checkbox" id="s_logo" <?= $LS['show_logo']==='1'?'checked':'' ?> onchange="toggleField('logo',this.checked)"> Show logo</label>
+  <label style="gap:10px">A4 sheet — labels per row:
+    <select id="s_a4cols" onchange="setA4Cols(this.value)" style="width:auto">
+      <option value="1" <?= $a4Cols===1?'selected':'' ?>>1 (large)</option>
+      <option value="2" <?= $a4Cols===2?'selected':'' ?>>2 (default)</option>
+      <option value="3" <?= $a4Cols===3?'selected':'' ?>>3 (compact)</option>
+    </select>
+  </label>
   <button class="btn" type="button" onclick="saveSettings()">💾 Save as default</button>
 </div>
 
-<div class="wrap">
+<div class="wrap"<?= $format==='a4' ? ' style="grid-template-columns:repeat('.$a4Cols.',1fr)"' : '' ?>>
 <?php foreach($orders as $o):
   $cod=strtolower((string)$o['payment_type'])==='cod' ? (float)$o['sell_price']*(int)$o['qty'] : 0; /* price includes delivery */
   $isNcm = !empty($o['ncm_order_id']);
@@ -168,7 +180,7 @@ body.hide-remarks .f-remarks{display:none}body.hide-sp .f-sp{display:none}body.h
   <div class="label" data-id="<?= (int)$o['id'] ?>">
     <input type="checkbox" class="pick noprint" onclick="event.stopPropagation();togglePick(this)">
     <div class="lhead">
-      <span class="f-logo brand"><img src="assets/luprah-logo.png"><b><?= e($store) ?></b></span>
+      <span class="f-logo brand"><span class="logo-box"><img src="assets/luprah-logo.png" alt="logo"></span><b><?= e($store) ?></b></span>
       <span class="code"><?= e($o['code']) ?></span>
     </div>
     <div class="row" style="margin-top:0">
@@ -220,13 +232,19 @@ function persistFormat(fmt){
 function toggleField(name,on){
   document.body.classList.toggle('hide-'+name, !on);
 }
+function setA4Cols(v){
+  if(document.body.classList.contains('fmt-a4')){
+    document.querySelector('.wrap').style.gridTemplateColumns='repeat('+v+',1fr)';
+  }
+}
 function saveSettings(){
   var body='csrf='+encodeURIComponent(CSRF)
     +'&format='+encodeURIComponent(document.body.classList.contains('fmt-thermal')?'thermal':'a4')
     +'&show_remarks='+(document.getElementById('s_remarks').checked?1:0)
     +'&show_sales_person='+(document.getElementById('s_sp').checked?1:0)
     +'&show_weight='+(document.getElementById('s_weight').checked?1:0)
-    +'&show_logo='+(document.getElementById('s_logo').checked?1:0);
+    +'&show_logo='+(document.getElementById('s_logo').checked?1:0)
+    +'&a4_cols='+encodeURIComponent(document.getElementById('s_a4cols').value);
   fetch('labels.php?ajax=save_settings',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body})
     .then(r=>r.json()).then(function(j){ if(j.ok){ var b=document.querySelector('.settings'); b.classList.remove('open'); } });
 }

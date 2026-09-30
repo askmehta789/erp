@@ -32,7 +32,7 @@ if (!is_array($data)) {
 
 pd_ensure_cols();
 
-$orderId = trim((string)($data['orderID'] ?? ''));
+$orderId = pd_extract_order_id($data);
 $tracking = trim((string)($data['tracking_number'] ?? ''));
 $rawStatus = trim((string)($data['status'] ?? ''));
 
@@ -48,6 +48,12 @@ if (!$o) {
 
 $mapped = $rawStatus !== '' ? pd_to_local_status($rawStatus) : null;
 try { q("UPDATE orders SET pd_status=? WHERE id=?", [$rawStatus, $o['id']]); } catch (Exception $e) {}
+
+/* if this push happens to carry a revised delivery charge, keep ours in sync too */
+$chg = pd_extract_charge($data);
+if ($chg !== null && abs($chg - (float)$o['delivery_charge']) > 0.005) {
+  try { q("UPDATE orders SET delivery_charge=? WHERE id=?", [$chg, $o['id']]); } catch (Exception $e) {}
+}
 
 if ($mapped && $mapped !== $o['status']) {
   fifo_status_change((int)$o['id'], (int)$o['product_id'], (int)$o['qty'], $o['status'], $mapped);

@@ -47,10 +47,17 @@ function pd_book_one(array $bk, array $branchNames) {
   $ins = trim((string)($bk['instruction'] ?? '')); if ($ins!=='') $payload['instruction']=$ins;
 
   $res = pickndrop()->createOrder($payload);
-  $orderId = (string)($res['orderID'] ?? '');
-  if ($orderId==='') throw new Exception('Pick & Drop did not return an order id: '.json_encode($res));
-  $charge = isset($res['delivery_charge']) ? (float)$res['delivery_charge'] : null;
-  $trackUrl = (string)($res['tracking_url'] ?? '');
+  $orderId = pd_extract_order_id($res);
+  if ($orderId==='') {
+    /* Pick & Drop can accept the order and just answer with a shape we don't
+       recognize yet — the order still exists on their side even though we can't
+       read an id back from it. Keep the raw response in the activity log so it
+       can be linked with the 🔗 Link button instead of silently vanishing. */
+    log_activity('Pick & Drop create_order returned no recognizable order id — raw response: '.json_encode($res),'Pick & Drop');
+    throw new Exception('Pick & Drop accepted the order but did not return a recognizable order id. Check their dashboard/app for the new order, then use the 🔗 Link button here with its Order ID. Raw response: '.json_encode($res));
+  }
+  $charge = pd_extract_charge($res);
+  $trackUrl = pd_extract_tracking_url($res);
   return [$orderId, $charge, $trackUrl];
 }
 
@@ -159,7 +166,7 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
         if($ourPhone==='' || $pdPhone!==$ourPhone)
           throw new Exception('Phone mismatch: Pick & Drop '.$pdOid.' → '.$pdPhone.($pdName?' ('.$pdName.')':'').', but order '.$o['code'].' → '.($o['phone']?:'none').'. Tick "link anyway" to force.');
       }
-      $chg = isset($d['delivery_amount']) && is_numeric($d['delivery_amount']) ? (float)$d['delivery_amount'] : null;
+      $chg = pd_extract_charge($d);
       $rawStatus = (string)($d['status'] ?? 'Open');
       q("UPDATE orders SET pd_order_id=?, pd_status=?, courier_id=? WHERE id=?",[$pdOid,$rawStatus,$pdId,$oid]);
       if($chg!==null) q("UPDATE orders SET delivery_charge=? WHERE id=?",[$chg,$oid]);
@@ -188,22 +195,30 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
         $d = pickndrop()->orderDetails($o['pd_order_id']);
         $raw = (string)($d['status'] ?? '');
         q("UPDATE orders SET pd_status=? WHERE id=?",[$raw,$oid]);
+        /* Pick & Drop can revise the delivery charge after booking (reweigh,
+           route/branch policy, COD surcharge, …) — pull their current number on
+           every sync so ours doesn't go stale. */
+        $chg = pd_extract_charge($d);
+        $chgChanged = $chg!==null && abs($chg-(float)$o['delivery_charge'])>0.005;
+        if ($chgChanged) q("UPDATE orders SET delivery_charge=? WHERE id=?",[$chg,$oid]);
         $mapped = $raw!=='' ? pd_to_local_status($raw) : null;
         if ($mapped && $mapped!==$o['status']) {
           fifo_status_change($oid,(int)$o['product_id'],(int)$o['qty'],$o['status'],$mapped);
           if ($mapped==='delivered') q("UPDATE orders SET status='delivered',payment_status='paid' WHERE id=?",[$oid]);
           else q("UPDATE orders SET status=? WHERE id=?",[$mapped,$oid]);
         }
-        flash("Synced {$o['code']} — Pick & Drop status: ".($raw?:'unknown'));
+        flash("Synced {$o['code']} — Pick & Drop status: ".($raw?:'unknown').($chgChanged?(' · delivery updated to '.money($chg)):''));
       }
     }
     elseif ($act==='sync_all') {
       $rows = rows("SELECT * FROM orders WHERE courier_id=? AND COALESCE(pd_order_id,'')<>'' AND status NOT IN ('delivered','cancelled','returned') LIMIT 40",[$pdId]);
-      $n=0;
+      $n=0; $cn=0;
       foreach ($rows as $o) {
         try {
           $d = pickndrop()->orderDetails($o['pd_order_id']);
           $raw = (string)($d['status'] ?? '');
+          $chg = pd_extract_charge($d);
+          if ($chg!==null && abs($chg-(float)$o['delivery_charge'])>0.005) { q("UPDATE orders SET delivery_charge=? WHERE id=?",[$chg,$o['id']]); $cn++; }
           if ($raw==='') continue;
           q("UPDATE orders SET pd_status=? WHERE id=?",[$raw,$o['id']]);
           $mapped = pd_to_local_status($raw);
@@ -216,8 +231,8 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
         } catch (Exception $e) {}
         usleep(80000);
       }
-      log_activity("Pick & Drop sync-all: ".count($rows)." checked, $n updated",'Pick & Drop');
-      flash(count($rows)." order(s) checked, $n updated.");
+      log_activity("Pick & Drop sync-all: ".count($rows)." checked, $n status-updated, $cn delivery-charge updated",'Pick & Drop');
+      flash(count($rows)." order(s) checked, $n status updated, $cn delivery charge updated.");
     }
     elseif ($act==='request_pickup') {
       $addr = trim((string)setting('pd_pickup_address',''));

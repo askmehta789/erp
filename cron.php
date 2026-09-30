@@ -117,10 +117,15 @@ try {
     if ($pdId) {
       $rows = rows("SELECT * FROM orders WHERE courier_id=? AND COALESCE(pd_order_id,'')<>''
                     AND status NOT IN ('delivered','cancelled','returned') LIMIT 60",[$pdId]);
-      $n=0;
+      $n=0; $cn=0;
       foreach ($rows as $o) {
         try {
           $d = pickndrop()->orderDetails($o['pd_order_id']);
+          /* Pick & Drop can revise the delivery charge after booking (reweigh,
+             route/branch policy, COD surcharge, …) — keep ours in step on every
+             poll instead of only capturing it once at booking time. */
+          $chg = pd_extract_charge($d);
+          if ($chg!==null && abs($chg-(float)$o['delivery_charge'])>0.005) { q("UPDATE orders SET delivery_charge=? WHERE id=?",[$chg,$o['id']]); $cn++; }
           $raw = (string)($d['status'] ?? '');
           if ($raw==='') continue;
           q("UPDATE orders SET pd_status=? WHERE id=?",[$raw,$o['id']]);
@@ -138,7 +143,7 @@ try {
         } catch (Exception $e) {}
         usleep(80000);
       }
-      csay("Pick & Drop sync: ".count($rows)." open orders checked, $n updated");
+      csay("Pick & Drop sync: ".count($rows)." open orders checked, $n status-updated, $cn delivery-charge updated");
     } else csay("Pick & Drop sync: no courier row yet");
   } else csay("Pick & Drop sync skipped: no API key");
 } catch (Exception $e) { csay("Pick & Drop sync error: ".$e->getMessage()); }

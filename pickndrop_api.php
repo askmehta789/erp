@@ -238,6 +238,27 @@ function pd_extract_phone($d){
   $walk($d);
   return $found;
 }
+/* Pick & Drop's own docs promise one field name per endpoint, but in practice the
+   create_order response, get_order_details response, and the webhook payload have
+   each been seen using a different spelling for the same value — so every place
+   that needs an order id / delivery charge / tracking link walks all the known
+   spellings instead of trusting a single key. This is what lets an order that
+   Pick & Drop DID create get linked even when their response shape drifts. */
+function pd_extract_order_id($d){
+  foreach (['orderID','order_id','orderId','order_no','orderNo','name','id'] as $k)
+    if (isset($d[$k]) && trim((string)$d[$k])!=='') return (string)$d[$k];
+  return '';
+}
+function pd_extract_charge($d){
+  foreach (['delivery_charge','delivery_amount','deliveryCharge','delivery_fee','deliveryAmount'] as $k)
+    if (isset($d[$k]) && is_numeric($d[$k])) return (float)$d[$k];
+  return null;
+}
+function pd_extract_tracking_url($d){
+  foreach (['tracking_url','trackingUrl','tracking_link','trackingLink'] as $k)
+    if (isset($d[$k]) && trim((string)$d[$k])!=='') return (string)$d[$k];
+  return '';
+}
 function pd_extract_name($d){
   foreach(['customer_name','customerName','name'] as $k)
     if(isset($d[$k]) && is_string($d[$k]) && trim($d[$k])!=='') return trim($d[$k]);

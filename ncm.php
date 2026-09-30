@@ -698,7 +698,7 @@ if(isset($_GET['rate_from'],$_GET['rate_to'],$_GET['rate_type'])){
 <!-- ===== NCM hero ===== -->
 <div class="ncm-hero">
   <div class="nh-left">
-    <h1><span style="display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;background:#fff;border-radius:9px;padding:4px;vertical-align:-9px;margin-right:6px"><img src="assets/ncm-logo.png" alt="NCM" style="width:100%;height:100%;object-fit:contain"></span><span class="grad">NCM Courier Center</span></h1>
+    <h1><img src="assets/ncm-icon.png" alt="NCM" style="height:28px;vertical-align:-6px;margin-right:6px"><span class="grad">NCM Courier Center</span></h1>
     <p>Live booking · tracking · COD · return prevention</p>
     <div style="margin-top:10px"><a class="btn btn-primary" href="ncm_comments.php" style="font-size:13px;padding:10px 18px">💬 Comment Center<?php
       $ccNeeds=0; foreach(($todayComments??[]) as $tc){ $tb=strtolower((string)($tc['addedBy']??'')); if(strpos($tb,'vendor')===false) $ccNeeds++; }

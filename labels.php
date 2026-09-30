@@ -185,7 +185,7 @@ body.hide-remarks .f-remarks{display:none}body.hide-sp .f-sp{display:none}body.h
       <span class="code"><?= e($o['code']) ?></span>
     </div>
     <div class="row" style="margin-top:0">
-      <?php if($isNcm): ?><span class="courier-badge" style="background:#fff;border:1.5px solid #e2e8f0;color:#0f172a"><img src="assets/ncm-logo.png" alt="NCM" style="height:13px;vertical-align:-2px;margin-right:4px">NCM #<?= e($o['ncm_order_id']) ?></span>
+      <?php if($isNcm): ?><span class="courier-badge" style="background:#fff;border:1.5px solid #e2e8f0;color:#0f172a"><img src="assets/ncm-icon.png" alt="NCM" style="height:13px;vertical-align:-2px;margin-right:4px">NCM #<?= e($o['ncm_order_id']) ?></span>
       <?php elseif($isPD): ?><span class="courier-badge" style="background:#16a34a"><img src="assets/pickndrop-logo.svg" alt="Pick &amp; Drop" style="height:11px;vertical-align:-1px"></span>
       <?php else: ?><span class="courier-badge" style="background:<?= e($ccolor) ?>">🚚 <?= e($o['courier_name']?:'No courier') ?></span><?php endif; ?>
       <span></span>

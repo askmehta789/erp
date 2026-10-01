@@ -225,10 +225,11 @@ function pd_norm_phone($p){
   if(strlen($d)>10) $d=substr($d,-10);
   return (strlen($d)===10 && $d[0]==='9') ? $d : '';
 }
-/* Pick & Drop's create_order "orderType" field — Regular is their normal/standard
-   tier (the only value this app sent before Express support was added), Express is
-   their named faster tier (per pickndropnepal.com's "Express Delivery" service).
-   Anything else falls back to Regular so a bad/missing value never blocks a booking. */
+/* This app's own Regular/Express delivery-speed selection (UI dropdown, pd_order_type
+   column, badges). NOT the same thing as Pick & Drop's own "orderType" API field, which
+   only takes Regular/Exchange/Return — Express/speed is a separate express_delivery 0/1
+   flag on their side (see pd_book_one() in pickndrop.php). Anything unrecognized here
+   falls back to Regular so a bad/missing value never blocks a booking. */
 function pd_order_type_norm($v){
   return strtolower(trim((string)$v))==='express' ? 'Express' : 'Regular';
 }

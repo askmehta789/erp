@@ -31,6 +31,11 @@ function pd_book_one(array $bk, array $branchNames) {
   $pickup = trim((string)($bk['pickup'] ?? '')) ?: trim((string)setting('pd_pickup_address',''));
   if ($pickup==='') throw new Exception('no pickup business address set — add one on this page first');
   $orderType = pd_order_type_norm($bk['order_type'] ?? 'Regular');
+  /* Pick & Drop's "orderType" field is only Regular/Exchange/Return (the kind of
+     order) — Express/fast delivery is a completely separate "express_delivery"
+     0/1 flag (confirmed against their API docs). Sending orderType:"Express" is
+     always rejected with "Order Type cannot be Express", which is what was
+     silently breaking every Express booking. */
   $payload = [
     'customerName'      => trim((string)($bk['name'] ?? '')) ?: 'Customer',
     'primaryMobileNo'   => $phone,
@@ -39,8 +44,9 @@ function pd_book_one(array $bk, array $branchNames) {
     'orderDescription'  => trim((string)($bk['package'] ?? '')) ?: 'Goods',
     'destinationCityArea' => $addr,
     'businessAddress'   => $pickup,
-    'orderType'         => $orderType,
+    'orderType'         => 'Regular',
   ];
+  if ($orderType === 'Express') $payload['express_delivery'] = 1;
   $p2 = pd_norm_phone($bk['phone2'] ?? ''); if ($p2!=='') $payload['secondaryMobileNo']=$p2;
   if ($addr!=='') $payload['landmark']=$addr;
   $w = (float)($bk['weight'] ?? 0); if ($w>0) $payload['weight']=$w;

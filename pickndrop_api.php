@@ -48,7 +48,11 @@ class PickDrop {
         /* raw Frappe framework error (a full Python traceback) — this shows up when the
            API key's role lacks permission for the endpoint being called, not just on a
            genuinely bad request. Surface a short, actionable message instead of the dump. */
-        if (isset($data['exc_type']) && $code == 401) {
+        /* two different 401 body shapes have been seen in practice: {exc_type:'...'} on some
+           endpoints, and {errors:[{type:'AuthenticationError',...}]} on create_order — treat
+           either as the same "key lacks permission for this endpoint" case. */
+        $errType = $data['errors'][0]['type'] ?? null;
+        if ($code == 401 && (isset($data['exc_type']) || $errType === 'AuthenticationError')) {
           $msg = 'Authentication rejected for this endpoint — the Api Key/Secret may not have '
                . 'permission for this action. Ask Pick & Drop support to grant it Order API access.';
         } else {
@@ -64,6 +68,13 @@ class PickDrop {
     /* PD wraps almost everything as {message:{status:'error',...}} even on HTTP 200 */
     if (is_array($data) && isset($data['message']['status']) && $data['message']['status'] === 'error') {
       throw new Exception('Pick & Drop: ' . ($data['message']['message'] ?? 'request failed'));
+    }
+    /* create_order (at least for Express) instead returns a flat {status:'error',message:'...'}
+       on HTTP 200 — message here is a plain string, not the nested object above. Without this
+       check that shape slips past as a "success" with no recognizable fields, and the caller
+       wrongly reports "order accepted but no id returned" instead of surfacing PD's real reason. */
+    if (is_array($data) && ($data['status'] ?? '') === 'error') {
+      throw new Exception('Pick & Drop: ' . (is_string($data['message'] ?? null) ? $data['message'] : 'request failed'));
     }
     return $data === null ? [] : $data;
   }

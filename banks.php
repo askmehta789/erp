@@ -53,10 +53,11 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
 
   if ($act==='add_bank') {
     $n=trim($_POST['name'] ?? '');
+    $bn=trim($_POST['bank_name'] ?? '');
     $kind=in_array($_POST['kind'] ?? 'bank',['bank','wallet','cash'],true)?$_POST['kind']:'bank';
     if ($n!=='') {
-      q("INSERT INTO bank_accounts(name,acct_no,kind,opening,remarks) VALUES(?,?,?,?,?)",
-        [$n, trim($_POST['acct_no'] ?? ''), $kind, (float)($_POST['opening'] ?? 0), trim($_POST['remarks'] ?? '')]);
+      q("INSERT INTO bank_accounts(name,bank_name,acct_no,kind,opening,remarks) VALUES(?,?,?,?,?,?)",
+        [$n, $bn, trim($_POST['acct_no'] ?? ''), $kind, (float)($_POST['opening'] ?? 0), trim($_POST['remarks'] ?? '')]);
       log_activity("Bank account added: $n",'Banks');
       flash('🏦 Account added.');
     } else flash('Please enter an account name.');
@@ -66,10 +67,11 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
   if ($act==='edit_bank') {
     $id=(int)($_POST['id'] ?? 0);
     $n=trim($_POST['name'] ?? '');
+    $bn=trim($_POST['bank_name'] ?? '');
     if ($id && $n!=='') {
       $kind=in_array($_POST['kind'] ?? 'bank',['bank','wallet','cash'],true)?$_POST['kind']:'bank';
-      q("UPDATE bank_accounts SET name=?, acct_no=?, kind=?, opening=?, remarks=? WHERE id=?",
-        [$n, trim($_POST['acct_no'] ?? ''), $kind, (float)($_POST['opening'] ?? 0), trim($_POST['remarks'] ?? ''), $id]);
+      q("UPDATE bank_accounts SET name=?, bank_name=?, acct_no=?, kind=?, opening=?, remarks=? WHERE id=?",
+        [$n, $bn, trim($_POST['acct_no'] ?? ''), $kind, (float)($_POST['opening'] ?? 0), trim($_POST['remarks'] ?? ''), $id]);
       flash('✎ Account updated.');
     }
     header('Location: banks.php'); exit;
@@ -169,11 +171,11 @@ $mNet=$mIn-$mOut;
 
 /* transaction list (all, or for one account) with running balance per account */
 if ($view) {
-  $txns = rows("SELECT t.*, b.name AS acct_name, b.acct_no, b.kind FROM bank_txns t
+  $txns = rows("SELECT t.*, b.name AS acct_name, b.bank_name, b.acct_no, b.kind FROM bank_txns t
                 JOIN bank_accounts b ON b.id=t.account_id
                 WHERE t.account_id=? ORDER BY t.txn_date ASC, t.id ASC",[$view]);
 } else {
-  $txns = rows("SELECT t.*, b.name AS acct_name, b.acct_no, b.kind FROM bank_txns t
+  $txns = rows("SELECT t.*, b.name AS acct_name, b.bank_name, b.acct_no, b.kind FROM bank_txns t
                 JOIN bank_accounts b ON b.id=t.account_id
                 ORDER BY t.txn_date ASC, t.id ASC");
 }
@@ -214,6 +216,7 @@ require __DIR__.'/includes/header.php';
 .bk-card .hd-ic{font-size:21px;width:38px;height:38px;flex:none;display:flex;align-items:center;justify-content:center;border-radius:10px;background:var(--surface);box-shadow:var(--shadow)}
 .bk-card .hd-txt{flex:1;min-width:0}
 .bk-card .bn{font-weight:900;font-size:15.5px;color:var(--ink);line-height:1.25;word-break:break-word}
+.bk-card .acct-name{font-size:11.5px;color:var(--muted);font-weight:700;margin-top:1px;word-break:break-word}
 .bk-card .acct{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--brand);font-family:ui-monospace,monospace;font-weight:800;margin-top:4px;background:var(--surface);border:1px solid var(--border);border-radius:7px;padding:3px 8px;letter-spacing:.03em}
 .bk-card .acct .k{color:var(--muted);font-weight:700;font-family:inherit;letter-spacing:0}
 .bk-card .no-acct{font-size:11px;color:var(--muted-2);font-style:italic;margin-top:4px}
@@ -285,7 +288,12 @@ require __DIR__.'/includes/header.php';
       <div class="hd">
         <div class="hd-ic"><?= $ic ?></div>
         <div class="hd-txt">
-          <div class="bn"><?= e($a['name']) ?></div>
+          <?php if (!empty($a['bank_name'])): ?>
+            <div class="bn"><?= e($a['bank_name']) ?></div>
+            <div class="acct-name"><?= e($a['name']) ?></div>
+          <?php else: ?>
+            <div class="bn"><?= e($a['name']) ?></div>
+          <?php endif; ?>
           <?php if ($a['acct_no']!==''): ?>
             <div class="acct"><span class="k">A/C</span> <?= e($a['acct_no']) ?></div>
           <?php else: ?>
@@ -321,10 +329,11 @@ require __DIR__.'/includes/header.php';
     <form method="post">
       <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="add_bank">
       <div class="bk-fg">
-        <div class="full"><label>Account Name *</label><input name="name" required placeholder="e.g. NIC Asia Bank"></div>
+        <div><label>Bank Name</label><input name="bank_name" placeholder="e.g. NIC Asia Bank"></div>
+        <div><label>Account Name *</label><input name="name" required placeholder="e.g. Luprah Enterprises"></div>
         <div><label>Account Number (optional)</label><input name="acct_no" placeholder="••••1234"></div>
         <div><label>Type</label><select name="kind"><option value="bank">🏦 Bank</option><option value="wallet">📱 Wallet (eSewa/Khalti)</option><option value="cash">💵 Cash</option></select></div>
-        <div><label>Opening Balance (Rs.)</label><input name="opening" type="number" step="any" value="0"></div>
+        <div class="full"><label>Opening Balance (Rs.)</label><input name="opening" type="number" step="any" value="0"></div>
         <div class="full"><label>Remarks</label><input name="remarks" placeholder="e.g. Main business account"></div>
       </div>
       <div style="margin-top:12px;text-align:right"><button class="btn btn-primary">Save Account</button></div>
@@ -364,11 +373,12 @@ require __DIR__.'/includes/header.php';
 
 <!-- TRANSACTIONS -->
 <div class="bk-panel">
+  <?php $va=null; if($view){ foreach($accounts as $a) if($a['id']===$view){$va=$a;break;} } ?>
   <div class="bk-panel-h">
-    <b>📒 <?= $view ? 'Ledger — '.e((function() use($accounts,$view){foreach($accounts as $a)if($a['id']===$view)return $a['name'];return '';})()) : 'All Transactions' ?>
-    <?php if ($view): $va=null; foreach($accounts as $a) if($a['id']===$view){$va=$a;break;} if($va && $va['acct_no']!==''): ?>
+    <b>📒 <?= $view ? 'Ledger — '.e($va ? (!empty($va['bank_name']) ? $va['bank_name'].' — '.$va['name'] : $va['name']) : '') : 'All Transactions' ?>
+    <?php if ($va && $va['acct_no']!==''): ?>
       <span style="font-family:ui-monospace,monospace;font-size:11px;color:var(--brand);font-weight:800;background:var(--brand-soft);border-radius:7px;padding:2px 8px;margin-left:6px">A/C <?= e($va['acct_no']) ?></span>
-    <?php endif; endif; ?>
+    <?php endif; ?>
     </b>
     <div class="bk-filters">
       <a class="bk-chip<?= $view===0?' on':'' ?>" href="banks.php">All accounts</a>
@@ -391,7 +401,7 @@ require __DIR__.'/includes/header.php';
       <?php foreach ($txns as $t): ?>
         <tr>
           <td><?= e(date('d M', strtotime($t['txn_date']))) ?></td>
-          <?php if(!$view): ?><td><?= ($kindIcon[$t['kind']]??'') ?> <b><?= e($t['acct_name']) ?></b><?php if(!empty($t['acct_no'])): ?> <span style="font-family:ui-monospace,monospace;font-size:10.5px;color:var(--brand);font-weight:800">#<?= e($t['acct_no']) ?></span><?php endif; ?></td><?php endif; ?>
+          <?php if(!$view): ?><td><?= ($kindIcon[$t['kind']]??'') ?> <b><?= e(!empty($t['bank_name']) ? $t['bank_name'] : $t['acct_name']) ?></b><?php if(!empty($t['bank_name'])): ?> <span class="bk-rmk"><?= e($t['acct_name']) ?></span><?php endif; ?><?php if(!empty($t['acct_no'])): ?> <span style="font-family:ui-monospace,monospace;font-size:10.5px;color:var(--brand);font-weight:800">#<?= e($t['acct_no']) ?></span><?php endif; ?></td><?php endif; ?>
           <td><?php if($t['category']!==''): ?><span class="bk-cat"><?= (strpos($t['category'],'COD ')===0?'🔗 ':'') ?><?= e($t['category']) ?></span><?php else: ?>—<?php endif; ?></td>
           <td class="bk-rmk"><?= $t['remarks']!==''?e($t['remarks']):'—' ?></td>
           <td class="num"><?= $t['direction']==='in' ? '<span class="t-in">+'.number_format($t['amount']).'</span>' : '—' ?></td>
@@ -422,7 +432,8 @@ require __DIR__.'/includes/header.php';
       <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="edit_bank"><input type="hidden" name="id" id="eb_id">
       <div style="padding:16px 20px">
         <div class="bk-fg">
-          <div class="full"><label>Account Name *</label><input name="name" id="eb_name" required></div>
+          <div><label>Bank Name</label><input name="bank_name" id="eb_bank"></div>
+          <div><label>Account Name *</label><input name="name" id="eb_name" required></div>
           <div><label>Account Number</label><input name="acct_no" id="eb_acct"></div>
           <div><label>Type</label><select name="kind" id="eb_kind"><option value="bank">🏦 Bank</option><option value="wallet">📱 Wallet</option><option value="cash">💵 Cash</option></select></div>
           <div class="full"><label>Opening Balance (Rs.)</label><input name="opening" id="eb_open" type="number" step="any"></div>
@@ -475,6 +486,7 @@ function txnFor(id,name){
 }
 function editBank(a){
   document.getElementById('eb_id').value=a.id;
+  document.getElementById('eb_bank').value=a.bank_name||'';
   document.getElementById('eb_name').value=a.name||'';
   document.getElementById('eb_acct').value=a.acct_no||'';
   document.getElementById('eb_kind').value=a.kind||'bank';

@@ -546,12 +546,14 @@ function ensure_banks() { static $ok=false; if($ok) return;
   try { q("CREATE TABLE IF NOT EXISTS bank_accounts(
     id INT AUTO_INCREMENT PRIMARY KEY,
     name VARCHAR(120) NOT NULL,
+    bank_name VARCHAR(120) DEFAULT '',
     acct_no VARCHAR(60) DEFAULT '',
     kind VARCHAR(16) NOT NULL DEFAULT 'bank',   /* bank | wallet | cash */
     opening DECIMAL(14,2) NOT NULL DEFAULT 0,
     remarks VARCHAR(200) DEFAULT '',
     archived TINYINT NOT NULL DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"); } catch (Exception $e) {}
+  try { q("ALTER TABLE bank_accounts ADD COLUMN IF NOT EXISTS bank_name VARCHAR(120) DEFAULT ''"); } catch (Exception $e) {}
   try { q("CREATE TABLE IF NOT EXISTS bank_txns(
     id INT AUTO_INCREMENT PRIMARY KEY,
     account_id INT NOT NULL,

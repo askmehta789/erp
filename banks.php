@@ -169,11 +169,11 @@ $mNet=$mIn-$mOut;
 
 /* transaction list (all, or for one account) with running balance per account */
 if ($view) {
-  $txns = rows("SELECT t.*, b.name AS acct_name, b.kind FROM bank_txns t
+  $txns = rows("SELECT t.*, b.name AS acct_name, b.acct_no, b.kind FROM bank_txns t
                 JOIN bank_accounts b ON b.id=t.account_id
                 WHERE t.account_id=? ORDER BY t.txn_date ASC, t.id ASC",[$view]);
 } else {
-  $txns = rows("SELECT t.*, b.name AS acct_name, b.kind FROM bank_txns t
+  $txns = rows("SELECT t.*, b.name AS acct_name, b.acct_no, b.kind FROM bank_txns t
                 JOIN bank_accounts b ON b.id=t.account_id
                 ORDER BY t.txn_date ASC, t.id ASC");
 }
@@ -204,15 +204,24 @@ require __DIR__.'/includes/header.php';
 .bk-tcard.big{background:linear-gradient(135deg,#1f2740,#2b3556);color:#fff;border:0}
 .bk-tcard.big .lbl{color:#aeb8d4}.bk-tcard.big .meta{color:#8b95b8}
 
-.bk-banks{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin-bottom:22px}
-.bk-card{background:var(--surface);border-radius:16px;padding:16px;box-shadow:var(--shadow);border:1px solid var(--border);border-top:4px solid var(--brand)}
-.bk-card.k-wallet{border-top-color:#e0851b}.bk-card.k-cash{border-top-color:#8a94a6}
-.bk-card .bn{font-weight:900;font-size:15px;display:flex;justify-content:space-between;align-items:center;gap:6px}
-.bk-card .acct{font-size:11px;color:var(--muted);font-family:ui-monospace,monospace;margin-top:1px}
-.bk-card .bal-lbl{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:800;margin-top:10px}
-.bk-card .bal{font-size:27px;font-weight:900;margin:1px 0 2px;font-variant-numeric:tabular-nums;color:var(--ink);line-height:1.1}
-.bk-card.pos .bal{color:#12a06a}.bk-card.neg .bal{color:#dc4437}
-.bk-card .rmk{font-size:11.5px;color:var(--muted);font-style:italic;margin-top:5px;padding-top:8px;border-top:1px dashed var(--border)}
+.bk-banks{display:grid;grid-template-columns:repeat(auto-fit,minmax(275px,1fr));gap:14px;margin-bottom:22px}
+.bk-card{background:var(--surface);border-radius:16px;padding:0;box-shadow:var(--shadow);border:1px solid var(--border);overflow:hidden;transition:box-shadow .15s,transform .15s}
+.bk-card:hover{box-shadow:var(--shadow-lg);transform:translateY(-1px)}
+.bk-card .hd{display:flex;align-items:flex-start;gap:10px;padding:15px 16px 13px;background:linear-gradient(135deg,var(--brand-soft),transparent)}
+.bk-card.k-wallet .hd{background:linear-gradient(135deg,#fdf1e2,transparent)}
+.bk-card.k-cash .hd{background:linear-gradient(135deg,var(--surface-2),transparent)}
+:root[data-theme="dark"] .bk-card.k-wallet .hd,:root:not([data-theme="light"]) .bk-card.k-wallet .hd{background:linear-gradient(135deg,#2a1f06,transparent)}
+.bk-card .hd-ic{font-size:21px;width:38px;height:38px;flex:none;display:flex;align-items:center;justify-content:center;border-radius:10px;background:var(--surface);box-shadow:var(--shadow)}
+.bk-card .hd-txt{flex:1;min-width:0}
+.bk-card .bn{font-weight:900;font-size:15.5px;color:var(--ink);line-height:1.25;word-break:break-word}
+.bk-card .acct{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--brand);font-family:ui-monospace,monospace;font-weight:800;margin-top:4px;background:var(--surface);border:1px solid var(--border);border-radius:7px;padding:3px 8px;letter-spacing:.03em}
+.bk-card .acct .k{color:var(--muted);font-weight:700;font-family:inherit;letter-spacing:0}
+.bk-card .no-acct{font-size:11px;color:var(--muted-2);font-style:italic;margin-top:4px}
+.bk-card .bd{padding:13px 16px 16px}
+.bk-card .bal-lbl{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:800}
+.bk-card .bal{font-size:28px;font-weight:900;margin:2px 0 2px;font-variant-numeric:tabular-nums;color:var(--ink);line-height:1.1}
+.bk-card.pos .bal{color:var(--green)}.bk-card.neg .bal{color:var(--red)}
+.bk-card .rmk{font-size:11.5px;color:var(--muted);font-style:italic;margin-top:7px;padding-top:8px;border-top:1px dashed var(--border)}
 .bk-card .acts{display:flex;gap:6px;margin-top:12px;flex-wrap:wrap}
 .bk-card .acts .btn{padding:6px 10px;font-size:11px}
 .bk-card.sel{outline:2px solid var(--brand);outline-offset:1px}
@@ -273,20 +282,31 @@ require __DIR__.'/includes/header.php';
   <div class="bk-banks">
   <?php foreach ($accounts as $a): $ic=$kindIcon[$a['kind']] ?? '🏦'; ?>
     <div class="bk-card k-<?= e($a['kind']) ?><?= $a['balance']>0?' pos':($a['balance']<0?' neg':'') ?><?= $view===$a['id']?' sel':'' ?>">
-      <div class="bn"><span><?= $ic ?> <?= e($a['name']) ?></span></div>
-      <?php if ($a['acct_no']!==''): ?><div class="acct">A/C <?= e($a['acct_no']) ?></div><?php endif; ?>
-      <div class="bal-lbl">Balance</div>
-      <div class="bal"><?= money($a['balance']) ?></div>
-      <?php if ($a['remarks']!==''): ?><div class="rmk">✎ <?= e($a['remarks']) ?></div><?php endif; ?>
-      <div class="acts">
-        <?php $cf=$codFlow[(int)$a['id']] ?? null; if($cf): ?>
-        <span class="pill p-blue" style="font-size:10px" title="money that arrived from the COD Ledger">🔗 COD in: <?= money($cf['in'] ?? 0) ?></span>
-        <?php if(($cf['out']??0)>0): ?><span class="pill p-red" style="font-size:10px" title="COD-related money out, linked with the COD Ledger">🔗 COD out: <?= money($cf['out']) ?></span><?php endif; ?>
-        <?php if(($cf['out'] ?? 0)>0): ?><span class="pill p-red" style="font-size:10px" title="money that left via the COD Ledger">out: <?= money($cf['out']) ?></span><?php endif; ?>
-        <?php endif; ?>
-        <a class="btn btn-sm<?= $view===$a['id']?' btn-primary':'' ?>" href="banks.php?a=<?= $a['id'] ?>">Ledger</a>
-        <button class="btn btn-sm" onclick='txnFor(<?= (int)$a['id'] ?>,<?= json_encode($a['name']) ?>)'>＋ Txn</button>
-        <button class="btn btn-sm" onclick='editBank(<?= json_encode($a) ?>)'>✎ Edit</button>
+      <div class="hd">
+        <div class="hd-ic"><?= $ic ?></div>
+        <div class="hd-txt">
+          <div class="bn"><?= e($a['name']) ?></div>
+          <?php if ($a['acct_no']!==''): ?>
+            <div class="acct"><span class="k">A/C</span> <?= e($a['acct_no']) ?></div>
+          <?php else: ?>
+            <div class="no-acct">No account number on file</div>
+          <?php endif; ?>
+        </div>
+      </div>
+      <div class="bd">
+        <div class="bal-lbl">Balance</div>
+        <div class="bal"><?= money($a['balance']) ?></div>
+        <?php if ($a['remarks']!==''): ?><div class="rmk">✎ <?= e($a['remarks']) ?></div><?php endif; ?>
+        <div class="acts">
+          <?php $cf=$codFlow[(int)$a['id']] ?? null; if($cf): ?>
+          <span class="pill p-blue" style="font-size:10px" title="money that arrived from the COD Ledger">🔗 COD in: <?= money($cf['in'] ?? 0) ?></span>
+          <?php if(($cf['out']??0)>0): ?><span class="pill p-red" style="font-size:10px" title="COD-related money out, linked with the COD Ledger">🔗 COD out: <?= money($cf['out']) ?></span><?php endif; ?>
+          <?php if(($cf['out'] ?? 0)>0): ?><span class="pill p-red" style="font-size:10px" title="money that left via the COD Ledger">out: <?= money($cf['out']) ?></span><?php endif; ?>
+          <?php endif; ?>
+          <a class="btn btn-sm<?= $view===$a['id']?' btn-primary':'' ?>" href="banks.php?a=<?= $a['id'] ?>">Ledger</a>
+          <button class="btn btn-sm" onclick='txnFor(<?= (int)$a['id'] ?>,<?= json_encode($a['name']) ?>)'>＋ Txn</button>
+          <button class="btn btn-sm" onclick='editBank(<?= json_encode($a) ?>)'>✎ Edit</button>
+        </div>
       </div>
     </div>
   <?php endforeach; ?>
@@ -345,7 +365,11 @@ require __DIR__.'/includes/header.php';
 <!-- TRANSACTIONS -->
 <div class="bk-panel">
   <div class="bk-panel-h">
-    <b>📒 <?= $view ? 'Ledger — '.e((function() use($accounts,$view){foreach($accounts as $a)if($a['id']===$view)return $a['name'];return '';})()) : 'All Transactions' ?></b>
+    <b>📒 <?= $view ? 'Ledger — '.e((function() use($accounts,$view){foreach($accounts as $a)if($a['id']===$view)return $a['name'];return '';})()) : 'All Transactions' ?>
+    <?php if ($view): $va=null; foreach($accounts as $a) if($a['id']===$view){$va=$a;break;} if($va && $va['acct_no']!==''): ?>
+      <span style="font-family:ui-monospace,monospace;font-size:11px;color:var(--brand);font-weight:800;background:var(--brand-soft);border-radius:7px;padding:2px 8px;margin-left:6px">A/C <?= e($va['acct_no']) ?></span>
+    <?php endif; endif; ?>
+    </b>
     <div class="bk-filters">
       <a class="bk-chip<?= $view===0?' on':'' ?>" href="banks.php">All accounts</a>
       <?php foreach ($accounts as $a): ?>
@@ -367,7 +391,7 @@ require __DIR__.'/includes/header.php';
       <?php foreach ($txns as $t): ?>
         <tr>
           <td><?= e(date('d M', strtotime($t['txn_date']))) ?></td>
-          <?php if(!$view): ?><td><?= ($kindIcon[$t['kind']]??'') ?> <?= e($t['acct_name']) ?></td><?php endif; ?>
+          <?php if(!$view): ?><td><?= ($kindIcon[$t['kind']]??'') ?> <b><?= e($t['acct_name']) ?></b><?php if(!empty($t['acct_no'])): ?> <span style="font-family:ui-monospace,monospace;font-size:10.5px;color:var(--brand);font-weight:800">#<?= e($t['acct_no']) ?></span><?php endif; ?></td><?php endif; ?>
           <td><?php if($t['category']!==''): ?><span class="bk-cat"><?= (strpos($t['category'],'COD ')===0?'🔗 ':'') ?><?= e($t['category']) ?></span><?php else: ?>—<?php endif; ?></td>
           <td class="bk-rmk"><?= $t['remarks']!==''?e($t['remarks']):'—' ?></td>
           <td class="num"><?= $t['direction']==='in' ? '<span class="t-in">+'.number_format($t['amount']).'</span>' : '—' ?></td>

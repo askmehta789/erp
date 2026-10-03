@@ -418,7 +418,7 @@ function role_rank($role) {
 function page_min_rank($page) {
   $map = [
     'users.php'=>3, 'settings.php'=>3, 'activity.php'=>3,
-    'accounting.php'=>2, 'salary.php'=>2, 'lunch_management.php'=>2, 'cod.php'=>2, 'banks.php'=>2, 'daraz.php'=>2, 'pickndrop.php'=>2, 'expenses.php'=>2, 'reports.php'=>2, 'analytics.php'=>2, 'analytics_returns.php'=>2, 'analytics_customers.php'=>2, 'analytics_branches.php'=>2, 'analytics_report.php'=>2, 'suppliers.php'=>2, 'hrm.php'=>2, 'vendor_purchases.php'=>2, 'inventory.php'=>2, 'money_dashboard.php'=>2, 'assistant.php'=>2,
+    'accounting.php'=>2, 'salary.php'=>2, 'salary_report.php'=>2, 'lunch_management.php'=>2, 'cod.php'=>2, 'banks.php'=>2, 'daraz.php'=>2, 'pickndrop.php'=>2, 'expenses.php'=>2, 'reports.php'=>2, 'analytics.php'=>2, 'analytics_returns.php'=>2, 'analytics_customers.php'=>2, 'analytics_branches.php'=>2, 'analytics_report.php'=>2, 'suppliers.php'=>2, 'hrm.php'=>2, 'vendor_purchases.php'=>2, 'inventory.php'=>2, 'money_dashboard.php'=>2, 'assistant.php'=>2,
     'ncm_debug.php'=>3,
     'ncm.php'=>1, 'ncm_comments.php'=>1, 'sales.php'=>1, 'couriers.php'=>1, 'sales_dashboard.php'=>1,   /* staff can use the courier & sales pages */
   ];

@@ -252,6 +252,7 @@ $stPill=fn($s)=>['Paid'=>'p-green','Partial'=>'p-yellow','Pending'=>'p-red'][$s]
       <button class="btn btn-sm">Go</button>
     </form>
     <a class="btn" style="background:var(--orange-bg);color:var(--orange)" href="lunch_management.php?m=<?= e($m) ?>">🍱 Lunch Management</a>
+    <a class="btn" target="_blank" href="salary_report.php?m=<?= e($m) ?>&emp=<?= $empFilter ?>" title="<?= $empFilter?'PDF statement for '.e($empName[$empFilter] ?? 'this staff member'):'PDF report for all staff' ?>">📄 <?= $empFilter?'PDF Report':'PDF Report (All Staff)' ?></a>
     <?php if($isAdmin && $tDue>0.5): ?><button class="btn" style="background:var(--green-bg);color:var(--green)" onclick="openPayAll()">💰 Pay All Due</button><?php endif; ?>
     <button class="btn btn-primary" onclick="openSal()">＋ Add Entry</button>
   </div>
@@ -288,6 +289,7 @@ $stPill=fn($s)=>['Paid'=>'p-green','Partial'=>'p-yellow','Pending'=>'p-red'][$s]
       <td style="white-space:nowrap">
         <button class="btn btn-sm" onclick="openSal(<?= $r['id'] ?>)">＋</button>
         <a class="btn btn-sm" href="salary.php?emp=<?= $r['id'] ?>&m=<?= e($m) ?>" title="history">📜</a>
+        <a class="btn btn-sm" target="_blank" href="salary_report.php?emp=<?= $r['id'] ?>&m=<?= e($m) ?>" title="PDF report">📄</a>
       </td>
     </tr>
   <?php endforeach; if(!$rowsOut) echo '<tr><td colspan="11"><div class="empty">No staff yet — add employees in <a href="hrm.php">HRM</a> first.</div></td></tr>'; ?>

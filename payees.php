@@ -345,7 +345,18 @@ if ($vp) {
     $byProduct[$pn]['paid'] += $paidAllocated[$l['id']] ?? 0;
     $byProduct[$pn]['n']++;
   }
-  uasort($byProduct, function($a,$b){ return ($b['due']-$b['paid']) <=> ($a['due']-$a['paid']); });
+  /* product-wise (alphabetical) order, with the catch-all bucket always last
+     since it isn't a real product — then paginated, 15 per page */
+  uksort($byProduct, function($a,$b){
+    if ($a==='Other / General') return 1;
+    if ($b==='Other / General') return -1;
+    return strcasecmp($a,$b);
+  });
+  $spPer = 15;
+  $spTotal = count($byProduct);
+  $spPages = max(1, (int)ceil($spTotal / $spPer));
+  $spPage = max(1, min($spPages, (int)($_GET['spp'] ?? 1)));
+  $byProductPage = array_slice($byProduct, ($spPage-1)*$spPer, $spPer, true);
 
   /* the line-item list — every filter applied, newest first, capped for the page */
   $ledger = array_values(array_filter($fullHistory, function($l) use ($matches,$fProd) {
@@ -488,12 +499,12 @@ require __DIR__.'/includes/header.php';
   </form>
 
   <?php if($byProduct): ?>
-  <div class="panel-head" style="border-top:1px solid var(--border)"><h2>🏷️ Spend by Product</h2><span class="muted" style="font-size:11.5px"><?= count($byProduct) ?> product<?= count($byProduct)===1?'':'s' ?> · matches current date/keyword filters</span></div>
+  <div class="panel-head" id="spend-by-product" style="border-top:1px solid var(--border)"><h2>🏷️ Spend by Product</h2><span class="muted" style="font-size:11.5px"><?= $spTotal ?> product<?= $spTotal===1?'':'s' ?> · matches current date/keyword filters</span></div>
   <div class="muted" style="font-size:11px;padding:0 16px 10px">Paid is allocated oldest-due-first across the whole ledger (like FIFO stock) — so a single payment covering several products' purchases clears each of them in order, instead of only the one product whose note happened to match.</div>
   <div class="table-wrap"><table class="tbl num-tbl"><thead><tr>
     <th>Product</th><th class="right">Due</th><th class="right">Paid</th><th class="right">Remaining</th><th class="right">Entries</th><th></th>
   </tr></thead><tbody>
-  <?php foreach($byProduct as $pn=>$s): $prem=$s['due']-$s['paid']; $isPicked=$fProd===$pn; ?>
+  <?php foreach($byProductPage as $pn=>$s): $prem=$s['due']-$s['paid']; $isPicked=$fProd===$pn; ?>
     <tr<?= $isPicked?' style="background:var(--brand-soft)"':'' ?>>
       <td style="font-weight:700"><?= e($pn) ?></td>
       <td class="num right"><?= money($s['due']) ?></td>
@@ -507,6 +518,15 @@ require __DIR__.'/includes/header.php';
     </tr>
   <?php endforeach; ?>
   </tbody></table></div>
+  <?php if($spPages>1): ?>
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 16px">
+    <span class="muted" style="font-size:11.5px">Page <?= $spPage ?> of <?= $spPages ?></span>
+    <div style="display:flex;gap:6px">
+      <?php if($spPage>1): ?><a class="btn btn-sm" href="?<?= e(http_build_query(array_merge($_GET,['spp'=>$spPage-1]))) ?>#spend-by-product">← Prev</a><?php endif; ?>
+      <?php if($spPage<$spPages): ?><a class="btn btn-sm" href="?<?= e(http_build_query(array_merge($_GET,['spp'=>$spPage+1]))) ?>#spend-by-product">Next →</a><?php endif; ?>
+    </div>
+  </div>
+  <?php endif; ?>
   <?php endif; ?>
 
   <div class="panel-head" style="border-top:1px solid var(--border)"><h2>Entries</h2></div>

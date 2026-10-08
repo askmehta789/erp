@@ -223,14 +223,52 @@ if ($vp) {
     return true;
   };
 
-  /* spend-by-product — respects type/date/keyword but not the product pick itself,
-     so the breakdown always lists every product to choose from */
+  /* FIFO payment allocation across the WHOLE (unfiltered) ledger — oldest due
+     gets paid off first, same "oldest sells first" idea already used for stock
+     batches. Fixes a real bug: a single lump payment covering several products'
+     dues used to only offset whichever one product its label happened to match
+     (usually none, landing the whole payment under "Other/General" while every
+     product kept showing its full original amount as still due). An advance
+     (paid before any due exists, or more than currently owed) sits in a pool
+     and is applied to the next due that comes in. */
+  $dueQueue = []; $advancePool = 0; $paidAllocated = [];   // due entry id => amount paid off
+  foreach ($fullHistory as $l) {
+    if ($l['type'] === 'due') {
+      $remaining = (float)$l['amount']; $paidAllocated[$l['id']] = 0;
+      if ($advancePool > 0.004) {
+        $take = min($advancePool, $remaining);
+        $advancePool -= $take; $remaining -= $take; $paidAllocated[$l['id']] += $take;
+      }
+      if ($remaining > 0.004) $dueQueue[] = ['id'=>$l['id'], 'remaining'=>$remaining];
+    } else {
+      $pool = (float)$l['amount'];
+      while ($pool > 0.004 && $dueQueue) {
+        $take = min($pool, $dueQueue[0]['remaining']);
+        $dueQueue[0]['remaining'] -= $take; $pool -= $take;
+        $paidAllocated[$dueQueue[0]['id']] += $take;
+        if ($dueQueue[0]['remaining'] <= 0.004) array_shift($dueQueue);
+      }
+      if ($pool > 0.004) $advancePool += $pool;
+    }
+  }
+
+  /* spend-by-product — built from 'due' entries only (each one now carries its
+     true allocated-paid amount from the FIFO pass above), respecting date/keyword
+     filters so the breakdown still narrows with the panel above; the "type"
+     filter doesn't apply here since this view is inherently due-vs-paid already */
+  $matchesProduct = function($l) use ($fFrom,$fTo,$fKw) {
+    if ($fFrom && $l['entry_date']<$fFrom) return false;
+    if ($fTo && $l['entry_date']>$fTo) return false;
+    if ($fKw && stripos($l['label'],$fKw)===false) return false;
+    return true;
+  };
   $byProduct = [];
   foreach ($fullHistory as $l) {
-    if (!$matches($l)) continue;
+    if ($l['type'] !== 'due' || !$matchesProduct($l)) continue;
     $pn = $l['product_name'] ?: 'Other / General';
     if (!isset($byProduct[$pn])) $byProduct[$pn] = ['due'=>0,'paid'=>0,'n'=>0];
-    $byProduct[$pn][$l['type']] += (float)$l['amount'];
+    $byProduct[$pn]['due']  += (float)$l['amount'];
+    $byProduct[$pn]['paid'] += $paidAllocated[$l['id']] ?? 0;
     $byProduct[$pn]['n']++;
   }
   uasort($byProduct, function($a,$b){ return ($b['due']-$b['paid']) <=> ($a['due']-$a['paid']); });
@@ -369,7 +407,8 @@ require __DIR__.'/includes/header.php';
   </form>
 
   <?php if($byProduct): ?>
-  <div class="panel-head" style="border-top:1px solid var(--border)"><h2>🏷️ Spend by Product</h2><span class="muted" style="font-size:11.5px"><?= count($byProduct) ?> product<?= count($byProduct)===1?'':'s' ?> · matches current type/date/keyword filters</span></div>
+  <div class="panel-head" style="border-top:1px solid var(--border)"><h2>🏷️ Spend by Product</h2><span class="muted" style="font-size:11.5px"><?= count($byProduct) ?> product<?= count($byProduct)===1?'':'s' ?> · matches current date/keyword filters</span></div>
+  <div class="muted" style="font-size:11px;padding:0 16px 10px">Paid is allocated oldest-due-first across the whole ledger (like FIFO stock) — so a single payment covering several products' purchases clears each of them in order, instead of only the one product whose note happened to match.</div>
   <div class="table-wrap"><table class="tbl num-tbl"><thead><tr>
     <th>Product</th><th class="right">Due</th><th class="right">Paid</th><th class="right">Remaining</th><th class="right">Entries</th><th></th>
   </tr></thead><tbody>

@@ -168,17 +168,47 @@ foreach($linkAccounts as $A){
 }
 $vp = $view ? row("SELECT * FROM payees WHERE id=?",[$view]) : null;
 
+/* Shorthand codes for multi-word products, built from initials ("Nabhi Oil" →
+   "NO", "Money Bracelet" → "MB") — matches how this store actually writes
+   quick due notes ("NO x 400", "MB X 200"). Skips single-word products (they're
+   already short enough to type in full, and matched directly below) and drops
+   any code that collides between two products rather than guessing which one
+   it means. */
+function payee_code_map($productNames) {
+  $byCode = [];
+  foreach ($productNames as $pn) {
+    $words = preg_split('/\s+/', trim((string)$pn));
+    if (count($words) < 2) continue;
+    $code = strtoupper(implode('', array_map(fn($w)=>mb_substr($w,0,1),$words)));
+    if ($code === '') continue;
+    $byCode[$code][] = $pn;
+  }
+  $map = [];
+  foreach ($byCode as $code => $names) { if (count($names) === 1) $map[$code] = $names[0]; }
+  return $map;
+}
+
 /* Product resolver for the ledger — prefer the linked expense's real product
    (set for Ads dues via ref_expense_id), else sniff a known product name out of
    the free-text label ("Ads — Nabhi Oil ($6)", "Heel Guard Plus X 50 pc @ Rs.170"),
-   checked longest name first so "Nabhi Oil Plus" never loses to "Nabhi Oil". */
-function payee_resolve_product($label, $expProduct, $productNames) {
+   checked longest name first so "Nabhi Oil Plus" never loses to "Nabhi Oil".
+   Falls back to a shorthand code ("NO X 50 HH" → Nabhi Oil) ONLY when exactly
+   one code-like token appears in the label — a label with two ("MB x 100 NO X
+   50") is a genuine multi-product purchase recorded as one line, and guessing
+   which one it "really" is would misattribute real money, so it's deliberately
+   left unresolved (shows under Other / General) rather than guessed wrong. */
+function payee_resolve_product($label, $expProduct, $productNames, $codeMap = []) {
   if ($expProduct) return $expProduct;
   $label = trim((string)$label);
   if ($label === '') return null;
   $labelLower = strtolower($label);
   foreach ($productNames as $pn) {
     if ($pn !== '' && strpos($labelLower, strtolower($pn)) === 0) return $pn;
+  }
+  if ($codeMap && preg_match_all('/\b([A-Za-z]{2,4})\s*[xX]\s*\d/', $label, $m)) {
+    $tokens = array_unique(array_map('strtoupper', $m[1]));
+    if (count($tokens) === 1 && isset($codeMap[$tokens[0]])) return $codeMap[$tokens[0]];
+    return null;   /* multiple code-like tokens — genuinely mixed, don't guess */
   }
   if (strpos($label, '—') !== false) {
     $p = trim(preg_replace('/\(\$[\d.,]+\)\s*$/', '', trim(substr($label, strrpos($label,'—')+3))));
@@ -189,6 +219,7 @@ function payee_resolve_product($label, $expProduct, $productNames) {
 
 if ($vp) {
   $productNames = array_column(rows("SELECT name FROM products ORDER BY CHAR_LENGTH(name) DESC"), 'name');
+  $codeMap = payee_code_map($productNames);
 
   /* full unfiltered history — the true running-remaining balance and the product
      filter's dropdown both need the whole story, not just what's on screen */
@@ -197,7 +228,7 @@ if ($vp) {
                         WHERE pl.payee_id=? ORDER BY pl.entry_date ASC, pl.id ASC", [$view]);
   $run = 0; $runMap = []; $productSet = [];
   foreach ($fullHistory as &$l) {
-    $l['product_name'] = payee_resolve_product($l['label'], $l['exp_product'], $productNames);
+    $l['product_name'] = payee_resolve_product($l['label'], $l['exp_product'], $productNames, $codeMap);
     $run += $l['type']==='due' ? (float)$l['amount'] : -(float)$l['amount'];
     $runMap[$l['id']] = $run;
     if ($l['product_name']) $productSet[$l['product_name']] = true;

@@ -501,6 +501,10 @@ function ensure_payees() { static $ok=false; if($ok) return;
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP, INDEX(payee_id), INDEX(entry_date), INDEX(ref_expense_id))"); } catch (Exception $e) {}
   try { q("ALTER TABLE payee_ledger ADD COLUMN IF NOT EXISTS ref_expense_id INT NULL"); } catch (Exception $e) {}
   try { q("ALTER TABLE payee_ledger ADD COLUMN IF NOT EXISTS ref_batch_id INT NULL"); } catch (Exception $e) {}
+  /* explicit product tag — ground truth set at the moment an entry is created
+     (auto-billed from Ads/a vendor purchase, or picked by hand), so the ledger
+     never again has to GUESS a product out of free-text label wording */
+  try { q("ALTER TABLE payee_ledger ADD COLUMN IF NOT EXISTS product VARCHAR(140) NULL"); } catch (Exception $e) {}
   $ok=true;
 }
 
@@ -516,19 +520,24 @@ function ensure_vendor_autobill() {
   ensure_payees();
 }
 
-function vendor_batch_autobill_sync($batchId, $payeeId, $date, $amountRs, $label) {
+function vendor_batch_autobill_sync($batchId, $payeeId, $date, $product, $qty, $unitCost) {
   ensure_payees();
   $existingDue = row("SELECT id FROM payee_ledger WHERE ref_batch_id=?", [(int)$batchId]);
   if (!$payeeId) {
     if ($existingDue) q("DELETE FROM payee_ledger WHERE id=?", [(int)$existingDue['id']]);
     return;
   }
+  $amount = (int)$qty * (float)$unitCost;
+  /* label leads with the product name itself — "Gaumata Murti (500 pcs @ Rs.232.00)" —
+     so it's unambiguous at a glance AND matches the ledger's existing name-prefix
+     resolver even without the dedicated 'product' column below */
+  $label = $product.' ('.(int)$qty.' pcs @ Rs.'.number_format((float)$unitCost,2).')';
   if ($existingDue) {
-    q("UPDATE payee_ledger SET payee_id=?, entry_date=?, amount=?, label=? WHERE id=?",
-      [(int)$payeeId, $date, (float)$amountRs, $label, (int)$existingDue['id']]);
+    q("UPDATE payee_ledger SET payee_id=?, entry_date=?, amount=?, label=?, product=? WHERE id=?",
+      [(int)$payeeId, $date, $amount, $label, $product, (int)$existingDue['id']]);
   } else {
-    q("INSERT INTO payee_ledger(payee_id,entry_date,type,amount,label,ref_batch_id) VALUES(?,?,'due',?,?,?)",
-      [(int)$payeeId, $date, (float)$amountRs, $label, (int)$batchId]);
+    q("INSERT INTO payee_ledger(payee_id,entry_date,type,amount,label,product,ref_batch_id) VALUES(?,?,'due',?,?,?,?)",
+      [(int)$payeeId, $date, $amount, $label, $product, (int)$batchId]);
   }
 }
 
@@ -545,10 +554,8 @@ function vendor_resync_supplier_dues($supplierId) {
     [$supplierId]);
   $n=0;
   foreach ($batches as $b) {
-    $qty=(int)$b['qty_in']; $amt=$qty*(float)$b['unit_cost'];
     $pname=$b['product_name']?:'(deleted product)';
-    $label='Stock Purchase — '.$pname.' ('.$qty.' pcs @ Rs.'.number_format((float)$b['unit_cost'],2).')';
-    vendor_batch_autobill_sync((int)$b['id'], $payeeId, $b['purchase_date'], $amt, $label);
+    vendor_batch_autobill_sync((int)$b['id'], $payeeId, $b['purchase_date'], $pname, (int)$b['qty_in'], (float)$b['unit_cost']);
     $n++;
   }
   return $n;

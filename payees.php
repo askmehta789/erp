@@ -11,6 +11,8 @@ ensure_vendor_autobill();
 try { q("ALTER TABLE payee_ledger ADD COLUMN IF NOT EXISTS account_id INT NULL"); } catch (Exception $e) {}
 try { q("ALTER TABLE payee_ledger ADD COLUMN IF NOT EXISTS bank_txn_id INT NULL"); } catch (Exception $e) {}
 
+$allProductNames = array_column(rows("SELECT name FROM products ORDER BY name"), 'name');
+
 /* which payee(s) each vendor's stock purchases auto-bill to, for the 🏭 badge below */
 $vendorsByPayee = [];
 try {
@@ -47,11 +49,24 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
     header('Location: payees.php'); exit;
   }
   if ($act==='add_entry') {
-    $pid=(int)($_POST['payee_id'] ?? 0); $amt=(float)($_POST['amount'] ?? 0);
+    $pid=(int)($_POST['payee_id'] ?? 0);
     $type=($_POST['type'] ?? '')==='due' ? 'due' : 'paid';
+    $product=trim($_POST['product'] ?? '') ?: null;
+    $qty=(float)($_POST['qty'] ?? 0); $rate=(float)($_POST['rate'] ?? 0);
+    $label=trim($_POST['label'] ?? ''); $amt=(float)($_POST['amount'] ?? 0);
+    /* Product + Qty + Rate given → that's the ground truth: compute the amount
+       and write a clean, consistent label from it ("Gaumata Murti (500 pcs @
+       Rs.232.00)") instead of trusting free-text, which is what caused product
+       mismatches in the ledger before. Leave as-is when a product is picked
+       without qty/rate (just tags the entry) or when none is picked at all
+       (keeps old free-text behavior for genuinely mixed/general entries). */
+    if ($product && $qty>0 && $rate>0) {
+      $amt = $qty*$rate;
+      $label = $product.' ('.(int)$qty.' pcs @ Rs.'.number_format($rate,2).')';
+    }
     if ($pid && $amt>0) {
-      q("INSERT INTO payee_ledger(payee_id,entry_date,type,amount,label) VALUES(?,?,?,?,?)",
-        [$pid, ($_POST['entry_date'] ?? '') ?: date('Y-m-d'), $type, $amt, trim($_POST['label'] ?? '')]);
+      q("INSERT INTO payee_ledger(payee_id,entry_date,type,amount,label,product) VALUES(?,?,?,?,?,?)",
+        [$pid, ($_POST['entry_date'] ?? '') ?: date('Y-m-d'), $type, $amt, $label, $product]);
       $newId=(int)db()->lastInsertId();
       $acc=(int)($_POST['account_id'] ?? 0) ?: null;
       if ($acc) {
@@ -66,11 +81,18 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
   }
   if ($act==='edit_entry' && $isAdmin) {
     $id=(int)($_POST['id'] ?? 0);
-    $pid=(int)($_POST['payee_id'] ?? 0); $amt=(float)($_POST['amount'] ?? 0);
+    $pid=(int)($_POST['payee_id'] ?? 0);
     $type=($_POST['type'] ?? '')==='due' ? 'due' : 'paid';
+    $product=trim($_POST['product'] ?? '') ?: null;
+    $qty=(float)($_POST['qty'] ?? 0); $rate=(float)($_POST['rate'] ?? 0);
+    $label=trim($_POST['label'] ?? ''); $amt=(float)($_POST['amount'] ?? 0);
+    if ($product && $qty>0 && $rate>0) {
+      $amt = $qty*$rate;
+      $label = $product.' ('.(int)$qty.' pcs @ Rs.'.number_format($rate,2).')';
+    }
     if ($id && $pid && $amt>0) {
-      q("UPDATE payee_ledger SET payee_id=?, entry_date=?, type=?, amount=?, label=? WHERE id=?",
-        [$pid, ($_POST['entry_date'] ?? '') ?: date('Y-m-d'), $type, $amt, trim($_POST['label'] ?? ''), $id]);
+      q("UPDATE payee_ledger SET payee_id=?, entry_date=?, type=?, amount=?, label=?, product=? WHERE id=?",
+        [$pid, ($_POST['entry_date'] ?? '') ?: date('Y-m-d'), $type, $amt, $label, $product, $id]);
       $acc=(int)($_POST['account_id'] ?? 0) ?: null;
       $entry = row("SELECT * FROM payee_ledger WHERE id=?",[$id]);
       $tid = payee_bank_sync($entry, $acc);
@@ -98,8 +120,8 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
       $n=0;
       foreach(rows("SELECT e.* FROM expenses e WHERE e.category='Ads'
                     AND NOT EXISTS(SELECT 1 FROM payee_ledger pl WHERE pl.ref_expense_id=e.id)") as $e){
-        q("INSERT INTO payee_ledger(payee_id,entry_date,type,amount,label,ref_expense_id) VALUES(?,?,?,?,?,?)",
-          [$pid,$e['expense_date'],'due',(float)$e['amount'],'Ads'.($e['product']?' — '.$e['product']:''),(int)$e['id']]);
+        q("INSERT INTO payee_ledger(payee_id,entry_date,type,amount,label,product,ref_expense_id) VALUES(?,?,?,?,?,?,?)",
+          [$pid,$e['expense_date'],'due',(float)$e['amount'],'Ads'.($e['product']?' — '.$e['product']:''),$e['product']?:null,(int)$e['id']]);
         $n++;
       }
       log_activity("Backfilled $n ads expenses as dues",'Payees');
@@ -118,7 +140,7 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
       $correct=(float)$r['ramt'];
       $label='Ads'.($r['product']?' — '.$r['product']:'').(($r['cur']==='USD'&&$r['usd'])? ' ($'.rtrim(rtrim(number_format((float)$r['usd'],2),'0'),'.').')':'');
       if (abs((float)$r['lamt']-$correct) > 0.01 || $r['llabel']!==$label) {
-        q("UPDATE payee_ledger SET amount=?, label=? WHERE id=?",[$correct,$label,(int)$r['lid']]);
+        q("UPDATE payee_ledger SET amount=?, label=?, product=? WHERE id=?",[$correct,$label,$r['product']?:null,(int)$r['lid']]);
         $fixed++;
       }
     }
@@ -130,6 +152,23 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
     $pid=(int)$_POST['id'];
     q("DELETE FROM payee_ledger WHERE payee_id=?",[$pid]); q("DELETE FROM payees WHERE id=?",[$pid]);
     flash('Payee and their ledger removed.'); header('Location: payees.php'); exit;
+  }
+  if ($act==='tag_products' && $isAdmin) {
+    /* one-time catch-up for OLD entries from before the explicit 'product' column
+       existed: writes today's best-resolved guess (full name, shorthand code, or
+       em-dash sniff) in as the permanent, editable tag — so the ledger stops
+       re-guessing the same entries on every page load. Genuinely mixed entries
+       ("MB x 100 NO X 50") still resolve to nothing and are left alone. */
+    $productNames = array_column(rows("SELECT name FROM products ORDER BY CHAR_LENGTH(name) DESC"), 'name');
+    $codeMap = payee_code_map($productNames);
+    $n=0;
+    foreach (rows("SELECT pl.*, e.product AS exp_product FROM payee_ledger pl LEFT JOIN expenses e ON e.id=pl.ref_expense_id WHERE pl.product IS NULL OR pl.product=''") as $l) {
+      $resolved = payee_resolve_product($l['label'], $l['exp_product'], $productNames, $codeMap);
+      if ($resolved) { q("UPDATE payee_ledger SET product=? WHERE id=?",[$resolved,(int)$l['id']]); $n++; }
+    }
+    log_activity("Tagged $n ledger entries with a resolved product",'Payees');
+    flash($n ? "🏷️ Tagged {$n} entr".($n===1?'y':'ies')." with their resolved product — safe to run again anytime." : 'Nothing new to tag — already tagged or genuinely unresolvable.');
+    header('Location: payees.php'); exit;
   }
 }
 
@@ -188,16 +227,20 @@ function payee_code_map($productNames) {
   return $map;
 }
 
-/* Product resolver for the ledger — prefer the linked expense's real product
-   (set for Ads dues via ref_expense_id), else sniff a known product name out of
-   the free-text label ("Ads — Nabhi Oil ($6)", "Heel Guard Plus X 50 pc @ Rs.170"),
-   checked longest name first so "Nabhi Oil Plus" never loses to "Nabhi Oil".
-   Falls back to a shorthand code ("NO X 50 HH" → Nabhi Oil) ONLY when exactly
-   one code-like token appears in the label — a label with two ("MB x 100 NO X
-   50") is a genuine multi-product purchase recorded as one line, and guessing
-   which one it "really" is would misattribute real money, so it's deliberately
-   left unresolved (shows under Other / General) rather than guessed wrong. */
-function payee_resolve_product($label, $expProduct, $productNames, $codeMap = []) {
+/* Product resolver for the ledger — prefers the explicit 'product' column
+   (ground truth: set directly by Ads/vendor-purchase auto-billing, or picked
+   by hand in the entry modal — never guessed), then the linked expense's real
+   product (older Ads dues via ref_expense_id), else sniffs a known product
+   name out of the free-text label ("Ads — Nabhi Oil ($6)", "Heel Guard Plus X
+   50 pc @ Rs.170"), checked longest name first so "Nabhi Oil Plus" never loses
+   to "Nabhi Oil". Falls back to a shorthand code ("NO X 50 HH" → Nabhi Oil)
+   ONLY when exactly one code-like token appears in the label — a label with
+   two ("MB x 100 NO X 50") is a genuine multi-product purchase recorded as one
+   line, and guessing which one it "really" is would misattribute real money,
+   so it's deliberately left unresolved (shows under Other / General) rather
+   than guessed wrong. */
+function payee_resolve_product($label, $expProduct, $productNames, $codeMap = [], $productTag = null) {
+  if ($productTag) return $productTag;
   if ($expProduct) return $expProduct;
   $label = trim((string)$label);
   if ($label === '') return null;
@@ -228,7 +271,7 @@ if ($vp) {
                         WHERE pl.payee_id=? ORDER BY pl.entry_date ASC, pl.id ASC", [$view]);
   $run = 0; $runMap = []; $productSet = [];
   foreach ($fullHistory as &$l) {
-    $l['product_name'] = payee_resolve_product($l['label'], $l['exp_product'], $productNames, $codeMap);
+    $l['product_name'] = payee_resolve_product($l['label'], $l['exp_product'], $productNames, $codeMap, $l['product'] ?? null);
     $run += $l['type']==='due' ? (float)$l['amount'] : -(float)$l['amount'];
     $runMap[$l['id']] = $run;
     if ($l['product_name']) $productSet[$l['product_name']] = true;
@@ -338,14 +381,21 @@ require __DIR__.'/includes/header.php';
 <div class="panel" style="padding:14px 16px 4px;margin-bottom:14px">
   <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">
     <span class="muted" style="font-size:11.5px"><?= $adsPid?'⚡ Ads auto-bill: ON':'⚡ tap the lightning on a payee to auto-bill new Ads expenses to them' ?></span>
-    <?php if($isAdmin && $adsPid): ?><div style="display:flex;gap:8px;flex-wrap:wrap">
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <?php if($isAdmin && $adsPid): ?>
       <form method="post" style="display:inline" onsubmit="return confirm('Import ALL past Ads expenses as dues to the ads payee? Safe to run twice — never duplicates.')">
         <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="backfill_ads">
         <button class="btn btn-sm">⚡ Import past Ads expenses</button></form>
       <form method="post" style="display:inline" title="Re-sync ad dues to their rupee amount — fixes dollars shown as Rs.">
         <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="repair_ads">
         <button class="btn btn-sm">🔧 Fix $→Rs on Ads dues</button></form>
-    </div><?php endif; ?>
+      <?php endif; ?>
+      <?php if($isAdmin): ?>
+      <form method="post" style="display:inline" title="Fills in the Product tag on old entries using today's best match (shorthand codes included) — safe to run anytime, never duplicates">
+        <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="tag_products">
+        <button class="btn btn-sm">🏷️ Tag resolved products</button></form>
+      <?php endif; ?>
+    </div>
   </div>
   <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding-bottom:14px">
     <div class="chips" id="payChips" style="margin:0">
@@ -473,7 +523,7 @@ require __DIR__.'/includes/header.php';
       <td class="num right" style="color:<?= $runMap[$l['id']]>0.5?'var(--amber)':'var(--green)' ?>"><?= money(max(0,$runMap[$l['id']])) ?></td>
       <td class="right">
         <?php if($isAdmin): ?>
-        <button type="button" class="iact" title="Edit entry" data-rec="<?= e(json_encode(['id'=>(int)$l['id'],'payee_id'=>(int)$l['payee_id'],'entry_date'=>$l['entry_date'],'type'=>$l['type'],'amount'=>(float)$l['amount'],'account_id'=>(int)($l['account_id']??0),'label'=>$l['label']])) ?>" onclick="openEditEntry(JSON.parse(this.getAttribute('data-rec')))">✏️</button>
+        <button type="button" class="iact" title="Edit entry" data-rec="<?= e(json_encode(['id'=>(int)$l['id'],'payee_id'=>(int)$l['payee_id'],'entry_date'=>$l['entry_date'],'type'=>$l['type'],'amount'=>(float)$l['amount'],'account_id'=>(int)($l['account_id']??0),'label'=>$l['label'],'product'=>$l['product']??''])) ?>" onclick="openEditEntry(JSON.parse(this.getAttribute('data-rec')))">✏️</button>
         <form method="post" style="display:inline" onsubmit="return confirm('Delete entry?')"><input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="del_entry"><input type="hidden" name="id" value="<?= (int)$l['id'] ?>"><input type="hidden" name="pid" value="<?= $view ?>"><button class="iact del">🗑</button></form>
         <?php endif; ?>
       </td>
@@ -505,6 +555,13 @@ require __DIR__.'/includes/header.php';
       <option value="paid">💸 Paid</option><option value="due">🧾 Due</option>
     </select></div>
     <div><label>Date</label><input type="date" name="entry_date" id="enDate" value="<?= date('Y-m-d') ?>"></div>
+    <div class="full"><label>Product <span class="muted" style="font-weight:400">(optional — tags this entry so it's never mismatched)</span></label>
+      <select name="product" id="enProduct" onchange="enRecalc()">
+        <option value="">— none / general —</option>
+        <?php foreach($allProductNames as $pn): ?><option value="<?= e($pn) ?>"><?= e($pn) ?></option><?php endforeach; ?>
+      </select></div>
+    <div id="enQtyWrap"><label>Quantity (pcs)</label><input type="number" step="any" min="0" name="qty" id="enQty" oninput="enRecalc()" placeholder="e.g. 500"></div>
+    <div id="enRateWrap"><label>Rate / pc (Rs.)</label><input type="number" step="any" min="0" name="rate" id="enRate" oninput="enRecalc()" placeholder="e.g. 232"></div>
     <div><label>Amount (Rs.) *</label><input type="number" step="any" min="1" name="amount" id="enAmount" required></div>
     <div id="enAcctWrap"><label>Account (Bank page) — leave "not linked" for a Due entry</label>
       <select name="account_id" id="enAccount">
@@ -513,7 +570,8 @@ require __DIR__.'/includes/header.php';
           <option value="<?= (int)$A['id'] ?>"><?= $A['kind']==='cash'?'💵':'🏦' ?> <?= e($A['name']) ?> — <?= money($acctBal[$A['id']] ?? 0) ?></option>
         <?php endforeach; ?>
       </select></div>
-    <div><label>Expense Name / Note</label><input name="label" id="enLabel" placeholder="e.g. Ads Payment · Salary Magh · Heel Guard"></div>
+    <div class="full"><label>Expense Name / Note</label><input name="label" id="enLabel" placeholder="e.g. Ads Payment · Salary Magh · Heel Guard"></div>
+    <div class="full muted" id="enPreview" style="font-size:11.5px"></div>
     <div class="full muted" id="enHint" style="font-size:11.5px"></div>
   </div>
   <div class="modal-foot"><button type="button" class="btn" onclick="closeM('enBg')">Cancel</button><button class="btn btn-primary">💾 Save</button></div>
@@ -539,6 +597,21 @@ function enSetType(t){
   document.getElementById('enTypeSelect').value=t;
   var aw=document.getElementById('enAcctWrap'); if(aw) aw.style.display = t==='paid' ? '' : 'none';
 }
+function enRecalc(){
+  var product=document.getElementById('enProduct').value;
+  var qty=parseFloat(document.getElementById('enQty').value)||0;
+  var rate=parseFloat(document.getElementById('enRate').value)||0;
+  var prev=document.getElementById('enPreview');
+  if(product && qty>0 && rate>0){
+    var amt=qty*rate;
+    var txt=product+' ('+qty+' pcs @ Rs.'+rate.toFixed(2)+')';
+    document.getElementById('enAmount').value=amt;
+    document.getElementById('enLabel').value=txt;
+    prev.textContent='→ '+txt+' = Rs.'+amt.toLocaleString();
+  } else {
+    prev.textContent='';
+  }
+}
 function openEntry(t){
   document.getElementById('enAction').value='add_entry';
   document.getElementById('enId').value='';
@@ -548,9 +621,13 @@ function openEntry(t){
     : 'What you now owe them (their ad spend, invoice, rent bill…) — increases Remaining.';
   document.getElementById('enTypeWrap').style.display='none';
   document.getElementById('enDate').value = new Date().toISOString().slice(0,10);
+  document.getElementById('enProduct').value='';
+  document.getElementById('enQty').value='';
+  document.getElementById('enRate').value='';
   document.getElementById('enAmount').value='';
   document.getElementById('enAccount').value='0';
   document.getElementById('enLabel').value='';
+  document.getElementById('enPreview').textContent='';
   enSetType(t);
   document.getElementById('enBg').classList.add('open');document.body.classList.add('modal-open');
 }
@@ -562,9 +639,13 @@ function openEditEntry(rec){
   document.getElementById('enTypeWrap').style.display='';
   document.getElementById('enPayee').value=rec.payee_id;
   document.getElementById('enDate').value=rec.entry_date;
+  document.getElementById('enProduct').value=rec.product||'';
+  document.getElementById('enQty').value='';
+  document.getElementById('enRate').value='';
   document.getElementById('enAmount').value=rec.amount;
   document.getElementById('enAccount').value=rec.account_id||'0';
   document.getElementById('enLabel').value=rec.label||'';
+  document.getElementById('enPreview').textContent='';
   enSetType(rec.type);
   document.getElementById('enBg').classList.add('open');document.body.classList.add('modal-open');
 }

@@ -37,8 +37,7 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && in_array($_POST['_action'] ?? '', ['r
       $payeeId=(int)val("SELECT COALESCE(payee_id,0) FROM suppliers WHERE id=?",[$supplierId]);
       if ($payeeId) {
         $pname=(string)val("SELECT name FROM products WHERE id=?",[$pid]);
-        $label='Stock Purchase — '.$pname.' ('.$qty.' pcs @ Rs.'.number_format($ucost,2).')';
-        vendor_batch_autobill_sync($newBatchId, $payeeId, $pdate, $qty*$ucost, $label);
+        vendor_batch_autobill_sync($newBatchId, $payeeId, $pdate, $pname, $qty, $ucost);
       }
       log_activity("Restocked #$pid: +$qty @ ".$ucost,'Stock'); flash("Batch added: $qty pcs @ Rs.$ucost".($payeeId?' — billed to linked payee as due.':''));
     }
@@ -95,8 +94,7 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && in_array($_POST['_action'] ?? '', ['e
         ensure_vendor_autobill();
         $payeeId = $newSupplier ? (int)val("SELECT COALESCE(payee_id,0) FROM suppliers WHERE id=?",[$newSupplier]) : 0;
         $pname=(string)val("SELECT name FROM products WHERE id=?",[$b['product_id']]);
-        $label='Stock Purchase — '.$pname.' ('.$newQtyIn.' pcs @ Rs.'.number_format($newUcost,2).')';
-        vendor_batch_autobill_sync($bid, $payeeId, $newDate, $newQtyIn*$newUcost, $label);
+        vendor_batch_autobill_sync($bid, $payeeId, $newDate, $pname, $newQtyIn, $newUcost);
         log_activity("Edited batch #$bid (product #{$b['product_id']})",'Stock');
         flash('Batch updated.');
       }

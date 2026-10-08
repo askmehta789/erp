@@ -16,11 +16,12 @@ function ads_autobill_sync($expenseId, $isAdsCategory, $date, $amountRs, $produc
   $pid=(int)setting('ads_payee_id',0); if(!$pid) return;
   ensure_payees();
   $label='Ads'.($product?' — '.$product:'').($usd? ' ($'.rtrim(rtrim(number_format((float)$usd,2),'0'),'.').')' : '');
+  $productTag = $product ?: null;
   if ($existingDue) {
-    q("UPDATE payee_ledger SET entry_date=?, amount=?, label=? WHERE id=?",[$date,(float)$amountRs,$label,(int)$existingDue['id']]);
+    q("UPDATE payee_ledger SET entry_date=?, amount=?, label=?, product=? WHERE id=?",[$date,(float)$amountRs,$label,$productTag,(int)$existingDue['id']]);
   } else {
-    q("INSERT INTO payee_ledger(payee_id,entry_date,type,amount,label,ref_expense_id) VALUES(?,?,?,?,?,?)",
-      [$pid,$date,'due',(float)$amountRs,$label,(int)$expenseId]);
+    q("INSERT INTO payee_ledger(payee_id,entry_date,type,amount,label,product,ref_expense_id) VALUES(?,?,?,?,?,?,?)",
+      [$pid,$date,'due',(float)$amountRs,$label,$productTag,(int)$expenseId]);
   }
 }
 }

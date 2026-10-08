@@ -500,7 +500,58 @@ function ensure_payees() { static $ok=false; if($ok) return;
     ref_expense_id INT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP, INDEX(payee_id), INDEX(entry_date), INDEX(ref_expense_id))"); } catch (Exception $e) {}
   try { q("ALTER TABLE payee_ledger ADD COLUMN IF NOT EXISTS ref_expense_id INT NULL"); } catch (Exception $e) {}
+  try { q("ALTER TABLE payee_ledger ADD COLUMN IF NOT EXISTS ref_batch_id INT NULL"); } catch (Exception $e) {}
   $ok=true;
+}
+
+/* ================= Vendor (Supplier) Purchase Auto-Billing =================
+   Same proven pattern as expenses.php's ads_autobill_sync(): once a Supplier is
+   linked to a Payee, every real stock purchase batch from them creates/updates
+   a 'due' entry in that payee's ledger automatically — buying stock keeps the
+   Vendor Payment side in sync without typing the amount twice. ref_batch_id
+   ties the ledger row to the exact batch it came from. */
+function ensure_vendor_autobill() {
+  static $done=false; if($done) return; $done=true;
+  try { q("ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS payee_id INT NULL"); } catch (Exception $e) {}
+  ensure_payees();
+}
+
+function vendor_batch_autobill_sync($batchId, $payeeId, $date, $amountRs, $label) {
+  ensure_payees();
+  $existingDue = row("SELECT id FROM payee_ledger WHERE ref_batch_id=?", [(int)$batchId]);
+  if (!$payeeId) {
+    if ($existingDue) q("DELETE FROM payee_ledger WHERE id=?", [(int)$existingDue['id']]);
+    return;
+  }
+  if ($existingDue) {
+    q("UPDATE payee_ledger SET payee_id=?, entry_date=?, amount=?, label=? WHERE id=?",
+      [(int)$payeeId, $date, (float)$amountRs, $label, (int)$existingDue['id']]);
+  } else {
+    q("INSERT INTO payee_ledger(payee_id,entry_date,type,amount,label,ref_batch_id) VALUES(?,?,'due',?,?,?)",
+      [(int)$payeeId, $date, (float)$amountRs, $label, (int)$batchId]);
+  }
+}
+
+/* re-syncs EVERY real purchase batch for one supplier to whichever payee they're
+   currently linked to (or removes the auto-billed dues if unlinked) — called right
+   after the link changes, and safe to re-run any time since it never duplicates. */
+function vendor_resync_supplier_dues($supplierId) {
+  ensure_stock_batches(); ensure_vendor_autobill();
+  $supplierId=(int)$supplierId; if(!$supplierId) return 0;
+  $payeeId=(int)val("SELECT COALESCE(payee_id,0) FROM suppliers WHERE id=?",[$supplierId]);
+  $batches = rows("SELECT b.*, p.name AS product_name FROM stock_batches b
+    LEFT JOIN products p ON p.id=b.product_id
+    WHERE b.supplier_id=? AND b.note NOT IN ('Count adjustment +','returned from Hungry Hunter','returned from Dropex')",
+    [$supplierId]);
+  $n=0;
+  foreach ($batches as $b) {
+    $qty=(int)$b['qty_in']; $amt=$qty*(float)$b['unit_cost'];
+    $pname=$b['product_name']?:'(deleted product)';
+    $label='Stock Purchase — '.$pname.' ('.$qty.' pcs @ Rs.'.number_format((float)$b['unit_cost'],2).')';
+    vendor_batch_autobill_sync((int)$b['id'], $payeeId, $b['purchase_date'], $amt, $label);
+    $n++;
+  }
+  return $n;
 }
 function ensure_purchase_products() { static $ok=false; if($ok) return; $ok=true;
   try {

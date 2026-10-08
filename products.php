@@ -13,6 +13,7 @@ try { q("CREATE TABLE IF NOT EXISTS suppliers (
 )"); } catch (Exception $e) {}
 try { q("ALTER TABLE stock_batches ADD COLUMN IF NOT EXISTS supplier_id INT NULL"); } catch (Exception $e) {}
 try { q("ALTER TABLE products ADD COLUMN IF NOT EXISTS image VARCHAR(255) NULL"); } catch (Exception $e) {}
+ensure_vendor_autobill();
 if ($_SERVER['REQUEST_METHOD']==='POST' && in_array($_POST['_action'] ?? '', ['restock','setstock'], true)) {
   check_csrf();
   $pid=(int)($_POST['id'] ?? 0);
@@ -25,11 +26,21 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && in_array($_POST['_action'] ?? '', ['r
     if(!$supplierId){
       flash('Pick a vendor before adding a purchase batch — this keeps "quantity purchased per vendor" accurate.');
     } elseif($qty>0){
+      $pdate = ($_POST['pdate'] ?? '') ?: date('Y-m-d');
       q("INSERT INTO stock_batches(product_id,purchase_date,qty_in,qty_left,unit_cost,note,supplier_id) VALUES(?,?,?,?,?,?,?)",
-        [$pid, ($_POST['pdate'] ?? '') ?: date('Y-m-d'), $qty, $qty, $ucost, trim($_POST['note'] ?? ''), $supplierId]);
+        [$pid, $pdate, $qty, $qty, $ucost, trim($_POST['note'] ?? ''), $supplierId]);
+      $newBatchId=(int)db()->lastInsertId();
       q("UPDATE products SET cost=? WHERE id=?",[$ucost,$pid]);   /* latest rate becomes the base cost */
       stock_cache($pid);
-      log_activity("Restocked #$pid: +$qty @ ".$ucost,'Stock'); flash("Batch added: $qty pcs @ Rs.$ucost");
+      /* vendor auto-billing: if this supplier is linked to a Payee, this purchase
+         becomes a 'due' in their ledger automatically — one add, recorded everywhere */
+      $payeeId=(int)val("SELECT COALESCE(payee_id,0) FROM suppliers WHERE id=?",[$supplierId]);
+      if ($payeeId) {
+        $pname=(string)val("SELECT name FROM products WHERE id=?",[$pid]);
+        $label='Stock Purchase — '.$pname.' ('.$qty.' pcs @ Rs.'.number_format($ucost,2).')';
+        vendor_batch_autobill_sync($newBatchId, $payeeId, $pdate, $qty*$ucost, $label);
+      }
+      log_activity("Restocked #$pid: +$qty @ ".$ucost,'Stock'); flash("Batch added: $qty pcs @ Rs.$ucost".($payeeId?' — billed to linked payee as due.':''));
     }
   } else { /* set exact count */
     $target=max(0,(int)($_POST['qty'] ?? 0));

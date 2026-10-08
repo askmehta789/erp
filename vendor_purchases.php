@@ -7,6 +7,7 @@ try { q("CREATE TABLE IF NOT EXISTS suppliers (
   status ENUM('active','inactive') NOT NULL DEFAULT 'active', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 )"); } catch (Exception $e) {}
 try { q("ALTER TABLE stock_batches ADD COLUMN IF NOT EXISTS supplier_id INT NULL"); } catch (Exception $e) {}
+ensure_vendor_autobill();
 $PAGE_TITLE='Vendor Purchases';
 
 /* embedded Suppliers directory — add/edit vendor name, contact, balance */
@@ -27,6 +28,24 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && ($_POST['_action'] ?? '')==='assign_v
   header('Location: vendor_purchases.php'.(($_POST['back'] ?? '')==='unlinked' ? '?view=unlinked' : '')); exit;
 }
 
+/* link/unlink this vendor to a Payee for auto-billing — same "⚡" idea as the Ads
+   payee, just per-vendor since there are many vendors. Re-syncs every past real
+   purchase from them as a due the moment the link changes (or removes the dues
+   if unlinked), so the Payee ledger never drifts from what was actually entered here. */
+if ($_SERVER['REQUEST_METHOD']==='POST' && ($_POST['_action'] ?? '')==='link_payee') {
+  check_csrf();
+  $supplierId=(int)($_POST['supplier_id'] ?? 0);
+  $payeeId=(int)($_POST['payee_id'] ?? 0) ?: null;
+  if ($supplierId) {
+    q("UPDATE suppliers SET payee_id=? WHERE id=?",[$payeeId,$supplierId]);
+    $n=vendor_resync_supplier_dues($supplierId);
+    $vn=(string)val("SELECT name FROM suppliers WHERE id=?",[$supplierId]);
+    log_activity(($payeeId?"Linked vendor $vn to a payee for auto-billing ($n synced)":"Unlinked vendor $vn from payee auto-billing"),'Purchases');
+    flash($payeeId ? "⚡ {$vn}'s purchases now auto-bill to that payee — {$n} synced as due." : "Unlinked {$vn} — its auto-billed dues were removed.");
+  }
+  header('Location: vendor_purchases.php?vendor='.$supplierId); exit;
+}
+
 /* a batch is a genuine vendor purchase only if it wasn't created by an internal
    stock movement (HH returns, manual count corrections) — same rule used on the
    Products page for "lifetime purchased", kept consistent here. */
@@ -44,6 +63,18 @@ $vendorsWithData = rows("SELECT s.id, s.name, COUNT(*) n FROM suppliers s
   GROUP BY s.id, s.name ORDER BY s.name");
 $vid = (int)($_GET['vendor'] ?? ($vendorsWithData[0]['id'] ?? 0));
 $vendor = $vid ? row("SELECT * FROM suppliers WHERE id=?",[$vid]) : null;
+
+/* vendor ↔ payee auto-billing link — who this vendor's purchases bill to, and
+   what's still owed there (whole-payee remaining, since a payee is normally
+   one vendor's billing identity) */
+$allPayees = rows("SELECT id,name FROM payees ORDER BY name");
+$linkedPayee = null; $linkedPayeeRem = 0;
+if ($vendor && !empty($vendor['payee_id'])) {
+  $linkedPayee = row("SELECT * FROM payees WHERE id=?",[(int)$vendor['payee_id']]);
+  if ($linkedPayee) {
+    $linkedPayeeRem = (float)val("SELECT COALESCE(SUM(CASE WHEN type='due' THEN amount ELSE -amount END),0) FROM payee_ledger WHERE payee_id=?",[$linkedPayee['id']]);
+  }
+}
 
 /* optional month filter (?pmonth=YYYY-MM) — narrows the totals/history below
    to spend in that one calendar month for the selected vendor */
@@ -198,6 +229,24 @@ document.getElementById('assignForm').addEventListener('submit', function(e){
   <div class="vp-stat g"><b><?= money($totAmt) ?></b><span>Total Spent<?= $pmonth!==''?' · '.e(date('M Y',strtotime($pmonth.'-01'))):'' ?></span></div>
   <div class="vp-stat t"><b><?= money($avgRate) ?></b><span>Avg Rate / Pc</span></div>
   <div class="vp-stat p"><b><?= count($batches) ?></b><span>Purchase Batches</span></div>
+</div>
+
+<div class="vp-card">
+  <h3>⚡ Vendor Payment Auto-Bill</h3>
+  <?php if($linkedPayee): ?>
+  <p class="muted" style="font-size:11.5px;margin-bottom:10px">Every purchase from <b><?= e($vendor['name']) ?></b> auto-bills as a <b>due</b> to payee <b><?= e($linkedPayee['name']) ?></b> — no need to re-enter it on the Ads & Vendors page. Remaining there: <b style="color:<?= $linkedPayeeRem>0.5?'var(--amber)':'var(--green)' ?>"><?= money(max(0,$linkedPayeeRem)) ?></b> · <a href="payees.php?id=<?= (int)$linkedPayee['id'] ?>">📜 View ledger / record payment →</a></p>
+  <?php else: ?>
+  <p class="muted" style="font-size:11.5px;margin-bottom:10px">Not linked yet — purchases from <b><?= e($vendor['name']) ?></b> are tracked here but won't show up as a due on the Ads & Vendors page until you link a payee.</p>
+  <?php endif; ?>
+  <form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="link_payee"><input type="hidden" name="supplier_id" value="<?= (int)$vid ?>">
+    <select name="payee_id" style="border:1px solid var(--border);border-radius:8px;padding:7px 11px;font-size:12px">
+      <option value="0">— no auto-bill —</option>
+      <?php foreach($allPayees as $p): ?><option value="<?= (int)$p['id'] ?>" <?= ($linkedPayee && (int)$linkedPayee['id']===(int)$p['id'])?'selected':'' ?>><?= e($p['name']) ?></option><?php endforeach; ?>
+    </select>
+    <button class="btn btn-sm btn-primary">💾 Save Link</button>
+    <?php if(!$allPayees): ?><span class="muted" style="font-size:11.5px">No payees yet — <a href="payees.php">add one on Ads & Vendors →</a></span><?php endif; ?>
+  </form>
 </div>
 
 <div class="vp-card">

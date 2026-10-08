@@ -7,8 +7,17 @@ $isAdmin = role_rank($u['role'] ?? '') >= 3;
 /* tables */
 ensure_payees();
 ensure_banks();
+ensure_vendor_autobill();
 try { q("ALTER TABLE payee_ledger ADD COLUMN IF NOT EXISTS account_id INT NULL"); } catch (Exception $e) {}
 try { q("ALTER TABLE payee_ledger ADD COLUMN IF NOT EXISTS bank_txn_id INT NULL"); } catch (Exception $e) {}
+
+/* which payee(s) each vendor's stock purchases auto-bill to, for the 🏭 badge below */
+$vendorsByPayee = [];
+try {
+  foreach (rows("SELECT id,name,payee_id FROM suppliers WHERE payee_id IS NOT NULL") as $s) {
+    $vendorsByPayee[(int)$s['payee_id']][] = $s['name'];
+  }
+} catch (Exception $e) {}
 
 /* same proven pattern as expense_bank_sync()/salary_bank_sync() — only 'paid' entries
    are real cash leaving a bank account; 'due' just records a liability owed, no sync. */
@@ -52,6 +61,22 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
       }
       log_activity(($type==='paid'?'Payment':'Due')." ".money($amt)." → payee #$pid",'Payees');
       flash(($type==='paid'?'💸 Payment':'🧾 Due')." of ".money($amt)." recorded.");
+    } else flash('Pick a payee and enter an amount.');
+    header('Location: payees.php'.($pid?'?id='.$pid:'')); exit;
+  }
+  if ($act==='edit_entry' && $isAdmin) {
+    $id=(int)($_POST['id'] ?? 0);
+    $pid=(int)($_POST['payee_id'] ?? 0); $amt=(float)($_POST['amount'] ?? 0);
+    $type=($_POST['type'] ?? '')==='due' ? 'due' : 'paid';
+    if ($id && $pid && $amt>0) {
+      q("UPDATE payee_ledger SET payee_id=?, entry_date=?, type=?, amount=?, label=? WHERE id=?",
+        [$pid, ($_POST['entry_date'] ?? '') ?: date('Y-m-d'), $type, $amt, trim($_POST['label'] ?? ''), $id]);
+      $acc=(int)($_POST['account_id'] ?? 0) ?: null;
+      $entry = row("SELECT * FROM payee_ledger WHERE id=?",[$id]);
+      $tid = payee_bank_sync($entry, $acc);
+      q("UPDATE payee_ledger SET account_id=?, bank_txn_id=? WHERE id=?",[$acc,$tid,$id]);
+      log_activity("Edited payee ledger entry #$id",'Payees');
+      flash('Entry updated.');
     } else flash('Pick a payee and enter an amount.');
     header('Location: payees.php'.($pid?'?id='.$pid:'')); exit;
   }
@@ -274,7 +299,7 @@ require __DIR__.'/includes/header.php';
   <div class="ccard payee-card" data-status="<?= $status ?>" data-name="<?= e(mb_strtolower($p['name'].' '.$p['note'])) ?>" style="--ccol:<?= $col ?>">
     <div class="ccard-top">
       <div>
-        <div class="ccard-name"><?= e($p['name']) ?> <?= ((int)$p['id']===$adsPid)?' <span class="pill p-yellow" style="font-size:9px">⚡ ADS PAYEE</span>':'' ?></div>
+        <div class="ccard-name"><?= e($p['name']) ?> <?= ((int)$p['id']===$adsPid)?' <span class="pill p-yellow" style="font-size:9px">⚡ ADS PAYEE</span>':'' ?><?php if(!empty($vendorsByPayee[(int)$p['id']])): ?> <span class="pill p-blue" style="font-size:9px" title="Vendor Purchases auto-bills here">🏭 <?= e(implode(', ',$vendorsByPayee[(int)$p['id']])) ?></span><?php endif; ?></div>
         <div class="ccard-sub"><?= $p['note']?e($p['note']).' · ':'' ?><?= (int)$p['nentries'] ?> entries</div>
       </div>
       <?php if($status==='due'): ?><span class="pill p-yellow">🟠 Due</span>
@@ -376,7 +401,12 @@ require __DIR__.'/includes/header.php';
       <td><?= e($l['label'] ?: '—') ?></td>
       <td class="num right" style="font-weight:700;color:<?= $l['type']==='due'?'var(--ink)':'var(--green)' ?>"><?= money($l['amount']) ?></td>
       <td class="num right" style="color:<?= $runMap[$l['id']]>0.5?'var(--amber)':'var(--green)' ?>"><?= money(max(0,$runMap[$l['id']])) ?></td>
-      <td class="right"><?php if($isAdmin): ?><form method="post" style="display:inline" onsubmit="return confirm('Delete entry?')"><input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="del_entry"><input type="hidden" name="id" value="<?= (int)$l['id'] ?>"><input type="hidden" name="pid" value="<?= $view ?>"><button class="iact del">🗑</button></form><?php endif; ?></td>
+      <td class="right">
+        <?php if($isAdmin): ?>
+        <button type="button" class="iact" title="Edit entry" data-rec="<?= e(json_encode(['id'=>(int)$l['id'],'payee_id'=>(int)$l['payee_id'],'entry_date'=>$l['entry_date'],'type'=>$l['type'],'amount'=>(float)$l['amount'],'account_id'=>(int)($l['account_id']??0),'label'=>$l['label']])) ?>" onclick="openEditEntry(JSON.parse(this.getAttribute('data-rec')))">✏️</button>
+        <form method="post" style="display:inline" onsubmit="return confirm('Delete entry?')"><input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="del_entry"><input type="hidden" name="id" value="<?= (int)$l['id'] ?>"><input type="hidden" name="pid" value="<?= $view ?>"><button class="iact del">🗑</button></form>
+        <?php endif; ?>
+      </td>
     </tr>
   <?php endforeach; if(!$ledger) echo '<tr><td colspan="7"><div class="empty">No entries match these filters.</div></td></tr>'; ?>
   </tbody></table></div>
@@ -397,20 +427,23 @@ require __DIR__.'/includes/header.php';
 <!-- entry modal -->
 <div class="modal-bg" id="enBg" style="z-index:99990"><form class="modal" method="post" style="width:460px;max-width:96vw">
   <div class="modal-head"><span id="enTitle">💸 Record Payment</span><span class="mx" onclick="closeM('enBg')">✕</span></div>
-  <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="add_entry"><input type="hidden" name="type" id="enType" value="paid">
+  <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" id="enAction" value="add_entry"><input type="hidden" name="id" id="enId" value=""><input type="hidden" name="type" id="enType" value="paid">
   <div class="modal-body">
-    <div><label>Payee *</label><select name="payee_id" required><option value="">—</option>
+    <div><label>Payee *</label><select name="payee_id" id="enPayee" required><option value="">—</option>
       <?php foreach($payees as $p): ?><option value="<?= (int)$p['id'] ?>"<?= $view===(int)$p['id']?' selected':'' ?>><?= e($p['name']) ?></option><?php endforeach; ?></select></div>
-    <div><label>Date</label><input type="date" name="entry_date" value="<?= date('Y-m-d') ?>"></div>
-    <div><label>Amount (Rs.) *</label><input type="number" step="any" min="1" name="amount" required></div>
+    <div id="enTypeWrap" style="display:none"><label>Type</label><select id="enTypeSelect" onchange="enSetType(this.value)">
+      <option value="paid">💸 Paid</option><option value="due">🧾 Due</option>
+    </select></div>
+    <div><label>Date</label><input type="date" name="entry_date" id="enDate" value="<?= date('Y-m-d') ?>"></div>
+    <div><label>Amount (Rs.) *</label><input type="number" step="any" min="1" name="amount" id="enAmount" required></div>
     <div id="enAcctWrap"><label>Account (Bank page) — leave "not linked" for a Due entry</label>
-      <select name="account_id">
+      <select name="account_id" id="enAccount">
         <option value="0">⏳ — not linked —</option>
         <?php foreach($linkAccounts as $A): ?>
           <option value="<?= (int)$A['id'] ?>"><?= $A['kind']==='cash'?'💵':'🏦' ?> <?= e($A['name']) ?> — <?= money($acctBal[$A['id']] ?? 0) ?></option>
         <?php endforeach; ?>
       </select></div>
-    <div><label>Expense Name / Note</label><input name="label" placeholder="e.g. Ads Payment · Salary Magh · Heel Guard"></div>
+    <div><label>Expense Name / Note</label><input name="label" id="enLabel" placeholder="e.g. Ads Payment · Salary Magh · Heel Guard"></div>
     <div class="full muted" id="enHint" style="font-size:11.5px"></div>
   </div>
   <div class="modal-foot"><button type="button" class="btn" onclick="closeM('enBg')">Cancel</button><button class="btn btn-primary">💾 Save</button></div>
@@ -431,13 +464,38 @@ require __DIR__.'/includes/header.php';
 .iact.del:hover{background:linear-gradient(180deg,#ffe8e6,#ffd2cd);border-color:#f3a29a}
 </style>
 <script>
-function openEntry(t){
+function enSetType(t){
   document.getElementById('enType').value=t;
+  document.getElementById('enTypeSelect').value=t;
+  var aw=document.getElementById('enAcctWrap'); if(aw) aw.style.display = t==='paid' ? '' : 'none';
+}
+function openEntry(t){
+  document.getElementById('enAction').value='add_entry';
+  document.getElementById('enId').value='';
   document.getElementById('enTitle').textContent = t==='paid' ? '💸 Record Payment (bank out)' : '🧾 Record Due / Bill';
   document.getElementById('enHint').textContent = t==='paid'
     ? 'Money that left your bank to this payee — reduces their Remaining.'
     : 'What you now owe them (their ad spend, invoice, rent bill…) — increases Remaining.';
-  var aw=document.getElementById('enAcctWrap'); if(aw) aw.style.display = t==='paid' ? '' : 'none';
+  document.getElementById('enTypeWrap').style.display='none';
+  document.getElementById('enDate').value = new Date().toISOString().slice(0,10);
+  document.getElementById('enAmount').value='';
+  document.getElementById('enAccount').value='0';
+  document.getElementById('enLabel').value='';
+  enSetType(t);
+  document.getElementById('enBg').classList.add('open');document.body.classList.add('modal-open');
+}
+function openEditEntry(rec){
+  document.getElementById('enAction').value='edit_entry';
+  document.getElementById('enId').value=rec.id;
+  document.getElementById('enTitle').textContent = '✏️ Edit Entry';
+  document.getElementById('enHint').textContent = 'Editing a past entry directly — if it was auto-billed from an Ads expense or a vendor purchase, re-saving the source there will overwrite this.';
+  document.getElementById('enTypeWrap').style.display='';
+  document.getElementById('enPayee').value=rec.payee_id;
+  document.getElementById('enDate').value=rec.entry_date;
+  document.getElementById('enAmount').value=rec.amount;
+  document.getElementById('enAccount').value=rec.account_id||'0';
+  document.getElementById('enLabel').value=rec.label||'';
+  enSetType(rec.type);
   document.getElementById('enBg').classList.add('open');document.body.classList.add('modal-open');
 }
 function closeM(id){document.getElementById(id).classList.remove('open');document.body.classList.remove('modal-open');}

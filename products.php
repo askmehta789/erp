@@ -62,6 +62,51 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && in_array($_POST['_action'] ?? '', ['r
   $returnTo = (str_starts_with($returnTo,'product_detail.php?') || str_starts_with($returnTo,'products.php?')) ? $returnTo : ('products.php?open='.$pid.'#batches-'.$pid);
   header('Location: '.$returnTo); exit;
 }
+if ($_SERVER['REQUEST_METHOD']==='POST' && in_array($_POST['_action'] ?? '', ['edit_batch','delete_batch'], true)) {
+  check_csrf();
+  $bid=(int)($_POST['batch_id'] ?? 0);
+  $b=row("SELECT * FROM stock_batches WHERE id=?",[$bid]);
+  if (!$b) { flash('Batch not found — it may have already been deleted.'); }
+  else {
+    $consumed = (int)$b['qty_in'] - (int)$b['qty_left'];   /* units already sold/moved out of this batch — never touched */
+    if ($_POST['_action']==='delete_batch') {
+      if ($consumed > 0) {
+        flash("Can't delete — {$consumed} pcs from this batch have already been sold/moved. Edit the quantity instead if you need to correct it.");
+      } else {
+        try { q("DELETE FROM payee_ledger WHERE ref_batch_id=?",[$bid]); } catch (Exception $e) {}
+        q("DELETE FROM stock_batches WHERE id=?",[$bid]);
+        stock_cache((int)$b['product_id']);
+        log_activity("Deleted batch #$bid (product #{$b['product_id']})",'Stock');
+        flash('Batch deleted.');
+      }
+    } else { /* edit_batch */
+      $newQtyIn=max(0,(int)($_POST['qty_in'] ?? 0));
+      if ($newQtyIn < $consumed) {
+        flash("Can't set quantity below {$consumed} pcs — that many have already been sold/moved from this batch.");
+      } else {
+        $newUcost=(float)($_POST['unit_cost'] ?? 0);
+        $newDate=($_POST['purchase_date'] ?? '') ?: $b['purchase_date'];
+        $newSupplier=(int)($_POST['supplier_id'] ?? 0) ?: null;
+        $newNote=trim($_POST['note'] ?? '');
+        q("UPDATE stock_batches SET purchase_date=?, qty_in=?, qty_left=?, unit_cost=?, note=?, supplier_id=? WHERE id=?",
+          [$newDate, $newQtyIn, $newQtyIn-$consumed, $newUcost, $newNote, $newSupplier, $bid]);
+        stock_cache((int)$b['product_id']);
+        /* keep the linked vendor due (if any) in sync with the edited batch, same as a fresh purchase */
+        ensure_vendor_autobill();
+        $payeeId = $newSupplier ? (int)val("SELECT COALESCE(payee_id,0) FROM suppliers WHERE id=?",[$newSupplier]) : 0;
+        $pname=(string)val("SELECT name FROM products WHERE id=?",[$b['product_id']]);
+        $label='Stock Purchase — '.$pname.' ('.$newQtyIn.' pcs @ Rs.'.number_format($newUcost,2).')';
+        vendor_batch_autobill_sync($bid, $payeeId, $newDate, $newQtyIn*$newUcost, $label);
+        log_activity("Edited batch #$bid (product #{$b['product_id']})",'Stock');
+        flash('Batch updated.');
+      }
+    }
+  }
+  $returnTo = trim((string)($_POST['return_to'] ?? ''));
+  $pidForReturn = (int)($b['product_id'] ?? 0);
+  $returnTo = (str_starts_with($returnTo,'product_detail.php?') || str_starts_with($returnTo,'products.php?')) ? $returnTo : ('products.php?open='.$pidForReturn.'#batches-'.$pidForReturn);
+  header('Location: '.$returnTo); exit;
+}
 if ($_SERVER['REQUEST_METHOD']==='POST' && ($_POST['_action'] ?? '')==='bulk_category') {
   check_csrf();
   $ids = array_filter(array_map('intval', explode(',', (string)($_POST['ids'] ?? ''))));

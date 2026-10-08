@@ -271,13 +271,25 @@ require __DIR__.'/includes/header.php';
   <h3>🧾 FIFO Batches — oldest sells first</h3>
   <?php if($bat): ?>
   <div class="muted" style="font-size:11.5px;margin-bottom:8px">Lifetime: <b style="color:var(--ink)"><?= number_format($lifeQty) ?> pcs</b> purchased across <?= count($bat) ?> batch<?= count($bat)===1?'':'es' ?> for <b style="color:var(--ink)"><?= money($lifeAmt) ?></b> total<?= $batAvg?' · avg cost of remaining stock: <b style="color:var(--ink)">'.money($batAvg).'</b>/pc':'' ?></div>
-  <div class="table-wrap"><table class="tbl num-tbl"><thead><tr><th>Date</th><th>Bought</th><th>Left</th><th>Rate</th><th>Value Left</th><th style="text-align:left">Note</th></tr></thead><tbody>
-    <?php foreach($bat as $b): $done=(int)$b['qty_left']<=0; ?>
+  <div class="table-wrap"><table class="tbl num-tbl"><thead><tr><th>Date</th><th>Bought</th><th>Left</th><th>Rate</th><th>Value Left</th><th style="text-align:left">Note</th><th></th></tr></thead><tbody>
+    <?php foreach($bat as $b): $done=(int)$b['qty_left']<=0; $consumed=(int)$b['qty_in']-(int)$b['qty_left']; ?>
     <tr style="<?= $done?'opacity:.45':'' ?>">
       <td><?= e($b['purchase_date']) ?></td><td><?= (int)$b['qty_in'] ?></td>
       <td style="font-weight:800"><?= (int)$b['qty_left'] ?><?= $done?' ✓':'' ?></td>
       <td><?= money($b['unit_cost']) ?></td><td><?= money((int)$b['qty_left']*(float)$b['unit_cost']) ?></td>
       <td style="text-align:left" class="muted"><?= e($b['note']) ?></td>
+      <td style="text-align:right;white-space:nowrap">
+        <button type="button" class="iact" title="Edit batch" data-rec="<?= e(json_encode(['id'=>(int)$b['id'],'purchase_date'=>$b['purchase_date'],'qty_in'=>(int)$b['qty_in'],'unit_cost'=>(float)$b['unit_cost'],'note'=>$b['note'],'supplier_id'=>(int)($b['supplier_id']??0),'consumed'=>$consumed])) ?>" onclick="openEditBatch(JSON.parse(this.getAttribute('data-rec')))">✏️</button>
+        <?php if($consumed<=0): ?>
+        <form method="post" action="products.php" style="display:inline" onsubmit="return confirm('Delete this batch? This cannot be undone.')">
+          <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="delete_batch"><input type="hidden" name="batch_id" value="<?= (int)$b['id'] ?>">
+          <input type="hidden" name="return_to" value="product_detail.php?id=<?= (int)$p['id'] ?>">
+          <button class="iact del" title="Delete batch">🗑</button>
+        </form>
+        <?php else: ?>
+        <span class="iact" style="opacity:.35;cursor:not-allowed" title="<?= $consumed ?> pcs already sold/moved from this batch — can't delete">🗑</span>
+        <?php endif; ?>
+      </td>
     </tr>
     <?php endforeach; ?>
   </tbody></table></div>
@@ -368,6 +380,30 @@ require __DIR__.'/includes/header.php';
     </form>
   </div>
 </div>
+
+<!-- edit batch modal (POSTs to products.php, returns here) -->
+<div class="modal-bg" id="editBatchModal" style="z-index:99990">
+  <div class="modal" style="width:440px;max-width:94vw">
+    <div class="modal-head"><span>✏️ Edit Batch</span><span class="mx" onclick="closeEditBatch()">✕</span></div>
+    <form method="post" action="products.php" style="padding:18px 22px" class="fgrid">
+      <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="edit_batch"><input type="hidden" name="batch_id" id="eb_id">
+      <input type="hidden" name="return_to" value="product_detail.php?id=<?= (int)$p['id'] ?>">
+      <div class="full"><label>Vendor</label><select name="supplier_id" id="eb_supplier">
+        <option value="0">— none —</option>
+        <?php foreach($vendorList as $v): ?><option value="<?= (int)$v['id'] ?>"><?= e($v['name']) ?></option><?php endforeach; ?>
+      </select></div>
+      <div><label>Purchase Date</label><input type="date" name="purchase_date" id="eb_date"></div>
+      <div><label>Quantity (pcs) *</label><input type="number" name="qty_in" id="eb_qty" min="0" required></div>
+      <div><label>Rate per pc (Rs.) *</label><input type="number" step="any" name="unit_cost" id="eb_cost" required></div>
+      <div><label>Note</label><input name="note" id="eb_note"></div>
+      <div class="full muted" id="eb_hint" style="font-size:11.5px"></div>
+      <div class="full" style="display:flex;justify-content:flex-end;gap:10px;margin-top:4px">
+        <button type="button" class="btn" onclick="closeEditBatch()">Cancel</button>
+        <button class="btn btn-primary">💾 Save</button>
+      </div>
+    </form>
+  </div>
+</div>
 <script>
 function openStock(id,name,cost,suggestQty){
   document.getElementById('sm_id').value=id;
@@ -378,6 +414,22 @@ function openStock(id,name,cost,suggestQty){
 }
 function closeStock(){document.getElementById('stockModal').classList.remove('open');}
 document.getElementById('stockModal').addEventListener('click',function(e){if(e.target===this)closeStock();});
+
+function openEditBatch(rec){
+  document.getElementById('eb_id').value=rec.id;
+  document.getElementById('eb_supplier').value=rec.supplier_id||'0';
+  document.getElementById('eb_date').value=rec.purchase_date;
+  document.getElementById('eb_qty').value=rec.qty_in;
+  document.getElementById('eb_qty').min=rec.consumed;
+  document.getElementById('eb_cost').value=rec.unit_cost;
+  document.getElementById('eb_note').value=rec.note||'';
+  document.getElementById('eb_hint').textContent = rec.consumed>0
+    ? rec.consumed+' pcs from this batch are already sold/moved — quantity can\'t go below that.'
+    : '';
+  document.getElementById('editBatchModal').classList.add('open');
+}
+function closeEditBatch(){document.getElementById('editBatchModal').classList.remove('open');}
+document.getElementById('editBatchModal').addEventListener('click',function(e){if(e.target===this)closeEditBatch();});
 
 function pddShowMore(btn){
   var tbl=btn.previousElementSibling;   // .table-wrap right before the button

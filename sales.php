@@ -301,6 +301,8 @@ require __DIR__.'/includes/header.php';
   </div>
 </div>
 
+<div class="flash" id="dashFilterBanner" style="display:none;background:rgba(99,102,241,.1);color:#4338ca;align-items:center;gap:10px;flex-wrap:wrap"></div>
+
 <div class="stat-strip">
   <div class="card stat"><div class="l">Total Orders</div><div class="v num" id="stTotal"><?= count($orders) ?></div></div>
   <div class="card stat"><div class="l">Units Delivered</div><div class="v num" id="stUnits" style="color:var(--green)"><?= number_format($sUnits) ?></div></div>
@@ -827,7 +829,7 @@ function payload(row){
   };
 }
 
-var hot, VIEW=[], CURFILTER='all';
+var hot, VIEW=[], CURFILTER='all', STATUSSET=[];
 /* sheet fills the window: viewport minus header/toolbar/stats, min 560px */
 function sheetH(){ return Math.max(540, window.innerHeight - 330); }
 window.addEventListener('resize', function(){ if(hot) hot.updateSettings({height:sheetH()}); });
@@ -844,6 +846,7 @@ function currentView(){
     case 'aging':     return DATA.filter(isAging);
     case 'cancelled': return DATA.filter(function(o){return String(o.status).toLowerCase()==='cancelled';});
     case 'returned':  return DATA.filter(function(o){return String(o.status).toLowerCase()==='returned';});
+    case '_status':   return DATA.filter(function(o){return STATUSSET.indexOf(String(o.status).toLowerCase())>-1;});
     default:          return DATA;
   }
 }
@@ -1072,6 +1075,50 @@ function buildGrid(data){
     }
   });
 }
+
+/* deep link from the Sales Team dashboard: ?sp=<name>&status=delivered|cancelled,returned|...&from=&to=
+   — opens the sheet already scoped to that salesperson/status/date range, matching the number clicked. */
+function clearDashFilter(){
+  ADV.sp='';ADV.from='';ADV.to='';
+  ['af_sp','af_from','af_to'].forEach(function(id){var e=document.getElementById(id);if(e)e.value='';});
+  CURFILTER='all';STATUSSET=[];
+  var b=document.getElementById('dashFilterBanner'); if(b){b.style.display='none';b.innerHTML='';}
+  try{ var u=new URL(window.location.href); ['sp','status','from','to'].forEach(function(k){u.searchParams.delete(k);}); history.replaceState(null,'',u.toString()); }catch(e){}
+  refreshView(); updateChips();
+}
+(function(){
+  try{
+    var qs=new URLSearchParams(window.location.search);
+    var spParam=qs.get('sp'), statusParam=qs.get('status'), fromParam=qs.get('from'), toParam=qs.get('to');
+    if(!spParam && !statusParam && !fromParam && !toParam) return;
+    var parts=[];
+    if(spParam){
+      fillAdvSources();
+      var match=(window.spNames||[]).filter(function(n){return n && n.toLowerCase()===spParam.toLowerCase();})[0];
+      ADV.sp=match||spParam;
+      var selSp=document.getElementById('af_sp');
+      if(selSp){ for(var i=0;i<selSp.options.length;i++){ if(selSp.options[i].value.toLowerCase()===ADV.sp.toLowerCase()){ selSp.selectedIndex=i; break; } } }
+      parts.push('<b>'+esc(ADV.sp)+'</b>');
+    }
+    if(statusParam){
+      var list=statusParam.split(',').map(function(s){return s.trim().toLowerCase();}).filter(Boolean);
+      var single=['pending','processing','shipped','delivered','cancelled','returned'];
+      if(list.length===1 && single.indexOf(list[0])>-1){ CURFILTER=list[0]; }
+      else if(list.length>1){ CURFILTER='_status'; STATUSSET=list; }
+      var STLBL={pending:'Pending',processing:'Processing',shipped:'On the way',delivered:'Delivered',cancelled:'Cancelled',returned:'Returned'};
+      parts.push('<b>'+list.map(function(s){return STLBL[s]||s;}).join(' + ')+'</b>');
+    }
+    if(fromParam){ ADV.from=fromParam; var fi=document.getElementById('af_from'); if(fi)fi.value=fromParam; }
+    if(toParam){ ADV.to=toParam; var ti=document.getElementById('af_to'); if(ti)ti.value=toParam; }
+    if(fromParam && toParam) parts.push('<b>'+esc(fromParam)+' → '+esc(toParam)+'</b>');
+    var banner=document.getElementById('dashFilterBanner');
+    if(banner && parts.length){
+      banner.innerHTML='📍 Filtered from Sales Team dashboard: '+parts.join(' · ')+
+        '<button class="btn btn-sm" style="margin-left:auto" onclick="clearDashFilter()">✕ Clear filter</button>';
+      banner.style.display='flex';
+    }
+  }catch(e){}
+})();
 
 if(typeof Handsontable==='undefined'){
   document.getElementById('hotBox').style.display='none';

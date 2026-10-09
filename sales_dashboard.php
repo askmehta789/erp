@@ -36,6 +36,17 @@ $rangeLabel = [
     'custom'=>($from && $to ? e($from).' → '.e($to) : 'Custom range'),
 ][$range];
 
+/* Build a deep link into the Sales sheet, scoped to one salesperson, an optional
+   set of statuses, and the same date range already applied on this dashboard —
+   so "Delivered"/"Confirmed"/etc. open showing exactly what's behind the number. */
+function sales_link($name, $statuses = null) {
+    global $from, $to;
+    $params = ['sp' => $name];
+    if ($statuses) $params['status'] = implode(',', $statuses);
+    if ($from && $to) { $params['from'] = $from; $params['to'] = $to; }
+    return 'sales.php?' . http_build_query($params);
+}
+
 /* Luprah is deliberately excluded — it's the bucket for orders that
    belong to the company itself, not to a real salesperson, so it never ranks. */
 $people = rows("SELECT id,name,phone,status FROM employees WHERE department='Sales' AND is_company=0 ORDER BY (status='active') DESC, name");
@@ -133,6 +144,8 @@ body.dark .pod-card{background:rgba(17,25,44,.55);border-color:rgba(148,163,184,
 .rank-badge{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:999px;background:rgba(100,116,139,.15);font-size:11px;font-weight:800;color:var(--muted)}
 .range-chips{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end}
 .range-chips a.btn.on{background:var(--brand);border-color:var(--brand);color:#fff}
+a.cb{display:block;text-decoration:none;color:inherit;cursor:pointer;transition:transform .12s,filter .12s}
+a.cb:hover{transform:translateY(-1px);filter:brightness(0.96)}
 </style>
 
 <div class="page-head">
@@ -232,15 +245,15 @@ body.dark .pod-card{background:rgba(17,25,44,.55);border-color:rgba(148,163,184,
       <span title="all-time bonus paid via Staff Salary">🎁 Bonus paid: <?= money($r['bonus']) ?></span>
     </div>
     <div class="ccard-grid">
-      <div class="cb cb-g"><div class="cbl">✅ Delivered</div><div class="cbv"><?= (int)$r['del'] ?></div><div class="cbs"><?= money($r['rev']) ?></div></div>
-      <div class="cb cb-r"><div class="cbl">✕ Returned/Cancelled</div><div class="cbv"><?= (int)$r['canc'] ?></div><div class="cbs">Charge: <?= money($r['cancf']) ?></div></div>
-      <div class="cb cb-y"><div class="cbl">🚚 On the way</div><div class="cbv"><?= (int)$r['onway'] ?></div></div>
-      <div class="cb cb-b"><div class="cbl">📋 Confirmed</div><div class="cbv"><?= (int)$r['confirmed'] ?></div></div>
+      <a class="cb cb-g" href="<?= e(sales_link($r['name'], ['delivered'])) ?>" title="View <?= e($r['name']) ?>'s delivered orders"><div class="cbl">✅ Delivered</div><div class="cbv"><?= (int)$r['del'] ?></div><div class="cbs"><?= money($r['rev']) ?></div></a>
+      <a class="cb cb-r" href="<?= e(sales_link($r['name'], ['cancelled','returned'])) ?>" title="View <?= e($r['name']) ?>'s returned/cancelled orders"><div class="cbl">✕ Returned/Cancelled</div><div class="cbv"><?= (int)$r['canc'] ?></div><div class="cbs">Charge: <?= money($r['cancf']) ?></div></a>
+      <a class="cb cb-y" href="<?= e(sales_link($r['name'], ['shipped'])) ?>" title="View <?= e($r['name']) ?>'s orders on the way"><div class="cbl">🚚 On the way</div><div class="cbv"><?= (int)$r['onway'] ?></div></a>
+      <a class="cb cb-b" href="<?= e(sales_link($r['name'], ['pending','processing'])) ?>" title="View <?= e($r['name']) ?>'s confirmed orders"><div class="cbl">📋 Confirmed</div><div class="cbv"><?= (int)$r['confirmed'] ?></div></a>
     </div>
     <div class="ccard-foot">
       <div><div class="fl">Avg Order</div><div class="fv"><?= money($avg) ?></div></div>
       <div><div class="fl">Net Profit</div><div class="fv" style="color:<?= $r['prof']>=0?'var(--green)':'var(--red)' ?>"><?= money($r['prof']) ?></div></div>
-      <div style="margin-left:auto"><a class="btn btn-sm" href="sales.php?q=<?= urlencode($r['name']) ?>">View orders →</a></div>
+      <div style="margin-left:auto"><a class="btn btn-sm" href="<?= e(sales_link($r['name'])) ?>">View orders →</a></div>
     </div>
   </div>
 <?php endforeach; ?>

@@ -54,10 +54,23 @@ $id=(int)($_GET['id']??0); $st=$_GET['status']??'';
 $idsRaw=trim((string)($_GET['ids']??''));
 $courierFilter=(int)($_GET['courier']??0);
 $couriersList=rows("SELECT id,name,COALESCE(color,'#64748b') AS color FROM couriers WHERE status='active' ORDER BY name");
+$ctype = in_array($_GET['ctype'] ?? '', ['ncm','pd','others'], true) ? $_GET['ctype'] : '';
 $extraWhere=''; $extraParams=[];
-if($courierFilter){ $extraWhere=' AND o.courier_id=?'; $extraParams[]=$courierFilter; }
+if($courierFilter){ $extraWhere.=' AND o.courier_id=?'; $extraParams[]=$courierFilter; }
+if($ctype==='ncm'){ $extraWhere.=" AND o.ncm_order_id IS NOT NULL AND o.ncm_order_id<>''"; }
+elseif($ctype==='pd'){ $extraWhere.=" AND (o.ncm_order_id IS NULL OR o.ncm_order_id='') AND LOWER(TRIM(COALESCE(c.name,'')))='pick & drop'"; }
+elseif($ctype==='others'){ $extraWhere.=" AND (o.ncm_order_id IS NULL OR o.ncm_order_id='') AND LOWER(TRIM(COALESCE(c.name,'')))<>'pick & drop'"; }
 $SEL="o.*, p.name AS product_name, c.name AS courier_name, c.color AS courier_color, sp.name AS sales_person_name";
 $JOIN="LEFT JOIN products p ON p.id=o.product_id LEFT JOIN couriers c ON c.id=o.courier_id LEFT JOIN employees sp ON sp.id=o.sales_person_id";
+$cnt = row("SELECT
+    SUM(o.status='pending') AS pending_c,
+    SUM(o.status='processing') AS processing_c,
+    SUM(o.status IN('pending','processing') AND o.ncm_order_id IS NOT NULL AND o.ncm_order_id<>'') AS ncm_c,
+    SUM(o.status IN('pending','processing') AND (o.ncm_order_id IS NULL OR o.ncm_order_id='') AND LOWER(TRIM(COALESCE(c.name,'')))='pick & drop') AS pd_c,
+    SUM(o.status IN('pending','processing') AND (o.ncm_order_id IS NULL OR o.ncm_order_id='') AND LOWER(TRIM(COALESCE(c.name,'')))<>'pick & drop') AS others_c
+  FROM orders o LEFT JOIN couriers c ON c.id=o.courier_id") ?: [];
+$pendingCount=(int)($cnt['pending_c']??0); $processingCount=(int)($cnt['processing_c']??0);
+$ncmCount=(int)($cnt['ncm_c']??0); $pdCount=(int)($cnt['pd_c']??0); $othersCount=(int)($cnt['others_c']??0);
 if($idsRaw!==''){
   $ids=array_values(array_filter(array_map('intval',explode(',',$idsRaw)),fn($x)=>$x>0));
   $ids=array_slice($ids,0,60);
@@ -72,6 +85,7 @@ elseif($st==='unprinted'){ $orders=rows("SELECT $SEL FROM orders o $JOIN WHERE o
 elseif(in_array($st,['pending','processing','shipped'],true)){ $orders=rows("SELECT $SEL FROM orders o $JOIN WHERE o.status=?$extraWhere ORDER BY o.id DESC LIMIT 60",array_merge([$st],$extraParams)); $qp=['status'=>$st]; }
 else { $orders=rows("SELECT $SEL FROM orders o $JOIN WHERE o.status IN ('pending','processing')$extraWhere ORDER BY o.id DESC LIMIT 60",$extraParams); $qp=[]; }
 if($courierFilter) $qp['courier']=$courierFilter;
+if($ctype) $qp['ctype']=$ctype;
 $store=setting('store_name','Luprah Trading'); $phone=setting('store_phone','');
 $defWeight=setting('ncm_default_weight','');
 function label_link($extra=[]){ global $qp; $q=array_merge($qp,$extra); return 'labels.php'.($q?('?'.http_build_query($q)):''); }
@@ -130,13 +144,20 @@ body.hide-remarks .f-remarks{display:none}body.hide-sp .f-sp{display:none}body.h
 </style></head><body class="fmt-<?= e($format) ?><?= $LS['show_remarks']==='0'?' hide-remarks':'' ?><?= $LS['show_sales_person']==='0'?' hide-sp':'' ?><?= $LS['show_weight']==='0'?' hide-weight':'' ?><?= $LS['show_logo']==='0'?' hide-logo':'' ?>">
 <style id="pageSize"></style>
 <div class="bar noprint">
-  <?php $curQS = $courierFilter ? ('&courier='.$courierFilter) : ''; ?>
+  <?php
+    $curQS = $courierFilter ? ('&courier='.$courierFilter) : '';
+    $stQS = $st!=='' ? ('status='.e($st).'&') : '';
+  ?>
   <div class="chips">
-    <a class="chip<?= $st===''&&!$id&&!$idsRaw?' on':'' ?>" href="labels.php?format=<?= e($format) ?><?= $curQS ?>">Default</a>
-    <a class="chip<?= $st==='pending'?' on':'' ?>" href="labels.php?status=pending&format=<?= e($format) ?><?= $curQS ?>">Pending</a>
-    <a class="chip<?= $st==='processing'?' on':'' ?>" href="labels.php?status=processing&format=<?= e($format) ?><?= $curQS ?>">Processing</a>
+    <a class="chip<?= $st===''&&!$id&&!$idsRaw&&!$ctype?' on':'' ?>" href="labels.php?format=<?= e($format) ?><?= $curQS ?>">Default</a>
+    <a class="chip<?= $st==='pending'?' on':'' ?>" href="labels.php?status=pending&format=<?= e($format) ?><?= $curQS ?>">Pending<?= $pendingCount ? ' ('.$pendingCount.')' : '' ?></a>
+    <a class="chip<?= $st==='processing'?' on':'' ?>" href="labels.php?status=processing&format=<?= e($format) ?><?= $curQS ?>">Processing<?= $processingCount ? ' ('.$processingCount.')' : '' ?></a>
     <a class="chip<?= $st==='shipped'?' on':'' ?>" href="labels.php?status=shipped&format=<?= e($format) ?><?= $curQS ?>">Shipped</a>
     <a class="chip<?= $st==='unprinted'?' on':'' ?>" href="labels.php?status=unprinted&format=<?= e($format) ?><?= $curQS ?>">🖶 Unprinted</a>
+    <span style="width:1.5px;background:#d7dce3;align-self:stretch;margin:0 2px"></span>
+    <a class="chip<?= $ctype==='ncm'?' on':'' ?>" href="labels.php?<?= $stQS ?>ctype=ncm&format=<?= e($format) ?><?= $curQS ?>">📦 NCM<?= $ncmCount ? ' ('.$ncmCount.')' : '' ?></a>
+    <a class="chip<?= $ctype==='pd'?' on':'' ?>" href="labels.php?<?= $stQS ?>ctype=pd&format=<?= e($format) ?><?= $curQS ?>">🛵 Pick &amp; Drop<?= $pdCount ? ' ('.$pdCount.')' : '' ?></a>
+    <a class="chip<?= $ctype==='others'?' on':'' ?>" href="labels.php?<?= $stQS ?>ctype=others&format=<?= e($format) ?><?= $curQS ?>">🚚 Others<?= $othersCount ? ' ('.$othersCount.')' : '' ?></a>
     <select class="courier-pick" id="courierPick" onchange="pickCourier(this.value)">
       <option value="">🚚 All couriers</option>
       <?php foreach($couriersList as $c): ?>

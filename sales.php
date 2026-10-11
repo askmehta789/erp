@@ -938,13 +938,17 @@ function exportFiltered(){
   var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='sales_filtered.csv';a.click();
 }
 function updateChips(){
-  var cnt={all:DATA.length,pending:0,processing:0,shipped:0,delivered:0,today:0,aging:0};
-  DATA.forEach(function(o){var st=String(o.status).toLowerCase();
+  /* badge counts must respect the active advanced filters (salesperson, date range, etc.) —
+     otherwise a salesperson-scoped view (e.g. from the Sales Team dashboard) still shows
+     company-wide Shipped/Delivered totals instead of that person's own numbers. */
+  var scope=advActiveCount()>0?DATA.filter(advMatch):DATA;
+  var cnt={all:scope.length,pending:0,processing:0,shipped:0,delivered:0,today:0,aging:0};
+  scope.forEach(function(o){var st=String(o.status).toLowerCase();
     if(cnt[st]!==undefined)cnt[st]++;
     if(String(o.order_date).slice(0,10)===TODAY)cnt.today++;
     if(isAging(o))cnt.aging++;});
   cnt.cancelled=0;cnt.returned=0;
-  DATA.forEach(function(o){var st=String(o.status).toLowerCase();if(st==='cancelled')cnt.cancelled++;if(st==='returned')cnt.returned++;});
+  scope.forEach(function(o){var st=String(o.status).toLowerCase();if(st==='cancelled')cnt.cancelled++;if(st==='returned')cnt.returned++;});
   ['all','pending','processing','shipped','delivered','today','aging','cancelled','returned'].forEach(function(k){
     var el=document.getElementById('chip-'+k); if(!el)return;
     el.querySelector('b').textContent=cnt[k]||0;

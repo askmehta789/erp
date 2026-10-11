@@ -787,6 +787,7 @@ $ncmUnits=(int)val("SELECT COALESCE(SUM(o.qty),0) FROM orders o JOIN couriers c 
     return $grouped;
   }
   $rows=ncm_group_rows($rows);   /* the active/actionable set — downstream tab counts always read this */
+  $pendUnbooked = count(array_filter($rows, fn($r)=>$r['nid']==='' && !$r['final'] && !$r['inDelivery'] && $r['pickupPhase']));
 
   $filterFn = function($r,$f){
     switch($f){
@@ -832,6 +833,9 @@ $ncmUnits=(int)val("SELECT COALESCE(SUM(o.qty),0) FROM orders o JOIN couriers c 
         <option value="25">25 / page</option><option value="50">50 / page</option><option value="100">100 / page</option><option value="100000">All</option>
       </select>
       <button class="btn btn-sm" onclick="exportNCM()">⬇ CSV</button>
+      <?php if($connected && $pendUnbooked): ?>
+      <button class="btn btn-sm btn-primary" onclick="bookAllPending()" title="Show every pending order on one page, tick them all and open the bulk-book review in one click">🚀 Book All Pending (<?= $pendUnbooked ?>)</button>
+      <?php endif; ?>
     </div>
   </div>
   <div class="ncm-tabs">
@@ -1206,7 +1210,10 @@ function renderComments(){
   pgRender(rows,PG.comments,'cmtPager');
 }
 function ncmFilter(){ PG.orders.page=1; renderOrders(); }
-document.addEventListener('DOMContentLoaded',function(){ renderOrders(); renderComments(); });
+document.addEventListener('DOMContentLoaded',function(){
+  renderOrders(); renderComments();
+  if(new URL(location.href).searchParams.get('bookall')==='1') bookAllPending();
+});
 /* copy phone */
 function cpy(t,btn){ (navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject()).then(function(){ var o=btn.textContent; btn.textContent='✓'; setTimeout(function(){btn.textContent=o;},900); }).catch(function(){ prompt('Copy:',t); }); }
 /* chat: autoscroll to newest + Enter-to-send + autosize */
@@ -1238,6 +1245,20 @@ function bkCount(){
   var bar=document.getElementById('bkBar'); if(bar){bar.style.display=c?'flex':'none';var el=document.getElementById('bkN');if(el)el.textContent=c;}
 }
 function bkAll(){document.querySelectorAll('#ncmRows tr').forEach(function(tr){if(tr.style.display==='none')return;var c=tr.querySelector('.bkc');if(c&&c.getAttribute('data-pending')==='1')c.checked=true;});bkCount();}
+/* one click: jump to the Pending Pickup tab, show every pending order on a single page,
+   tick them all and open the bulk-book review ready to confirm */
+function bookAllPending(){
+  var cur=new URL(location.href);
+  if(cur.searchParams.get('f')!=='pickup'){
+    cur.searchParams.set('f','pickup'); cur.searchParams.set('bookall','1'); cur.hash='orders';
+    location.href=cur.toString(); return;
+  }
+  var per=document.getElementById('ordPer'); if(per)per.value='100000';
+  PG.orders.per=100000; PG.orders.page=1; renderOrders();
+  bkAll();
+  if(!document.querySelectorAll('.bkc:checked').length){ alert('No unbooked pending orders to book right now.'); return; }
+  bkReview();
+}
 function bbGuess(addr){var A=(addr||'').toUpperCase(),best='',bl=0;(window.BRANCHES||[]).forEach(function(b){var B=(b||'').toUpperCase();if(B&&A.indexOf(B)>-1&&B.length>bl){best=b;bl=B.length;}});return best;}
 /* keep the sheet a direct child of <body>: a .panel ancestor has backdrop-filter,
    which would make position:fixed resolve against the panel instead of the screen */

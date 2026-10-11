@@ -829,9 +829,6 @@ $ncmUnits=(int)val("SELECT COALESCE(SUM(o.qty),0) FROM orders o JOIN couriers c 
   <div class="panel-head" style="flex-wrap:wrap;gap:10px"><h2>📦 All NCM Orders <?= $f!=="all"?"<span class=\"pill p-blue\" style=\"font-size:10px\">".e($tabs[$f]??$f)." filter</span>":"" ?></h2>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       <input id="ncmSearch" class="ncm-search" placeholder="🔍 Search order, name, phone, NCM #…" oninput="ncmFilter()">
-      <select id="ordPer" class="pgsel" onchange="PG.orders.per=parseInt(this.value)||25;PG.orders.page=1;renderOrders()" title="rows per page">
-        <option value="25">25 / page</option><option value="50">50 / page</option><option value="100">100 / page</option><option value="100000">All</option>
-      </select>
       <button class="btn btn-sm" onclick="exportNCM()">⬇ CSV</button>
       <?php if($connected && $pendUnbooked): ?>
       <button class="btn btn-sm btn-primary" onclick="bookAllPending()" title="Show every pending order on one page, tick them all and open the bulk-book review in one click">🚀 Book All Pending (<?= $pendUnbooked ?>)</button>
@@ -1170,7 +1167,7 @@ function qr(t){document.getElementById('rp_text').value=t;}
 function setThr(t){var el=document.getElementById('thr_input');if(el){el.value=t;el.focus();autoGrow(el);}}
 /* live table search */
 /* ---- pagination (orders + comments) ---- */
-var PG={orders:{page:1,per:25},comments:{page:1,per:10}};
+var PG={orders:{page:1,per:100000},comments:{page:1,per:10}};
 function pgRender(rows,st,pagerId){
   var total=rows.length, pages=Math.max(1,Math.ceil(total/st.per));
   if(st.page>pages)st.page=pages;
@@ -1253,8 +1250,7 @@ function bookAllPending(){
     cur.searchParams.set('f','pickup'); cur.searchParams.set('bookall','1'); cur.hash='orders';
     location.href=cur.toString(); return;
   }
-  var per=document.getElementById('ordPer'); if(per)per.value='100000';
-  PG.orders.per=100000; PG.orders.page=1; renderOrders();
+  PG.orders.page=1; renderOrders();
   bkAll();
   if(!document.querySelectorAll('.bkc:checked').length){ alert('No unbooked pending orders to book right now.'); return; }
   bkReview();

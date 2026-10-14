@@ -657,7 +657,9 @@ function lunch_sync_salary_entry($employeeId, $ym) {
   $agg = lunch_monthly_agg($mStart, $mEnd, $employeeId);
   $amount = round((float)($agg[$employeeId]['adjustment'] ?? 0), 2);
   q("DELETE FROM salary_entries WHERE employee_id=? AND ym=? AND type='lunch' AND source='lunch_mgmt'", [$employeeId, $ym]);
-  if ($amount > 0.009) {
+  /* adjustment can now go negative too (over-allowance orders auto-deducted from
+     salary) — persist it either way, only a true zero needs no row at all */
+  if (abs($amount) > 0.009) {
     q("INSERT INTO salary_entries(employee_id,ym,type,amount,entry_date,note,source) VALUES(?,?,?,?,?,?,?)",
       [$employeeId, $ym, 'lunch', $amount, date('Y-m-d'), 'Auto-synced from Lunch Management', 'lunch_mgmt']);
   }

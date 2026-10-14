@@ -279,7 +279,7 @@ $stPill=fn($s)=>['Paid'=>'p-green','Partial'=>'p-yellow','Pending'=>'p-red'][$s]
       <td><b><?= e($r['e']['name']) ?></b><br><small class="muted"><?= e($r['e']['role'] ?: '') ?> · <?= money((float)$r['e']['lunch_rate']) ?>/day lunch</small></td>
       <td class="num right"><?= money($r['base']) ?></td>
       <td class="num right" style="color:var(--green)"><?= $r['bon']>0?'+'.money($r['bon']):'—' ?></td>
-      <td class="num right" style="color:var(--orange)"><?= $r['lun']>0?'+'.money($r['lun']):'—' ?></td>
+      <td class="num right" style="color:<?= $r['lun']<-0.009?'var(--red)':'var(--orange)' ?>"><?= $r['lun']>0.009?'+'.money($r['lun']):($r['lun']<-0.009?money($r['lun']):'—') ?></td>
       <td class="num right" style="color:var(--red)"><?= $r['ded']>0?'−'.money($r['ded']):'—' ?></td>
       <td class="num right" style="font-weight:700"><?= money($r['payable']) ?></td>
       <td class="num right"><?= $r['adv']>0?money($r['adv']):'—' ?></td>

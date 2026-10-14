@@ -117,7 +117,7 @@ select.btn{appearance:auto}
       <?php if(!$single): ?><td><b><?= e($r['e']['name']) ?></b><?= $r['e']['role']?'<div class="muted">'.e($r['e']['role']).'</div>':'' ?></td><?php endif; ?>
       <td class="r"><?= money($r['base']) ?></td>
       <td class="r"><?= $r['bon']>0?'+'.money($r['bon']):'—' ?></td>
-      <td class="r"><?= $r['lun']>0?'+'.money($r['lun']):'—' ?></td>
+      <td class="r"><?= $r['lun']>0.009?'+'.money($r['lun']):($r['lun']<-0.009?money($r['lun']):'—') ?></td>
       <td class="r"><?= $r['ded']>0?'−'.money($r['ded']):'—' ?></td>
       <td class="r" style="font-weight:700"><?= money($r['payable']) ?></td>
       <td class="r"><?= $r['adv']>0?money($r['adv']):'—' ?></td>

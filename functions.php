@@ -589,7 +589,7 @@ function lunch_pay_unused()          { return strtolower((string)setting('lunch_
 function lunch_leave_days_setting()  { return (int)setting('lunch_leave_days', 4); }
 function lunch_month_days_setting()  { return (int)setting('lunch_month_days', 30); }
 function lunch_eligible_days_setting() { return max(0, lunch_month_days_setting() - lunch_leave_days_setting()); }
-function lunch_over_allowance_setting() { $v=strtolower((string)setting('lunch_over_allowance','review')); return $v==='ignore' ? 'ignore' : 'review'; }
+function lunch_over_allowance_setting() { $v=strtolower((string)setting('lunch_over_allowance','review')); return in_array($v,['ignore','deduct'],true) ? $v : 'review'; }
 
 /* the business rule, for one employee on one day — the single source of truth */
 function lunch_day_calc($rate, $attendance, $lunchOrdered, $orderAmount) {
@@ -607,8 +607,13 @@ function lunch_day_calc($rate, $attendance, $lunchOrdered, $orderAmount) {
     return ['allowance'=>$rate,'actual'=>0.0,'adjustment'=>round($adj,2),'extra'=>0.0,'status'=>'ok'];
   }
   if ($orderAmount > $rate) {
-    $status = lunch_over_allowance_setting() === 'ignore' ? 'ok' : 'review';
-    return ['allowance'=>$rate,'actual'=>$orderAmount,'adjustment'=>0.0,'extra'=>round($orderAmount-$rate,2),'status'=>$status];
+    $mode = lunch_over_allowance_setting();
+    $extra = round($orderAmount-$rate,2);
+    /* 'deduct': the amount over the daily allowance comes straight out of salary
+       instead of sitting in the review queue — adjustment goes negative. */
+    if ($mode === 'deduct') return ['allowance'=>$rate,'actual'=>$orderAmount,'adjustment'=>round($rate-$orderAmount,2),'extra'=>$extra,'status'=>'deducted'];
+    $status = $mode === 'ignore' ? 'ok' : 'review';
+    return ['allowance'=>$rate,'actual'=>$orderAmount,'adjustment'=>0.0,'extra'=>$extra,'status'=>$status];
   }
   return ['allowance'=>$rate,'actual'=>$orderAmount,'adjustment'=>round($rate-$orderAmount,2),'extra'=>0.0,'status'=>'ok'];
 }
@@ -621,13 +626,14 @@ function lunch_monthly_agg($mStart, $mEnd, $empFilter = 0) {
   $out = [];
   foreach (rows($sql, [$mStart, $mEnd]) as $r) {
     $eid = (int)$r['employee_id'];
-    if (!isset($out[$eid])) $out[$eid] = ['days_present'=>0,'days_leave'=>0,'days_wfh'=>0,'ordered'=>0.0,'allowance'=>0.0,'adjustment'=>0.0,'extra'=>0.0,'review'=>0,'entries'=>0];
+    if (!isset($out[$eid])) $out[$eid] = ['days_present'=>0,'days_leave'=>0,'days_wfh'=>0,'ordered'=>0.0,'allowance'=>0.0,'adjustment'=>0.0,'extra'=>0.0,'review'=>0,'deducted'=>0,'entries'=>0];
     $c = lunch_day_calc($r['lunch_rate'], $r['attendance'], (int)$r['lunch_ordered'], $r['order_amount']);
     $out[$eid]['entries']++;
     if ($r['attendance'] === 'present') $out[$eid]['days_present']++;
     elseif ($r['attendance'] === 'wfh') $out[$eid]['days_wfh']++;
     else $out[$eid]['days_leave']++;
     if ($c['status'] === 'review') $out[$eid]['review']++;
+    if ($c['status'] === 'deducted') $out[$eid]['deducted']++;
     $out[$eid]['ordered']    += (float)$r['lunch_ordered'] ? (float)$r['order_amount'] : 0.0;
     $out[$eid]['allowance']  += $c['allowance'];
     $out[$eid]['adjustment'] += $c['adjustment'];

@@ -89,7 +89,8 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
     set_setting('lunch_leave_days', (string)max(0,(int)($_POST['lunch_leave_days'] ?? 4)));
     set_setting('lunch_month_days', (string)max(1,(int)($_POST['lunch_month_days'] ?? 30)));
     set_setting('lunch_pay_unused', (($_POST['lunch_pay_unused'] ?? 'yes')==='no') ? 'no' : 'yes');
-    set_setting('lunch_over_allowance', (($_POST['lunch_over_allowance'] ?? 'review')==='ignore') ? 'ignore' : 'review');
+    $overMode = $_POST['lunch_over_allowance'] ?? 'review';
+    set_setting('lunch_over_allowance', in_array($overMode,['ignore','deduct'],true) ? $overMode : 'review');
     log_activity('Updated Lunch Management settings','Settings');
     flash('Lunch settings saved. Use "Recalculate This Month" to apply them to already-logged entries.');
     header('Location: lunch_management.php?m='.urlencode($backM)); exit;
@@ -146,13 +147,13 @@ foreach (rows("SELECT employee_id,
 
 $scopeEmps = $empFilter ? array_values(array_filter($allEmps, fn($e)=>(int)$e['id']===$empFilter)) : $allEmps;
 
-$summaryRows=[]; $tAllowance=0.0;$tActual=0.0;$tAdjustment=0.0;$tEligible=0;$tReview=0;
+$summaryRows=[]; $tAllowance=0.0;$tActual=0.0;$tAdjustment=0.0;$tEligible=0;$tReview=0;$tDeducted=0;
 foreach ($scopeEmps as $e) {
   $eid=(int)$e['id'];
-  $A = $lunchAgg[$eid] ?? ['days_present'=>0,'days_leave'=>0,'days_wfh'=>0,'ordered'=>0.0,'allowance'=>0.0,'adjustment'=>0.0,'extra'=>0.0,'review'=>0];
+  $A = $lunchAgg[$eid] ?? ['days_present'=>0,'days_leave'=>0,'days_wfh'=>0,'ordered'=>0.0,'allowance'=>0.0,'adjustment'=>0.0,'extra'=>0.0,'review'=>0,'deducted'=>0];
   $bon=(float)($sAgg[$eid]['bon'] ?? 0); $ded=(float)($sAgg[$eid]['ded'] ?? 0);
   $final = (float)$e['salary'] + $bon + (float)$A['adjustment'] - $ded;
-  $tAllowance+=$A['allowance']; $tActual+=$A['ordered']; $tAdjustment+=$A['adjustment']; $tEligible+=$A['days_present']; $tReview+=$A['review'];
+  $tAllowance+=$A['allowance']; $tActual+=$A['ordered']; $tAdjustment+=$A['adjustment']; $tEligible+=$A['days_present']; $tReview+=$A['review']; $tDeducted+=$A['deducted'];
   $summaryRows[]=['e'=>$e,'id'=>$eid,'A'=>$A,'bon'=>$bon,'ded'=>$ded,'final'=>$final];
 }
 
@@ -174,8 +175,8 @@ foreach ($monthEntries as $en) $calMap[(int)$en['employee_id']][$en['order_date'
 $calToday = date('Y-m-d');
 
 require __DIR__.'/includes/header.php';
-$lunchPill = fn($s) => ['ok'=>'p-green','leave'=>'p-grey','review'=>'p-yellow','wfh'=>'p-blue'][$s] ?? 'p-grey';
-$lunchLabel = fn($s) => ['ok'=>'Completed','leave'=>'Leave','review'=>'Requires Review','wfh'=>'Work From Home'][$s] ?? ucfirst($s);
+$lunchPill = fn($s) => ['ok'=>'p-green','leave'=>'p-grey','review'=>'p-yellow','wfh'=>'p-blue','deducted'=>'p-red'][$s] ?? 'p-grey';
+$lunchLabel = fn($s) => ['ok'=>'Completed','leave'=>'Leave','review'=>'Requires Review','wfh'=>'Work From Home','deducted'=>'Deducted from Salary'][$s] ?? ucfirst($s);
 ?>
 <div class="page-head">
   <div><h1>🍱 Lunch Management</h1><p>Track daily lunch orders and automatically calculate salary adjustments.
@@ -205,6 +206,7 @@ $lunchLabel = fn($s) => ['ok'=>'Completed','leave'=>'Leave','review'=>'Requires 
   <div class="metric <?= $pendingEntries>0?'amber':'green' ?>"><div><div class="mv" style="font-size:19px"><?= number_format(max(0,$pendingEntries)) ?></div><div class="ml">Pending Entries</div><div class="ms">not logged for <?= e(date('d M',strtotime($d))) ?></div></div><div class="mi">⏳</div></div>
 </div>
 <?php if($tReview>0): ?><div class="flash" style="background:var(--amber-bg,#fef3c7);color:var(--amber)">⚠ <b><?= $tReview ?></b> entr<?= $tReview>1?'ies':'y' ?> this month exceed the daily allowance and need review.</div><?php endif; ?>
+<?php if($tDeducted>0): ?><div class="flash" style="background:var(--red-bg,#fee2e2);color:var(--red)">🧾 <b><?= $tDeducted ?></b> entr<?= $tDeducted>1?'ies':'y' ?> this month exceeded the daily allowance — the excess was auto-deducted from salary.</div><?php endif; ?>
 
 <style>
 .cal-tbl{border-collapse:separate;border-spacing:2px}
@@ -216,6 +218,7 @@ $lunchLabel = fn($s) => ['ok'=>'Completed','leave'=>'Leave','review'=>'Requires 
 .cal-ok a{background:var(--green-bg);color:var(--green)}
 .cal-noorder a{background:var(--surface-2);color:var(--muted)}
 .cal-review a{background:var(--amber-bg,#fef3c7);color:var(--amber)}
+.cal-deduct a{background:var(--orange-bg);color:var(--orange)}
 .cal-leave a{background:var(--red-bg,#fee2e2);color:var(--red)}
 .cal-wfh a{background:var(--blue-bg,#dbeafe);color:var(--blue,#3b82f6)}
 .cal-blank a{color:var(--muted-2);opacity:.35}
@@ -242,6 +245,7 @@ $lunchLabel = fn($s) => ['ok'=>'Completed','leave'=>'Leave','review'=>'Requires 
             elseif ($row['attendance']!=='present') { $cls='cal-leave'; $txt='L'; $title='Leave'; }
             elseif (!$row['lunch_ordered']) { $cls='cal-noorder'; $txt='P'; $title='Present · lunch not ordered'; }
             elseif ($c['status']==='review') { $cls='cal-review'; $txt='P'; $title='Present · lunch '.money($row['order_amount']).' — over allowance, needs review'; }
+            elseif ($c['status']==='deducted') { $cls='cal-deduct'; $txt='P'; $title='Present · lunch '.money($row['order_amount']).' — Rs.'.number_format($c['extra'],0).' over allowance, auto-deducted from salary'; }
             else { $cls='cal-ok'; $txt='P'; $title='Present · lunch '.money($row['order_amount']); }
           }
         ?>
@@ -253,7 +257,7 @@ $lunchLabel = fn($s) => ['ok'=>'Completed','leave'=>'Leave','review'=>'Requires 
     <?php endforeach; if(!$scopeEmps): ?><tr><td colspan="<?= count($calDays)+1 ?>"><div class="empty">No staff yet.</div></td></tr><?php endif; ?>
     </tbody></table>
   </div>
-  <p class="muted" style="font-size:11px;margin-top:8px"><span class="cal-cell cal-ok" style="display:inline-block;width:18px"><a style="pointer-events:none">P</a></span> present + lunch ordered &nbsp; <span class="cal-cell cal-noorder" style="display:inline-block;width:18px"><a style="pointer-events:none">P</a></span> present, no lunch &nbsp; <span class="cal-cell cal-review" style="display:inline-block;width:18px"><a style="pointer-events:none">P</a></span> over allowance, needs review &nbsp; <span class="cal-cell cal-wfh" style="display:inline-block;width:18px"><a style="pointer-events:none">W</a></span> work from home &nbsp; <span class="cal-cell cal-leave" style="display:inline-block;width:18px"><a style="pointer-events:none">L</a></span> leave &nbsp; <b>·</b> nothing logged yet</p>
+  <p class="muted" style="font-size:11px;margin-top:8px"><span class="cal-cell cal-ok" style="display:inline-block;width:18px"><a style="pointer-events:none">P</a></span> present + lunch ordered &nbsp; <span class="cal-cell cal-noorder" style="display:inline-block;width:18px"><a style="pointer-events:none">P</a></span> present, no lunch &nbsp; <span class="cal-cell cal-review" style="display:inline-block;width:18px"><a style="pointer-events:none">P</a></span> over allowance, needs review &nbsp; <span class="cal-cell cal-deduct" style="display:inline-block;width:18px"><a style="pointer-events:none">P</a></span> over allowance, auto-deducted &nbsp; <span class="cal-cell cal-wfh" style="display:inline-block;width:18px"><a style="pointer-events:none">W</a></span> work from home &nbsp; <span class="cal-cell cal-leave" style="display:inline-block;width:18px"><a style="pointer-events:none">L</a></span> leave &nbsp; <b>·</b> nothing logged yet</p>
 </div>
 
 <div class="panel" style="margin-top:16px" id="quickDaily">
@@ -325,7 +329,7 @@ $lunchLabel = fn($s) => ['ok'=>'Completed','leave'=>'Leave','review'=>'Requires 
       <td><?= ((int)$en['lunch_ordered'] && $en['attendance']==='present') ? 'Yes' : 'No' ?></td>
       <td class="num right"><?= $c['allowance']>0?money($c['allowance']):'—' ?></td>
       <td class="num right"><?= $c['actual']>0?money($c['actual']):'—' ?></td>
-      <td class="num right" style="font-weight:700;color:var(--orange)"><?= money($c['adjustment']) ?><?= $c['extra']>0?' <span class="muted" style="font-size:11px">(+'.money($c['extra']).' extra)</span>':'' ?></td>
+      <td class="num right" style="font-weight:700;color:var(--orange)"><?= money($c['adjustment']) ?><?php if($c['extra']>0): ?> <span class="muted" style="font-size:11px"><?= $c['status']==='deducted' ? '(-'.money($c['extra']).' deducted)' : '(+'.money($c['extra']).' extra)' ?></span><?php endif; ?></td>
       <td><span class="pill <?= $lunchPill($c['status']) ?>"><?= e($lunchLabel($c['status'])) ?></span></td>
       <td class="muted" style="white-space:normal"><?= e($en['note'] ?: '—') ?></td>
       <td style="white-space:nowrap">
@@ -387,7 +391,11 @@ $lunchLabel = fn($s) => ['ok'=>'Completed','leave'=>'Leave','review'=>'Requires 
           <div><label>Pay unused daily lunch allowance when no lunch is ordered</label>
             <select name="lunch_pay_unused"><option value="yes"<?= lunch_pay_unused()?' selected':'' ?>>Yes</option><option value="no"<?= !lunch_pay_unused()?' selected':'' ?>>No</option></select></div>
           <div><label>When lunch exceeds the allowance</label>
-            <select name="lunch_over_allowance"><option value="review"<?= lunch_over_allowance_setting()==='review'?' selected':'' ?>>Require Review</option><option value="ignore"<?= lunch_over_allowance_setting()==='ignore'?' selected':'' ?>>Ignore (cap silently)</option></select></div>
+            <select name="lunch_over_allowance">
+              <option value="review"<?= lunch_over_allowance_setting()==='review'?' selected':'' ?>>Require Review</option>
+              <option value="deduct"<?= lunch_over_allowance_setting()==='deduct'?' selected':'' ?>>Deduct Excess from Salary</option>
+              <option value="ignore"<?= lunch_over_allowance_setting()==='ignore'?' selected':'' ?>>Ignore (cap silently)</option>
+            </select></div>
         </div>
         <p class="muted" style="font-size:11.5px;margin-top:10px">Eligible days are shown for reference only (<?= (int)lunch_eligible_days_setting() ?> = <?= (int)lunch_month_days_setting() ?> − <?= (int)lunch_leave_days_setting() ?>) — actual eligibility always comes from logged attendance, never a fixed number. The daily lunch rate is per-employee, set in <a href="salary.php">Staff Directory</a> (defaults to Rs.150).</p>
       </div>
@@ -474,6 +482,10 @@ function lmCalc(){
   var actual = parseFloat(amtEl.value || '0');
   if (actual > rate) {
     var extra = (actual-rate).toFixed(2);
+    if (LM_OVER_MODE==='deduct') {
+      prev.innerHTML = 'Lunch Allowance&nbsp;&nbsp;Rs.'+rate.toFixed(2)+'<br>Actual Lunch&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Rs.'+actual.toFixed(2)+'<br><b>Salary Adjustment&nbsp;&nbsp;Rs.-'+extra+'</b><br><span style="color:var(--orange)">🧾 Rs.'+extra+' over the daily allowance — deducted from salary automatically.</span>';
+      return;
+    }
     var warn = LM_OVER_MODE==='ignore' ? '' : '<br><span style="color:var(--red)">⚠ Actual lunch exceeds the daily allowance by Rs.'+extra+'. Status: Requires Review.</span>';
     prev.innerHTML = 'Lunch Allowance&nbsp;&nbsp;Rs.'+rate.toFixed(2)+'<br>Actual Lunch&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Rs.'+actual.toFixed(2)+'<br><b>Salary Adjustment&nbsp;&nbsp;Rs.0.00</b>'+warn;
     return;

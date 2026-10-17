@@ -152,9 +152,11 @@ INSERT INTO settings (skey,svalue) VALUES
  ('delivery_inside','80'),('delivery_outside','150'),
  ('opening_cash','0'),('opening_bank','0'),('usd_rate','133'),
  ('vendor_id','39349'),('store_phone','9700195727, 9713228484'),
- ('store_email','luprahtrading789@gmail.com'),('help_line','01-5970736'),
- ('ncm_api_key','1a2d45ed6bd03aae39d236f065c988d17d9857b2')
+ ('store_email','luprahtrading789@gmail.com'),('help_line','01-5970736')
 ON DUPLICATE KEY UPDATE svalue=VALUES(svalue);
+-- NOTE: API keys (NCM, Pick & Drop, Gemini, etc.) are NOT seeded here on purpose.
+-- Set them from the live app at Settings → Automation/Courier — they're stored
+-- only in the `settings` table in your database, never committed to this file.
 
 -- ---- starter couriers ----
 INSERT INTO couriers (name,color) VALUES

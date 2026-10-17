@@ -570,7 +570,7 @@ function ensure_lunch_system() {
     employee_id INT NOT NULL,
     order_date DATE NOT NULL,
     order_amount DECIMAL(10,2) NOT NULL DEFAULT 0,
-    attendance VARCHAR(10) NOT NULL DEFAULT 'present',   /* present | leave */
+    attendance VARCHAR(10) NOT NULL DEFAULT 'present',   /* present | leave | wfh | holiday */
     lunch_ordered TINYINT(1) NOT NULL DEFAULT 1,         /* did they order lunch that day */
     note VARCHAR(160) DEFAULT '',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -599,6 +599,11 @@ function lunch_day_calc($rate, $attendance, $lunchOrdered, $orderAmount) {
        lunch to reimburse — zero allowance, zero adjustment, no cash-out either. */
     return ['allowance'=>0.0,'actual'=>0.0,'adjustment'=>0.0,'extra'=>0.0,'status'=>'wfh'];
   }
+  if ($attendance === 'holiday') {
+    /* company/public holiday — office is closed for everyone, not a personal leave day.
+       No lunch to pay for, and it must never count against the employee's leave tally. */
+    return ['allowance'=>0.0,'actual'=>0.0,'adjustment'=>0.0,'extra'=>0.0,'status'=>'holiday'];
+  }
   if ($attendance !== 'present') {
     return ['allowance'=>0.0,'actual'=>0.0,'adjustment'=>0.0,'extra'=>0.0,'status'=>'leave'];
   }
@@ -626,11 +631,12 @@ function lunch_monthly_agg($mStart, $mEnd, $empFilter = 0) {
   $out = [];
   foreach (rows($sql, [$mStart, $mEnd]) as $r) {
     $eid = (int)$r['employee_id'];
-    if (!isset($out[$eid])) $out[$eid] = ['days_present'=>0,'days_leave'=>0,'days_wfh'=>0,'ordered'=>0.0,'allowance'=>0.0,'adjustment'=>0.0,'extra'=>0.0,'review'=>0,'deducted'=>0,'entries'=>0];
+    if (!isset($out[$eid])) $out[$eid] = ['days_present'=>0,'days_leave'=>0,'days_wfh'=>0,'days_holiday'=>0,'ordered'=>0.0,'allowance'=>0.0,'adjustment'=>0.0,'extra'=>0.0,'review'=>0,'deducted'=>0,'entries'=>0];
     $c = lunch_day_calc($r['lunch_rate'], $r['attendance'], (int)$r['lunch_ordered'], $r['order_amount']);
     $out[$eid]['entries']++;
     if ($r['attendance'] === 'present') $out[$eid]['days_present']++;
     elseif ($r['attendance'] === 'wfh') $out[$eid]['days_wfh']++;
+    elseif ($r['attendance'] === 'holiday') $out[$eid]['days_holiday']++;
     else $out[$eid]['days_leave']++;
     if ($c['status'] === 'review') $out[$eid]['review']++;
     if ($c['status'] === 'deducted') $out[$eid]['deducted']++;

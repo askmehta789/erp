@@ -16,7 +16,7 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
     $id=(int)($_POST['id'] ?? 0);
     $eid=(int)($_POST['employee_id'] ?? 0);
     $d=preg_match('/^\d{4}-\d{2}-\d{2}$/',$_POST['entry_date'] ?? '')?$_POST['entry_date']:date('Y-m-d');
-    $att=in_array($_POST['attendance'] ?? '',['present','leave','wfh'],true)?$_POST['attendance']:'present';
+    $att=in_array($_POST['attendance'] ?? '',['present','leave','wfh','holiday'],true)?$_POST['attendance']:'present';
     $ordered=(($_POST['lunch_ordered'] ?? '1')==='1') ? 1 : 0;
     $amt=max(0,(float)($_POST['order_amount'] ?? 0));
     $note=trim($_POST['note'] ?? '');
@@ -52,7 +52,7 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
     foreach ($eids as $i=>$eidRaw) {
       $eid=(int)$eidRaw;
       if (!$eid) continue;
-      $att=in_array($atts[$i] ?? '',['present','leave','wfh'],true)?$atts[$i]:'present';
+      $att=in_array($atts[$i] ?? '',['present','leave','wfh','holiday'],true)?$atts[$i]:'present';
       $ordered=(($ords[$i] ?? '1')==='1') ? 1 : 0;
       $amt=max(0,(float)($amts[$i] ?? 0));
       $note=trim($notes[$i] ?? '');
@@ -150,7 +150,7 @@ $scopeEmps = $empFilter ? array_values(array_filter($allEmps, fn($e)=>(int)$e['i
 $summaryRows=[]; $tAllowance=0.0;$tActual=0.0;$tAdjustment=0.0;$tEligible=0;$tReview=0;$tDeducted=0;
 foreach ($scopeEmps as $e) {
   $eid=(int)$e['id'];
-  $A = $lunchAgg[$eid] ?? ['days_present'=>0,'days_leave'=>0,'days_wfh'=>0,'ordered'=>0.0,'allowance'=>0.0,'adjustment'=>0.0,'extra'=>0.0,'review'=>0,'deducted'=>0];
+  $A = $lunchAgg[$eid] ?? ['days_present'=>0,'days_leave'=>0,'days_wfh'=>0,'days_holiday'=>0,'ordered'=>0.0,'allowance'=>0.0,'adjustment'=>0.0,'extra'=>0.0,'review'=>0,'deducted'=>0];
   $bon=(float)($sAgg[$eid]['bon'] ?? 0); $ded=(float)($sAgg[$eid]['ded'] ?? 0);
   $final = (float)$e['salary'] + $bon + (float)$A['adjustment'] - $ded;
   $tAllowance+=$A['allowance']; $tActual+=$A['ordered']; $tAdjustment+=$A['adjustment']; $tEligible+=$A['days_present']; $tReview+=$A['review']; $tDeducted+=$A['deducted'];
@@ -175,8 +175,8 @@ foreach ($monthEntries as $en) $calMap[(int)$en['employee_id']][$en['order_date'
 $calToday = date('Y-m-d');
 
 require __DIR__.'/includes/header.php';
-$lunchPill = fn($s) => ['ok'=>'p-green','leave'=>'p-grey','review'=>'p-yellow','wfh'=>'p-blue','deducted'=>'p-red'][$s] ?? 'p-grey';
-$lunchLabel = fn($s) => ['ok'=>'Completed','leave'=>'Leave','review'=>'Requires Review','wfh'=>'Work From Home','deducted'=>'Deducted from Salary'][$s] ?? ucfirst($s);
+$lunchPill = fn($s) => ['ok'=>'p-green','leave'=>'p-grey','review'=>'p-yellow','wfh'=>'p-blue','deducted'=>'p-red','holiday'=>'p-purple'][$s] ?? 'p-grey';
+$lunchLabel = fn($s) => ['ok'=>'Completed','leave'=>'Leave','review'=>'Requires Review','wfh'=>'Work From Home','deducted'=>'Deducted from Salary','holiday'=>'Holiday'][$s] ?? ucfirst($s);
 ?>
 <div class="page-head">
   <div><h1>🍱 Lunch Management</h1><p>Track daily lunch orders and automatically calculate salary adjustments.
@@ -221,6 +221,7 @@ $lunchLabel = fn($s) => ['ok'=>'Completed','leave'=>'Leave','review'=>'Requires 
 .cal-deduct a{background:var(--orange-bg);color:var(--orange)}
 .cal-leave a{background:var(--red-bg,#fee2e2);color:var(--red)}
 .cal-wfh a{background:var(--blue-bg,#dbeafe);color:var(--blue,#3b82f6)}
+.cal-holiday a{background:var(--purple-bg,#ede9fe);color:var(--purple,#7c3aed)}
 .cal-blank a{color:var(--muted-2);opacity:.35}
 </style>
 <div class="panel" style="margin-top:16px">
@@ -242,6 +243,7 @@ $lunchLabel = fn($s) => ['ok'=>'Completed','leave'=>'Leave','review'=>'Requires 
           else {
             $c = lunch_day_calc($e['lunch_rate'],$row['attendance'],(int)$row['lunch_ordered'],$row['order_amount']);
             if ($row['attendance']==='wfh') { $cls='cal-wfh'; $txt='W'; $title='Work From Home — present, no lunch charge'; }
+            elseif ($row['attendance']==='holiday') { $cls='cal-holiday'; $txt='H'; $title='Holiday — office closed, no lunch charge'; }
             elseif ($row['attendance']!=='present') { $cls='cal-leave'; $txt='L'; $title='Leave'; }
             elseif (!$row['lunch_ordered']) { $cls='cal-noorder'; $txt='P'; $title='Present · lunch not ordered'; }
             elseif ($c['status']==='review') { $cls='cal-review'; $txt='P'; $title='Present · lunch '.money($row['order_amount']).' — over allowance, needs review'; }
@@ -257,7 +259,7 @@ $lunchLabel = fn($s) => ['ok'=>'Completed','leave'=>'Leave','review'=>'Requires 
     <?php endforeach; if(!$scopeEmps): ?><tr><td colspan="<?= count($calDays)+1 ?>"><div class="empty">No staff yet.</div></td></tr><?php endif; ?>
     </tbody></table>
   </div>
-  <p class="muted" style="font-size:11px;margin-top:8px"><span class="cal-cell cal-ok" style="display:inline-block;width:18px"><a style="pointer-events:none">P</a></span> present + lunch ordered &nbsp; <span class="cal-cell cal-noorder" style="display:inline-block;width:18px"><a style="pointer-events:none">P</a></span> present, no lunch &nbsp; <span class="cal-cell cal-review" style="display:inline-block;width:18px"><a style="pointer-events:none">P</a></span> over allowance, needs review &nbsp; <span class="cal-cell cal-deduct" style="display:inline-block;width:18px"><a style="pointer-events:none">P</a></span> over allowance, auto-deducted &nbsp; <span class="cal-cell cal-wfh" style="display:inline-block;width:18px"><a style="pointer-events:none">W</a></span> work from home &nbsp; <span class="cal-cell cal-leave" style="display:inline-block;width:18px"><a style="pointer-events:none">L</a></span> leave &nbsp; <b>·</b> nothing logged yet</p>
+  <p class="muted" style="font-size:11px;margin-top:8px"><span class="cal-cell cal-ok" style="display:inline-block;width:18px"><a style="pointer-events:none">P</a></span> present + lunch ordered &nbsp; <span class="cal-cell cal-noorder" style="display:inline-block;width:18px"><a style="pointer-events:none">P</a></span> present, no lunch &nbsp; <span class="cal-cell cal-review" style="display:inline-block;width:18px"><a style="pointer-events:none">P</a></span> over allowance, needs review &nbsp; <span class="cal-cell cal-deduct" style="display:inline-block;width:18px"><a style="pointer-events:none">P</a></span> over allowance, auto-deducted &nbsp; <span class="cal-cell cal-wfh" style="display:inline-block;width:18px"><a style="pointer-events:none">W</a></span> work from home &nbsp; <span class="cal-cell cal-leave" style="display:inline-block;width:18px"><a style="pointer-events:none">L</a></span> leave &nbsp; <span class="cal-cell cal-holiday" style="display:inline-block;width:18px"><a style="pointer-events:none">H</a></span> holiday &nbsp; <b>·</b> nothing logged yet</p>
 </div>
 
 <div class="panel" style="margin-top:16px" id="quickDaily">
@@ -281,6 +283,7 @@ $lunchLabel = fn($s) => ['ok'=>'Completed','leave'=>'Leave','review'=>'Requires 
           <option value="present"<?= $rAtt==='present'?' selected':'' ?>>Present</option>
           <option value="wfh"<?= $rAtt==='wfh'?' selected':'' ?>>Work From Home</option>
           <option value="leave"<?= $rAtt==='leave'?' selected':'' ?>>Leave</option>
+          <option value="holiday"<?= $rAtt==='holiday'?' selected':'' ?>>Holiday</option>
         </select></td>
         <td><select name="lunch_ordered[]" class="bulk-ord" onchange="bulkRowToggle(this)"<?= $rAtt!=='present'?' disabled':'' ?>>
           <option value="1"<?= $rOrd?' selected':'' ?>>Yes</option>
@@ -304,6 +307,7 @@ $lunchLabel = fn($s) => ['ok'=>'Completed','leave'=>'Leave','review'=>'Requires 
     <div class="info-row"><span class="it">Daily Lunch Rate</span><span class="iv"><?= money($ae['lunch_rate']) ?></span></div>
     <div class="info-row"><span class="it">Present Days</span><span class="iv"><?= (int)$sr['A']['days_present'] ?></span></div>
     <div class="info-row"><span class="it">Work From Home Days</span><span class="iv"><?= (int)$sr['A']['days_wfh'] ?></span></div>
+    <div class="info-row"><span class="it">Holiday Days</span><span class="iv"><?= (int)$sr['A']['days_holiday'] ?></span></div>
     <div class="info-row"><span class="it">Leave Days</span><span class="iv"><?= (int)$sr['A']['days_leave'] ?></span></div>
     <div class="info-row"><span class="it">Eligible Lunch Days</span><span class="iv"><?= (int)$sr['A']['days_present'] ?></span></div>
     <div class="info-row"><span class="it">Total Lunch Allowance</span><span class="iv"><?= money($sr['A']['allowance']) ?></span></div>
@@ -325,7 +329,7 @@ $lunchLabel = fn($s) => ['ok'=>'Completed','leave'=>'Leave','review'=>'Requires 
     <tr>
       <td><?= e(dual_date($en['order_date'])) ?></td>
       <td><b><?= e($en['name'] ?: ('#'.$en['employee_id'])) ?></b></td>
-      <td><span class="pill <?= $en['attendance']==='present'?'p-green':($en['attendance']==='wfh'?'p-blue':'p-grey') ?>"><?= $en['attendance']==='present'?'Present':($en['attendance']==='wfh'?'🏠 WFH':'Leave') ?></span></td>
+      <td><span class="pill <?= $en['attendance']==='present'?'p-green':($en['attendance']==='wfh'?'p-blue':($en['attendance']==='holiday'?'p-purple':'p-grey')) ?>"><?= $en['attendance']==='present'?'Present':($en['attendance']==='wfh'?'🏠 WFH':($en['attendance']==='holiday'?'🎉 Holiday':'Leave')) ?></span></td>
       <td><?= ((int)$en['lunch_ordered'] && $en['attendance']==='present') ? 'Yes' : 'No' ?></td>
       <td class="num right"><?= $c['allowance']>0?money($c['allowance']):'—' ?></td>
       <td class="num right"><?= $c['actual']>0?money($c['actual']):'—' ?></td>
@@ -358,7 +362,7 @@ $lunchLabel = fn($s) => ['ok'=>'Completed','leave'=>'Leave','review'=>'Requires 
     <button type="button" class="btn btn-sm" onclick="lmExportCsv('summaryTbl','lunch-summary-<?= e($m) ?>.csv')">⬇ Export CSV</button>
   </div>
   <div class="table-wrap"><table class="tbl num-tbl" id="summaryTbl"><thead><tr>
-    <th>Employee</th><th class="right">Basic Salary</th><th class="right">Present Days</th><th class="right">WFH Days</th><th class="right">Leave Days</th><th class="right">Eligible Lunch Days</th><th class="right">Lunch Allowance</th><th class="right">Actual Lunch Expense</th><th class="right">Salary Adjustment</th><th class="right">Final Salary</th>
+    <th>Employee</th><th class="right">Basic Salary</th><th class="right">Present Days</th><th class="right">WFH Days</th><th class="right">Holiday Days</th><th class="right">Leave Days</th><th class="right">Eligible Lunch Days</th><th class="right">Lunch Allowance</th><th class="right">Actual Lunch Expense</th><th class="right">Salary Adjustment</th><th class="right">Final Salary</th>
   </tr></thead><tbody>
   <?php foreach($summaryRows as $sr): $ae=$sr['e']; ?>
     <tr>
@@ -366,6 +370,7 @@ $lunchLabel = fn($s) => ['ok'=>'Completed','leave'=>'Leave','review'=>'Requires 
       <td class="num right"><?= money($ae['salary']) ?></td>
       <td class="num right"><?= (int)$sr['A']['days_present'] ?></td>
       <td class="num right"><?= (int)$sr['A']['days_wfh'] ?></td>
+      <td class="num right"><?= (int)$sr['A']['days_holiday'] ?></td>
       <td class="num right"><?= (int)$sr['A']['days_leave'] ?></td>
       <td class="num right"><?= (int)$sr['A']['days_present'] ?></td>
       <td class="num right"><?= money($sr['A']['allowance']) ?></td>
@@ -373,7 +378,7 @@ $lunchLabel = fn($s) => ['ok'=>'Completed','leave'=>'Leave','review'=>'Requires 
       <td class="num right" style="color:var(--orange);font-weight:700"><?= money($sr['A']['adjustment']) ?></td>
       <td class="num right" style="font-weight:800"><?= money($sr['final']) ?></td>
     </tr>
-  <?php endforeach; if(!$summaryRows) echo '<tr><td colspan="10"><div class="empty">No staff yet.</div></td></tr>'; ?>
+  <?php endforeach; if(!$summaryRows) echo '<tr><td colspan="11"><div class="empty">No staff yet.</div></td></tr>'; ?>
   </tbody></table></div>
   <p class="muted" style="font-size:11.5px;margin-top:8px">Final Salary = Basic Salary + Bonus + Lunch Salary Adjustment − Deduction (matches Payable on the <a href="salary.php?m=<?= e($m) ?>">Staff Salary</a> page).</p>
 </div>
@@ -424,7 +429,7 @@ $lunchLabel = fn($s) => ['ok'=>'Completed','leave'=>'Leave','review'=>'Requires 
     <div><label>Date *</label><input type="date" name="entry_date" id="lm_date" value="<?= e($d) ?>" required onchange="lmCheckDup();lmCalc()"></div>
     <div><label>Employee *</label><select name="employee_id" id="lm_emp" required onchange="lmCheckDup();lmCalc()"><option value="">—</option>
       <?php foreach($allEmps as $ae): ?><option value="<?= (int)$ae['id'] ?>" data-rate="<?= (float)$ae['lunch_rate'] ?>"><?= e($ae['name']) ?></option><?php endforeach; ?></select></div>
-    <div><label>Attendance *</label><select name="attendance" id="lm_att" onchange="lmCalc()"><option value="present">Present</option><option value="wfh">Work From Home</option><option value="leave">Leave</option></select></div>
+    <div><label>Attendance *</label><select name="attendance" id="lm_att" onchange="lmCalc()"><option value="present">Present</option><option value="wfh">Work From Home</option><option value="leave">Leave</option><option value="holiday">Holiday</option></select></div>
     <div><label>Lunch Ordered</label><select name="lunch_ordered" id="lm_ordered" onchange="lmCalc()"><option value="1">Yes</option><option value="0">No</option></select></div>
     <div class="full" id="lm_dup_warn" style="display:none;background:var(--red-bg);color:var(--red);padding:9px 12px;border-radius:9px;font-size:12.5px"></div>
     <div><label>Actual Lunch Amount (Rs.)</label><input type="number" step="any" min="0" name="order_amount" id="lm_amount" value="0" oninput="lmCalc()"></div>
@@ -467,6 +472,10 @@ function lmCalc(){
   var prev=document.getElementById('lm_preview');
   if (att==='wfh') {
     prev.innerHTML = '<b>Work From Home</b> — counted as present, but there\'s no office lunch to pay for.<br>Lunch Allowance&nbsp;&nbsp;Rs.0<br>Actual Lunch&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Rs.0<br>Salary Adjustment&nbsp;&nbsp;Rs.0';
+    return;
+  }
+  if (att==='holiday') {
+    prev.innerHTML = '<b>🎉 Holiday</b> — office closed for everyone, no lunch allowance, no salary adjustment.<br>Lunch Allowance&nbsp;&nbsp;Rs.0<br>Actual Lunch&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Rs.0<br>Salary Adjustment&nbsp;&nbsp;Rs.0';
     return;
   }
   if (!isPresent) {
@@ -561,7 +570,7 @@ var DAILY_CSV=<?php
       date('d M Y',strtotime($en['order_date'])),
       bs_pretty($en['order_date'],false),
       $en['name'] ?: ('#'.$en['employee_id']),
-      $en['attendance']==='present'?'Present':($en['attendance']==='wfh'?'Work From Home':'Leave'),
+      $en['attendance']==='present'?'Present':($en['attendance']==='wfh'?'Work From Home':($en['attendance']==='holiday'?'Holiday':'Leave')),
       ((int)$en['lunch_ordered'] && $en['attendance']==='present')?'Yes':'No',
       $c['allowance'], $c['actual'], $c['adjustment'],
       $lunchLabel($c['status']),

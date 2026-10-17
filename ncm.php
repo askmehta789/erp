@@ -295,8 +295,7 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
     }
     elseif ($act==='book_bulk') {
       $ids = array_filter(array_map('intval', explode(',', (string)($_POST['ids'] ?? ''))));
-      $ids = array_slice($ids, 0, 60);
-      set_time_limit(600);
+      set_time_limit(0);
       $bn=[]; foreach (ncm()->branches() as $b) if(!empty($b['name'])) $bn[]=$b['name'];
       $fb = $_POST['fbranch'] ?? setting('ncm_from_branch','TINKUNE');
       $dt = $_POST['delivery_type'] ?? 'Door2Door';
@@ -1264,7 +1263,6 @@ function bbGuess(addr){var A=(addr||'').toUpperCase(),best='',bl=0;(window.BRANC
 function bkReview(){
   var sel=Array.prototype.slice.call(document.querySelectorAll('.bkc:checked'));
   if(!sel.length){alert('Tick some unbooked orders first — or use ☑ Select All Pending.');return;}
-  if(sel.length>60){alert('Max 60 per batch — the first 60 will be kept.');sel=sel.slice(0,60);}
   var box=document.getElementById('bbRows'); box.innerHTML='';
   var okN=0;
   var head=document.createElement('div'); head.className='bb-tip'; box.appendChild(head);

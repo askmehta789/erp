@@ -14,7 +14,6 @@ if (isset($_GET['ajax'])) {
 
   if ($action === 'mark_printed') {
     $ids = array_values(array_filter(array_map('intval', explode(',', (string)($_POST['ids'] ?? ''))), fn($x)=>$x>0));
-    $ids = array_slice($ids, 0, 200);
     $out = [];
     if ($ids) {
       $ph = implode(',', array_fill(0, count($ids), '?'));
@@ -73,7 +72,6 @@ $pendingCount=(int)($cnt['pending_c']??0); $processingCount=(int)($cnt['processi
 $ncmCount=(int)($cnt['ncm_c']??0); $pdCount=(int)($cnt['pd_c']??0); $othersCount=(int)($cnt['others_c']??0);
 if($idsRaw!==''){
   $ids=array_values(array_filter(array_map('intval',explode(',',$idsRaw)),fn($x)=>$x>0));
-  $ids=array_slice($ids,0,60);
   if($ids){
     $ph=implode(',',array_fill(0,count($ids),'?'));
     $orders=rows("SELECT $SEL FROM orders o $JOIN WHERE o.id IN ($ph) ORDER BY o.id DESC",$ids);
@@ -81,9 +79,9 @@ if($idsRaw!==''){
   $qp=['ids'=>$idsRaw];
 }
 elseif($id){ $orders=rows("SELECT $SEL FROM orders o $JOIN WHERE o.id=?",[$id]); $qp=['id'=>$id]; }
-elseif($st==='unprinted'){ $orders=rows("SELECT $SEL FROM orders o $JOIN WHERE o.label_printed_at IS NULL AND o.status IN ('pending','processing')$extraWhere ORDER BY o.id DESC LIMIT 60",$extraParams); $qp=['status'=>$st]; }
-elseif(in_array($st,['pending','processing','shipped'],true)){ $orders=rows("SELECT $SEL FROM orders o $JOIN WHERE o.status=?$extraWhere ORDER BY o.id DESC LIMIT 60",array_merge([$st],$extraParams)); $qp=['status'=>$st]; }
-else { $orders=rows("SELECT $SEL FROM orders o $JOIN WHERE o.status IN ('pending','processing')$extraWhere ORDER BY o.id DESC LIMIT 60",$extraParams); $qp=[]; }
+elseif($st==='unprinted'){ $orders=rows("SELECT $SEL FROM orders o $JOIN WHERE o.label_printed_at IS NULL AND o.status IN ('pending','processing')$extraWhere ORDER BY o.id DESC",$extraParams); $qp=['status'=>$st]; }
+elseif(in_array($st,['pending','processing','shipped'],true)){ $orders=rows("SELECT $SEL FROM orders o $JOIN WHERE o.status=?$extraWhere ORDER BY o.id DESC",array_merge([$st],$extraParams)); $qp=['status'=>$st]; }
+else { $orders=rows("SELECT $SEL FROM orders o $JOIN WHERE o.status IN ('pending','processing')$extraWhere ORDER BY o.id DESC",$extraParams); $qp=[]; }
 if($courierFilter) $qp['courier']=$courierFilter;
 if($ctype) $qp['ctype']=$ctype;
 $store=setting('store_name','Luprah Trading'); $phone=setting('store_phone','');

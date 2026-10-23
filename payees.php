@@ -264,16 +264,14 @@ if ($vp) {
   $productNames = array_column(rows("SELECT name FROM products ORDER BY CHAR_LENGTH(name) DESC"), 'name');
   $codeMap = payee_code_map($productNames);
 
-  /* full unfiltered history — the true running-remaining balance and the product
-     filter's dropdown both need the whole story, not just what's on screen */
+  /* full unfiltered history — the product filter's dropdown needs the whole
+     story, not just what's on screen */
   $fullHistory = rows("SELECT pl.*, e.product AS exp_product
                         FROM payee_ledger pl LEFT JOIN expenses e ON e.id=pl.ref_expense_id
                         WHERE pl.payee_id=? ORDER BY pl.entry_date ASC, pl.id ASC", [$view]);
-  $run = 0; $runMap = []; $productSet = [];
+  $productSet = [];
   foreach ($fullHistory as &$l) {
     $l['product_name'] = payee_resolve_product($l['label'], $l['exp_product'], $productNames, $codeMap, $l['product'] ?? null);
-    $run += $l['type']==='due' ? (float)$l['amount'] : -(float)$l['amount'];
-    $runMap[$l['id']] = $run;
     if ($l['product_name']) $productSet[$l['product_name']] = true;
   }
   unset($l);
@@ -531,7 +529,7 @@ require __DIR__.'/includes/header.php';
 
   <div class="panel-head" style="border-top:1px solid var(--border)"><h2>Entries</h2></div>
   <div class="table-wrap"><table class="tbl num-tbl"><thead><tr>
-    <th>Date</th><th>Type</th><th>Product</th><th>Note</th><th class="right">Amount</th><th class="right">Running Remaining</th><th></th>
+    <th>Date</th><th>Type</th><th>Product</th><th>Note</th><th class="right">Amount</th><th></th>
   </tr></thead><tbody>
   <?php foreach($ledger as $l): ?>
     <tr>
@@ -540,7 +538,6 @@ require __DIR__.'/includes/header.php';
       <td><?= $l['product_name'] ? '<span class="pill p-grey" style="font-size:10px">'.e($l['product_name']).'</span>' : '<span class="muted">—</span>' ?></td>
       <td><?= e($l['label'] ?: '—') ?></td>
       <td class="num right" style="font-weight:700;color:<?= $l['type']==='due'?'var(--ink)':'var(--green)' ?>"><?= money($l['amount']) ?></td>
-      <td class="num right" style="color:<?= $runMap[$l['id']]>0.5?'var(--amber)':'var(--green)' ?>"><?= money(max(0,$runMap[$l['id']])) ?></td>
       <td class="right">
         <?php if($isAdmin): ?>
         <button type="button" class="iact" title="Edit entry" data-rec="<?= e(json_encode(['id'=>(int)$l['id'],'payee_id'=>(int)$l['payee_id'],'entry_date'=>$l['entry_date'],'type'=>$l['type'],'amount'=>(float)$l['amount'],'account_id'=>(int)($l['account_id']??0),'label'=>$l['label'],'product'=>$l['product']??''])) ?>" onclick="openEditEntry(JSON.parse(this.getAttribute('data-rec')))">✏️</button>
@@ -548,7 +545,7 @@ require __DIR__.'/includes/header.php';
         <?php endif; ?>
       </td>
     </tr>
-  <?php endforeach; if(!$ledger) echo '<tr><td colspan="7"><div class="empty">No entries match these filters.</div></td></tr>'; ?>
+  <?php endforeach; if(!$ledger) echo '<tr><td colspan="6"><div class="empty">No entries match these filters.</div></td></tr>'; ?>
   </tbody></table></div>
 </div>
 <?php endif; ?>

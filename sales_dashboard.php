@@ -150,6 +150,7 @@ a.cb:hover{transform:translateY(-1px);filter:brightness(0.96)}
 
 <div class="page-head">
   <div><h1>🏆 Sales Team</h1><p>Leaderboard for each salesperson — quantity sold, revenue, orders &amp; returns/cancellations · <b><?= $rangeLabel ?></b></p></div>
+  <a class="btn" href="analytics_salesperson.php">📈 Trend Analytics</a>
   <a class="btn" href="salary.php">👥 Manage Sales Staff</a>
 </div>
 

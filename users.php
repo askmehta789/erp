@@ -67,6 +67,7 @@ function all_access_pages() {
     'money_dashboard.php'=>['💰','Money Dashboard','Money'], 'analytics.php'=>['📈','Analytics','Money'],
     'analytics_report.php'=>['📋','Daily & Monthly Report','Money'], 'analytics_returns.php'=>['↩️','Returns & Cancellations','Money'],
     'analytics_exchanges.php'=>['🔁','Exchanges','Money'],
+    'analytics_salesperson.php'=>['🧑‍💼','Sales Person Analytics','Money'],
     'analytics_branches.php'=>['🚚','Branch Performance','Money'],
     'expenses.php'=>['💸','Expenses','Money'], 'reports.php'=>['📊','Reports (classic)','Money'],
     'invoice.php'=>['🧾','Invoices','Core'], 'ncm_comments.php'=>['💬','NCM Comment Center','Delivery'],

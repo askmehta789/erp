@@ -23,7 +23,9 @@ $allProducts = rows("SELECT id,name FROM products ORDER BY name");
 $pName = $pid ? (string)val("SELECT name FROM products WHERE id=?",[$pid]) : '';
 $pw = $pid ? " AND o.product_id = ".$pid : "";
 
-$orders = rows("SELECT o.*, p.name AS product_name FROM orders o LEFT JOIN products p ON p.id=o.product_id
+ensure_order_exchange_cols();
+$orders = rows("SELECT o.*, p.name AS product_name, sp.name AS sp_name FROM orders o
+                LEFT JOIN products p ON p.id=o.product_id LEFT JOIN employees sp ON sp.id=o.sales_person_id
                 WHERE o.order_date BETWEEN ? AND ? $pw ORDER BY o.order_date",[$from,$to]);
 
 /* zero-filled period map so empty days/months still show */
@@ -31,23 +33,35 @@ $periodMap=[];
 if ($view==='daily') { $cur=strtotime($from); $end=strtotime($to); while($cur<=$end){ $periodMap[date('Y-m-d',$cur)]=1; $cur=strtotime('+1 day',$cur); } }
 else { $cur=strtotime(date('Y-m-01',strtotime($from))); $end=strtotime($to); while($cur<=$end){ $periodMap[date('Y-m',$cur)]=1; $cur=strtotime('+1 month',$cur); } }
 
-$P=[]; $ensureP=function(&$a,$k){ if(!isset($a[$k])) $a[$k]=['q'=>0,'rev'=>0,'del'=>0,'cogs'=>0,'rloss'=>0,'gross'=>0,'products'=>[]]; };
+$P=[]; $ensureP=function(&$a,$k){ if(!isset($a[$k])) $a[$k]=['q'=>0,'rev'=>0,'del'=>0,'cogs'=>0,'rloss'=>0,'exloss'=>0,'gross'=>0,'products'=>[]]; };
 foreach(array_keys($periodMap) as $k) $ensureP($P,$k);
+
+/* salesperson breakdown — aggregated across the whole range (not nested per-period,
+   to keep the existing per-period expand UI from getting any heavier) */
+$SP=[]; $ensureSp=function(&$a,$k){ if(!isset($a[$k])) $a[$k]=['orders'=>0,'q'=>0,'rev'=>0,'cogs'=>0,'del'=>0,'gross'=>0,'returned'=>0,'rloss'=>0,'exchanged'=>0,'exloss'=>0]; };
 
 foreach($orders as $o){
   $k = ar_pkey($o['order_date'],$view); if(!isset($P[$k])) $ensureP($P,$k);
   $pn = $o['product_name'] ?: '(no product)';
   if(!isset($P[$k]['products'][$pn])) $P[$k]['products'][$pn]=['q'=>0,'rev'=>0,'del'=>0,'cogs'=>0,'rloss'=>0,'gross'=>0];
+  $spn = $o['sp_name'] ?: '(unassigned)';
+  $ensureSp($SP,$spn); $SP[$spn]['orders']++;
   if($o['status']==='delivered'){
     $q=(int)$o['qty']; $line=(float)$o['sell_price']*$q; $prof=((float)$o['sell_price']-(float)$o['cost_price'])*$q-(float)$o['delivery_charge'];
     $cogsLine=(float)$o['cost_price']*$q;
     $P[$k]['q']+=$q; $P[$k]['rev']+=$line; $P[$k]['del']+=(float)$o['delivery_charge']; $P[$k]['cogs']+=$cogsLine; $P[$k]['gross']+=$prof;
     $P[$k]['products'][$pn]['q']+=$q; $P[$k]['products'][$pn]['rev']+=$line; $P[$k]['products'][$pn]['del']+=(float)$o['delivery_charge']; $P[$k]['products'][$pn]['cogs']+=$cogsLine; $P[$k]['products'][$pn]['gross']+=$prof;
+    $SP[$spn]['q']+=$q; $SP[$spn]['rev']+=$line; $SP[$spn]['cogs']+=$cogsLine; $SP[$spn]['del']+=(float)$o['delivery_charge']; $SP[$spn]['gross']+=$prof;
   } elseif(in_array($o['status'],['returned','cancelled'],true)){
     $P[$k]['gross']-=(float)$o['cancel_charge']; $P[$k]['rloss']+=(float)$o['cancel_charge'];
     $P[$k]['products'][$pn]['gross']-=(float)$o['cancel_charge']; $P[$k]['products'][$pn]['rloss']+=(float)$o['cancel_charge'];
+    $SP[$spn]['gross']-=(float)$o['cancel_charge']; $SP[$spn]['returned']++; $SP[$spn]['rloss']+=(float)$o['cancel_charge'];
+  } elseif($o['status']==='exchanged'){
+    $P[$k]['gross']-=(float)$o['exchange_charge']; $P[$k]['exloss']+=(float)$o['exchange_charge'];
+    $SP[$spn]['gross']-=(float)$o['exchange_charge']; $SP[$spn]['exchanged']++; $SP[$spn]['exloss']+=(float)$o['exchange_charge'];
   }
 }
+uasort($SP, fn($a,$b)=>$b['rev']<=>$a['rev']);
 
 /* ads, matched into the same periods */
 $adRows=rows("SELECT expense_date, amount, category, COALESCE(usd_amount,0) usd_amount, COALESCE(product,'') product FROM expenses WHERE expense_date BETWEEN ? AND ?",[$from,$to]);
@@ -223,6 +237,28 @@ require __DIR__.'/includes/header.php';
 </div>
 <?php endif; ?>
 
+<?php if($SP): ?>
+<div class="panel" style="margin-bottom:14px">
+  <div class="panel-head"><h2>🧑‍💼 By Salesperson <span class="muted" style="font-weight:600;font-size:11.5px">whole range · <a href="analytics_salesperson.php?from=<?= e($from) ?>&to=<?= e($to) ?>" style="color:var(--brand)">trend view →</a></span></h2></div>
+  <div class="table-wrap"><table class="tbl num-tbl">
+    <thead><tr><th>Salesperson</th><th class="right">Orders</th><th class="right">Qty</th><th class="right">Revenue</th><th class="right">Gross Profit</th><th class="right">Returned</th><th class="right">Exchanged</th></tr></thead>
+    <tbody>
+    <?php foreach($SP as $spn=>$sv): ?>
+    <tr>
+      <td><b><?= e($spn) ?></b></td>
+      <td class="num right"><?= number_format($sv['orders']) ?></td>
+      <td class="num right"><?= number_format($sv['q']) ?></td>
+      <td class="num right"><?= money($sv['rev']) ?></td>
+      <td class="num right" style="font-weight:700;color:<?= $sv['gross']>=0?'var(--green)':'var(--red)' ?>"><?= money($sv['gross']) ?></td>
+      <td class="num right" style="color:var(--red)"><?= $sv['returned'] ?><?= $sv['rloss']>0?' <span class="muted" style="font-size:10px">('.money($sv['rloss']).')</span>':'' ?></td>
+      <td class="num right" style="color:var(--blue,#2563eb)"><?= $sv['exchanged'] ?><?= $sv['exloss']>0?' <span class="muted" style="font-size:10px">('.money($sv['exloss']).')</span>':'' ?></td>
+    </tr>
+    <?php endforeach; ?>
+    </tbody>
+  </table></div>
+</div>
+<?php endif; ?>
+
 <div class="ar-card">
   <?php foreach($P as $k=>$v):
     $ads = $adsP[$k] ?? 0; $usd=($adsUsdP[$k]??0)>0?$adsUsdP[$k]:($ads>0?$ads/$usdRate:0);
@@ -257,7 +293,7 @@ require __DIR__.'/includes/header.php';
         <div class="ar-prodrow" style="color:#8a93a8">No orders this period.</div>
       <?php endif; ?>
       <div class="ar-prodrow" style="border-top:1px solid #e4e8f2;margin-top:4px;padding-top:8px;color:#8a93a8">
-        Revenue Rs. <?= number_format($v['rev']) ?> − COGS Rs. <?= number_format($v['cogs']) ?> − Delivery Rs. <?= number_format($v['del']) ?><?= $v['rloss']>0?' − Returns Rs. '.number_format($v['rloss']):'' ?> = Gross Rs. <?= number_format($v['gross']) ?> · − Ads Rs. <?= number_format($ads) ?> = Net Rs. <?= number_format($net) ?>
+        Revenue Rs. <?= number_format($v['rev']) ?> − COGS Rs. <?= number_format($v['cogs']) ?> − Delivery Rs. <?= number_format($v['del']) ?><?= $v['rloss']>0?' − Returns Rs. '.number_format($v['rloss']):'' ?><?= ($v['exloss']??0)>0?' − Exchanges Rs. '.number_format($v['exloss']):'' ?> = Gross Rs. <?= number_format($v['gross']) ?> · − Ads Rs. <?= number_format($ads) ?> = Net Rs. <?= number_format($net) ?>
       </div>
       <div class="ar-prodrow" style="padding-top:2px;color:#8a93a8">
         Ads/unit Rs. <?= number_format($apu,1) ?> · Profit/unit Rs. <?= number_format($ppu) ?> · $<?= number_format($usd,0) ?>

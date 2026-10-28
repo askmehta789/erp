@@ -54,18 +54,21 @@ if (ncm()->configured()) {
   catch (Throwable $e) { $connected=false; }
 }
 
+ensure_order_exchange_cols();
+
 /* ---- courier-level split (this part IS exact, no estimation) ---- */
 $byCourier=[]; $dataErr='';
 try {
-  $courierOrders = rows("SELECT o.status, o.cancel_charge, c.name AS courier_name
+  $courierOrders = rows("SELECT o.status, o.cancel_charge, o.exchange_charge, c.name AS courier_name
     FROM orders o LEFT JOIN couriers c ON c.id=o.courier_id
     WHERE o.order_date BETWEEN ? AND ? $pw", [$from,$to]);
 } catch (Throwable $e) { $courierOrders=[]; $dataErr=$e->getMessage(); }
 foreach($courierOrders as $o){
   $cn=$o['courier_name']?:'Unassigned';
-  if(!isset($byCourier[$cn])) $byCourier[$cn]=['orders'=>0,'ret'=>0,'charge'=>0];
+  if(!isset($byCourier[$cn])) $byCourier[$cn]=['orders'=>0,'ret'=>0,'charge'=>0,'exch'=>0,'exCharge'=>0];
   $byCourier[$cn]['orders']++;
   if(in_array($o['status'],['returned','cancelled'],true)){ $byCourier[$cn]['ret']++; $byCourier[$cn]['charge']+=(float)$o['cancel_charge']; }
+  elseif($o['status']==='exchanged'){ $byCourier[$cn]['exch']++; $byCourier[$cn]['exCharge']+=(float)$o['exchange_charge']; }
 }
 foreach($byCourier as &$row){ $row['rate']=$row['orders']?round($row['ret']/$row['orders']*100,1):0; } unset($row);
 uasort($byCourier, fn($a,$b)=>$b['orders']<=>$a['orders']);
@@ -74,7 +77,7 @@ uasort($byCourier, fn($a,$b)=>$b['orders']<=>$a['orders']);
 $byBranch=[]; $unmatched=0; $ncmTotal=0;
 if ($connected && $branchNames) {
   try {
-    $ncmOrders = rows("SELECT o.address, o.status, o.cancel_charge, o.ncm_status
+    $ncmOrders = rows("SELECT o.address, o.status, o.cancel_charge, o.exchange_charge, o.ncm_status
       FROM orders o LEFT JOIN couriers c ON c.id=o.courier_id
       WHERE c.name LIKE '%NCM%' AND o.order_date BETWEEN ? AND ? $pw", [$from,$to]);
   } catch (Throwable $e) { $ncmOrders=[]; $dataErr=$dataErr?:$e->getMessage(); }
@@ -84,9 +87,10 @@ if ($connected && $branchNames) {
     $br = $o['ncm_status'] ? bp_match_branch($o['ncm_status'], $branchNames) : '';
     if ($br==='') $br = bp_guess_branch($o['address'], $branchNames);
     if ($br===''){ $unmatched++; continue; }
-    if(!isset($byBranch[$br])) $byBranch[$br]=['orders'=>0,'ret'=>0,'charge'=>0];
+    if(!isset($byBranch[$br])) $byBranch[$br]=['orders'=>0,'ret'=>0,'charge'=>0,'exch'=>0,'exCharge'=>0];
     $byBranch[$br]['orders']++;
     if(in_array($o['status'],['returned','cancelled'],true)){ $byBranch[$br]['ret']++; $byBranch[$br]['charge']+=(float)$o['cancel_charge']; }
+    elseif($o['status']==='exchanged'){ $byBranch[$br]['exch']++; $byBranch[$br]['exCharge']+=(float)$o['exchange_charge']; }
   }
   foreach($byBranch as &$row){ $row['rate']=$row['orders']?round($row['ret']/$row['orders']*100,1):0; } unset($row);
 }
@@ -162,13 +166,15 @@ require __DIR__.'/includes/header.php';
   <div class="bp-panel-h">🚚 By Courier <span class="muted" style="font-weight:600;font-size:11.5px">exact, not estimated</span></div>
   <div class="bp-panel-b">
     <div class="table-wrap"><table class="tbl num-tbl">
-      <thead><tr><th>Courier</th><th class="right">Orders</th><th class="right">Returned/Cancelled</th><th class="right">Rate</th><th class="right">Charge Lost</th></tr></thead><tbody>
+      <thead><tr><th>Courier</th><th class="right">Orders</th><th class="right">Returned/Cancelled</th><th class="right">Rate</th><th class="right">Charge Lost</th><th class="right">Exchanged</th><th class="right">Exchange Cost</th></tr></thead><tbody>
       <?php foreach($byCourier as $cn=>$row): ?>
       <tr><td><b><?= e($cn) ?></b></td><td class="right"><?= $row['orders'] ?></td>
         <td class="right" style="color:var(--red)"><?= $row['ret'] ?></td>
         <td class="right"><span class="pill <?= $row['rate']>=15?'p-red':($row['rate']>=8?'p-yellow':'p-green') ?>"><?= $row['rate'] ?>%</span></td>
-        <td class="right" style="font-weight:800"><?= money($row['charge']) ?></td></tr>
-      <?php endforeach; if(!$byCourier) echo '<tr><td colspan="5"><div class="empty">No orders in this range.</div></td></tr>'; ?>
+        <td class="right" style="font-weight:800"><?= money($row['charge']) ?></td>
+        <td class="right" style="color:var(--blue,#2563eb)"><?= $row['exch'] ?></td>
+        <td class="right" style="font-weight:800"><?= money($row['exCharge']) ?></td></tr>
+      <?php endforeach; if(!$byCourier) echo '<tr><td colspan="7"><div class="empty">No orders in this range.</div></td></tr>'; ?>
       </tbody>
     </table></div>
   </div>
@@ -210,15 +216,17 @@ require __DIR__.'/includes/header.php';
     </div>
   </div>
   <div class="table-wrap"><table class="tbl num-tbl" id="brTbl">
-    <thead><tr><th>Branch</th><th class="right">Orders</th><th class="right">Returned/Cancelled</th><th class="right">Rate</th><th class="right">Charge Lost</th></tr></thead><tbody>
+    <thead><tr><th>Branch</th><th class="right">Orders</th><th class="right">Returned/Cancelled</th><th class="right">Rate</th><th class="right">Charge Lost</th><th class="right">Exchanged</th><th class="right">Exchange Cost</th></tr></thead><tbody>
     <?php $sorted=$byBranchReliable; uasort($sorted, fn($a,$b)=>$b['rate']<=>$a['rate']); foreach($sorted as $bn=>$row): ?>
     <tr data-s="<?= e(mb_strtolower($bn)) ?>">
       <td><b><?= e($bn) ?></b></td><td class="right"><?= $row['orders'] ?></td>
       <td class="right" style="color:var(--red)"><?= $row['ret'] ?></td>
       <td class="right"><span class="pill <?= $row['rate']>=15?'p-red':($row['rate']>=8?'p-yellow':'p-green') ?>"><?= $row['rate'] ?>%</span></td>
       <td class="right" style="font-weight:800"><?= money($row['charge']) ?></td>
+      <td class="right" style="color:var(--blue,#2563eb)"><?= $row['exch'] ?></td>
+      <td class="right" style="font-weight:800"><?= money($row['exCharge']) ?></td>
     </tr>
-    <?php endforeach; if(!$sorted): ?><tr><td colspan="5"><div class="empty">No branches with enough volume in this range.</div></td></tr><?php endif; ?>
+    <?php endforeach; if(!$sorted): ?><tr><td colspan="7"><div class="empty">No branches with enough volume in this range.</div></td></tr><?php endif; ?>
     </tbody>
   </table></div>
 </div>
@@ -234,11 +242,11 @@ function brFilter(){
   });
 }
 function brCSV(){
-  var lines=[['Branch','Orders','Returned/Cancelled','Rate','Charge Lost'].join(',')];
+  var lines=[['Branch','Orders','Returned/Cancelled','Rate','Charge Lost','Exchanged','Exchange Cost'].join(',')];
   document.querySelectorAll('#brTbl tbody tr[data-s]').forEach(function(tr){
     if(tr.style.display==='none')return;
     var c=tr.querySelectorAll('td');
-    lines.push([c[0].innerText,c[1].innerText,c[2].innerText,c[3].innerText,c[4].innerText].map(function(v){return '"'+String(v).replace(/"/g,'""')+'"';}).join(','));
+    lines.push(Array.prototype.map.call(c,function(td){return '"'+String(td.innerText).replace(/"/g,'""')+'"';}).join(','));
   });
   var blob=new Blob([lines.join('\n')],{type:'text/csv'});
   var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='branch-performance.csv';a.click();

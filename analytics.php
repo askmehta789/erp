@@ -25,9 +25,8 @@ $pName = $pid ? (string)val("SELECT name FROM products WHERE id=?",[$pid]) : '';
 
 /* ---- per-period aggregation ---- */
 $periods=[]; $prod=[]; $prodPeriod=[];
-$ensure=function(&$a,$k){ if(!isset($a[$k])) $a[$k]=['orders'=>0,'oqty'=>0,'ordval'=>0,'delivered'=>0,'units'=>0,'revenue'=>0,'cogs'=>0,'delivery'=>0,'profit'=>0,'ads'=>0,'returned'=>0,'runits'=>0,'rloss'=>0]; };
+$ensure=function(&$a,$k){ if(!isset($a[$k])) $a[$k]=['orders'=>0,'oqty'=>0,'ordval'=>0,'delivered'=>0,'units'=>0,'revenue'=>0,'cogs'=>0,'delivery'=>0,'profit'=>0,'ads'=>0,'returned'=>0,'runits'=>0,'rloss'=>0,'exchanged'=>0,'exloss'=>0]; };
 $Q=['pending'=>0,'processing'=>0,'shipped'=>0,'delivered'=>0,'returned'=>0,'cancelled'=>0,'exchanged'=>0];
-$exchangedOrders=0; $exchangedCharge=0.0;
 $deep=[];
 foreach($orders as $o){
   $k=pkey($o['order_date'],$g); $ensure($periods,$k);
@@ -36,7 +35,6 @@ foreach($orders as $o){
   $periods[$k]['orders']++;
   $periods[$k]['oqty']+=$q; $periods[$k]['ordval']+=$line;
   if(isset($Q[$o['status']])) $Q[$o['status']]+=$q;
-  if($o['status']==='exchanged'){ $exchangedOrders++; $exchangedCharge+=(float)$o['exchange_charge']; }
   $dn=$o['product_name']?:'(none)';
   if(!isset($deep[$dn])) $deep[$dn]=['orders'=>0,'oq'=>0,'dq'=>0,'pq'=>0,'rq'=>0,'rev'=>0,'cogs'=>0,'prof'=>0,'ads'=>0];
   $deep[$dn]['orders']++; $deep[$dn]['oq']+=$q;
@@ -46,6 +44,8 @@ foreach($orders as $o){
     $deep[$dn]['prof']+=((float)$o['sell_price']-(float)$o['cost_price'])*$q-(float)$o['delivery_charge'];
   } elseif(in_array($o['status'],['returned','cancelled'],true)){
     $deep[$dn]['rq']+=$q; $deep[$dn]['prof']-=(float)$o['cancel_charge'];
+  } elseif($o['status']==='exchanged'){
+    $deep[$dn]['prof']-=(float)$o['exchange_charge'];
   } else { $deep[$dn]['pq']+=$q; }
   if($o['status']==='delivered'){
     $periods[$k]['delivered']++; $periods[$k]['units']+=(int)$o['qty']; $periods[$k]['revenue']+=$line;
@@ -61,6 +61,10 @@ foreach($orders as $o){
     $periods[$k]['returned']++; $periods[$k]['runits']+=$q; $periods[$k]['profit']-=(float)$o['cancel_charge']; $periods[$k]['rloss']+=(float)$o['cancel_charge'];
     $pn=$o['product_name']?:'(none)'; if(!isset($prod[$pn])) $prod[$pn]=['units'=>0,'revenue'=>0,'profit'=>0];
     $prod[$pn]['profit']-=(float)$o['cancel_charge'];
+  } elseif($o['status']==='exchanged') {
+    $periods[$k]['exchanged']++; $periods[$k]['profit']-=(float)$o['exchange_charge']; $periods[$k]['exloss']+=(float)$o['exchange_charge'];
+    $pn=$o['product_name']?:'(none)'; if(!isset($prod[$pn])) $prod[$pn]=['units'=>0,'revenue'=>0,'profit'=>0];
+    $prod[$pn]['profit']-=(float)$o['exchange_charge'];
   }
 }
 /* ad spend per period */
@@ -81,7 +85,7 @@ foreach($adRows as $e){ $cat=strtolower((string)$e['category']); $isAd=false; fo
 ksort($periods);
 
 /* ---- range totals ---- */
-$T=['orders'=>0,'oqty'=>0,'ordval'=>0,'delivered'=>0,'units'=>0,'revenue'=>0,'cogs'=>0,'delivery'=>0,'profit'=>0,'ads'=>0,'returned'=>0,'runits'=>0,'rloss'=>0];
+$T=['orders'=>0,'oqty'=>0,'ordval'=>0,'delivered'=>0,'units'=>0,'revenue'=>0,'cogs'=>0,'delivery'=>0,'profit'=>0,'ads'=>0,'returned'=>0,'runits'=>0,'rloss'=>0,'exchanged'=>0,'exloss'=>0];
 $todaySnap=row("SELECT COUNT(*) n, COALESCE(SUM(qty),0) q, COALESCE(SUM(sell_price*qty),0) v FROM orders WHERE order_date=CURDATE()");
 foreach($periods as $p) foreach($T as $k=>$v) $T[$k]+=$p[$k];
 $aov       = $T['delivered']? $T['revenue']/$T['delivered'] : 0;
@@ -89,16 +93,18 @@ $roas      = $T['ads']>0? $T['revenue']/$T['ads'] : 0;
 $adsPerOrder = $T['orders']? $T['ads']/$T['orders'] : 0;
 $netAfterAds = $T['profit'] - $T['ads'];
 $returnRate  = $T['orders']? $T['returned']/$T['orders']*100 : 0;
+$exchangeRate = $T['orders']? $T['exchanged']/$T['orders']*100 : 0;
 
 /* ---- growth vs previous equal-length period ---- */
 $span=(strtotime($to)-strtotime($from))/86400+1;
 $prevTo=date('Y-m-d',strtotime("$from -1 day"));
 $prevFrom=date('Y-m-d',strtotime("$prevTo -".($span-1)." day"));
 $prevRev=0;$prevOrders=0;$prevProfit=0;
-foreach(rows("SELECT sell_price,qty,cost_price,delivery_charge,cancel_charge,status FROM orders WHERE order_date BETWEEN ? AND ?",[$prevFrom,$prevTo]) as $o){
+foreach(rows("SELECT sell_price,qty,cost_price,delivery_charge,cancel_charge,exchange_charge,status FROM orders WHERE order_date BETWEEN ? AND ?",[$prevFrom,$prevTo]) as $o){
   $prevOrders++;
   if($o['status']==='delivered'){ $prevRev+=(float)$o['sell_price']*(int)$o['qty']; $prevProfit+=((float)$o['sell_price']-(float)$o['cost_price'])*(int)$o['qty']-(float)$o['delivery_charge']; }
   elseif(in_array($o['status'],['returned','cancelled'],true)){ $prevProfit-=(float)$o['cancel_charge']; }
+  elseif($o['status']==='exchanged'){ $prevProfit-=(float)$o['exchange_charge']; }
 }
 $gRev   = $prevRev>0? round(($T['revenue']-$prevRev)/$prevRev*100,1) : null;
 $gOrd   = $prevOrders>0? round(($T['orders']-$prevOrders)/$prevOrders*100,1) : null;
@@ -184,6 +190,7 @@ require __DIR__.'/includes/header.php';
   <div class="metric <?= $netAfterAds>=0?'indigo':'red' ?>"><div><div class="mv" style="font-size:21px"><?= money($netAfterAds) ?></div><div class="ml">Profit after Ads</div></div><div class="mi">🧾</div></div>
   <div class="metric amber"><div><div class="mv" style="font-size:21px"><?= money(round($aov)) ?></div><div class="ml">Avg Order Value</div></div><div class="mi">🎯</div></div>
   <div class="metric orange"><div><div class="mv"><?= round($returnRate,1) ?>%</div><div class="ml">Return Rate</div></div><div class="mi">↩️</div></div>
+  <div class="metric indigo"><div><div class="mv"><?= round($exchangeRate,1) ?>%</div><div class="ml">Exchange Rate</div><div class="ms"><?= $T['exchanged']>0?money($T['exloss']).' spent':'—' ?></div></div><div class="mi">🔁</div></div>
 </div>
 
 <div class="qstrip">
@@ -197,9 +204,9 @@ require __DIR__.'/includes/header.php';
   <span class="qchip"><i style="background:#2563eb"></i>Exchanged <b><?= number_format($Q['exchanged']) ?></b></span>
 </div>
 
-<?php if($exchangedOrders>0): ?>
+<?php if($T['exchanged']>0): ?>
 <div class="flash" style="background:var(--blue-bg,#dbeafe);color:var(--blue,#2563eb);display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-  🔁 <b><?= $exchangedOrders ?></b> order<?= $exchangedOrders>1?'s':'' ?> exchanged in this range — <b><?= money($exchangedCharge) ?></b> spent resending replacements.
+  🔁 <b><?= (int)$T['exchanged'] ?></b> order<?= $T['exchanged']>1?'s':'' ?> exchanged in this range — <b><?= money($T['exloss']) ?></b> spent resending replacements.
   <a class="btn btn-sm" style="margin-left:auto" href="analytics_exchanges.php?g=<?= e($g) ?>&from=<?= e($from) ?>&to=<?= e($to) ?>">Open Full Report →</a>
 </div>
 <?php endif; ?>

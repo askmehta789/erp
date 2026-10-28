@@ -160,7 +160,8 @@ function entities() {
      'fields'=>[['name','Product Name','text',null,true],['sku','SKU','text'],
        ['category','Category','combo',['Electronics','Apparel','Footwear','Accessories','Home and Kitchen','Beauty','Toys','Sports']],
        ['cost','Cost (Rs.)','number'],['price','Sell Price (Rs.)','number'],
-       ['stock','Stock','number'],['low_stock','Reorder At','number'],['supplier','Supplier','text'],
+       ['stock','Stock','number'],['low_stock','Reorder At','number'],
+       ['reorder_lead_days','Reorder Lead Time (days, 0 = use default)','number'],['supplier','Supplier','text'],
        ['image','Product Image (PNG only)','image',null,true]]],
    'customers' => ['table'=>'customers','title'=>'Customer','order'=>'name',
      'list'=>['name'=>['Customer'],'phone'=>['Phone'],'city'=>['City'],'address'=>['Address'],'status'=>['Status','pill']],
@@ -448,9 +449,10 @@ function can_see($page) {
   if (isset($ov[$page])) return (bool)$ov[$page];       /* explicit per-user override */
   return $rank >= page_min_rank($page);                 /* role default */
 }
-/* writing off stock as damaged is a loss admins/managers should approve — not every
-   staff member who can view the products page */
-function can_manage_damage() {
+/* moving stock out of sellable count — writing it off as damaged, or setting it
+   aside as a sample — is a call admins/managers should make, not every staff
+   member who can view the products page */
+function can_manage_stock_adjustments() {
   $u = current_user();
   return role_rank($u['role'] ?? '') >= 2;
 }

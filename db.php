@@ -167,30 +167,14 @@ function fifo_status_change($orderId,$pid,$qty,$oldStatus,$newStatus,$channel='s
 }
 
 /* ============================================================
-   DAMAGED STOCK
-   Courier returns sometimes come back broken/unsellable. This writes
-   off units from the FIFO batches (oldest first, same shrinkage policy
-   as a physical recount) and logs the loss so it shows up as a real
-   cost instead of silently vanishing from stock.
+   STOCK WRITE-OFF / SET-ASIDE POOLS (damaged, sample)
+   Both move $qty units out of the oldest open FIFO batches at their
+   real cost and log the move in a dedicated table; both are reversible.
+   The only difference is WHY the units left sellable stock — shared
+   here so that mechanism can't drift between the two.
    ============================================================ */
-function ensure_stock_damage() {
-  static $done=false; if($done) return; $done=true;
-  try {
-    q("CREATE TABLE IF NOT EXISTS stock_damage(
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        product_id INT NOT NULL,
-        qty INT NOT NULL,
-        unit_cost DECIMAL(12,2) NOT NULL DEFAULT 0,
-        reason VARCHAR(160) DEFAULT '',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        INDEX(product_id))");
-  } catch (Exception $e) {}
-}
-
-/* write off $qty units of $pid as damaged; returns ['qty','unit_cost','value'] actually
-   removed (capped to what's on hand), or null if there was nothing to remove */
-function damage_stock($pid, $qty, $reason='') {
-  ensure_stock_damage(); ensure_stock_batches();
+function _stock_pool_add($table, $pid, $qty, $reason='') {
+  ensure_stock_batches();
   $pid=(int)$pid; $qty=(int)$qty;
   if (!$pid || $qty<=0) return null;
   batches_migrate($pid);
@@ -206,26 +190,64 @@ function damage_stock($pid, $qty, $reason='') {
     $need-=$take;
   }
   $unitCost = round($costTotal/max(1,$qty),2);
-  q("INSERT INTO stock_damage(product_id,qty,unit_cost,reason) VALUES(?,?,?,?)",[$pid,$qty,$unitCost,trim($reason)]);
+  q("INSERT INTO `$table`(product_id,qty,unit_cost,reason) VALUES(?,?,?,?)",[$pid,$qty,$unitCost,trim($reason)]);
   stock_cache($pid);
   return ['qty'=>$qty,'unit_cost'=>$unitCost,'value'=>round($costTotal,2)];
 }
 
-/* undo a damage entry: delete the log row and put the units back into the
+/* undo a pool entry: delete the log row and put the units back into the
    oldest open batch (or a fresh correction batch if none are left open) */
-function undamage_stock($damageId) {
-  ensure_stock_damage();
-  $d = row("SELECT * FROM stock_damage WHERE id=?",[(int)$damageId]);
+function _stock_pool_remove($table, $id, $reverseNote) {
+  $d = row("SELECT * FROM `$table` WHERE id=?",[(int)$id]);
   if (!$d) return null;
   $pid=(int)$d['product_id']; $qty=(int)$d['qty'];
   $b = row("SELECT id FROM stock_batches WHERE product_id=? ORDER BY purchase_date,id LIMIT 1",[$pid]);
   if ($b) q("UPDATE stock_batches SET qty_left=qty_left+? WHERE id=?",[$qty,(int)$b['id']]);
-  else q("INSERT INTO stock_batches(product_id,purchase_date,qty_in,qty_left,unit_cost,note) VALUES(?,?,?,?,?,'Damage reversed')",
-          [$pid,date('Y-m-d'),$qty,$qty,(float)$d['unit_cost']]);
-  q("DELETE FROM stock_damage WHERE id=?",[(int)$damageId]);
+  else q("INSERT INTO stock_batches(product_id,purchase_date,qty_in,qty_left,unit_cost,note) VALUES(?,?,?,?,?,?)",
+          [$pid,date('Y-m-d'),$qty,$qty,(float)$d['unit_cost'],$reverseNote]);
+  q("DELETE FROM `$table` WHERE id=?",[(int)$id]);
   stock_cache($pid);
   return $d;
 }
+
+/* ---- Damaged stock: courier returns that came back broken/unsellable.
+   A genuine loss — written off at cost instead of silently vanishing. ---- */
+function ensure_stock_damage() {
+  static $done=false; if($done) return; $done=true;
+  try {
+    q("CREATE TABLE IF NOT EXISTS stock_damage(
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        product_id INT NOT NULL,
+        qty INT NOT NULL,
+        unit_cost DECIMAL(12,2) NOT NULL DEFAULT 0,
+        reason VARCHAR(160) DEFAULT '',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        INDEX(product_id))");
+  } catch (Exception $e) {}
+}
+/* write off $qty units of $pid as damaged; returns ['qty','unit_cost','value'] actually
+   removed (capped to what's on hand), or null if there was nothing to remove */
+function damage_stock($pid, $qty, $reason='') { ensure_stock_damage(); return _stock_pool_add('stock_damage', $pid, $qty, $reason); }
+function undamage_stock($damageId) { ensure_stock_damage(); return _stock_pool_remove('stock_damage', $damageId, 'Damage reversed'); }
+
+/* ---- Sample / office stock: units kept aside as samples/demo/photography
+   stock. Still a real asset (NOT a loss) — just excluded from what's free
+   to sell. Mechanically identical to damaged stock, tracked separately. ---- */
+function ensure_stock_samples() {
+  static $done=false; if($done) return; $done=true;
+  try {
+    q("CREATE TABLE IF NOT EXISTS stock_samples(
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        product_id INT NOT NULL,
+        qty INT NOT NULL,
+        unit_cost DECIMAL(12,2) NOT NULL DEFAULT 0,
+        reason VARCHAR(160) DEFAULT '',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        INDEX(product_id))");
+  } catch (Exception $e) {}
+}
+function sample_stock($pid, $qty, $reason='') { ensure_stock_samples(); return _stock_pool_add('stock_samples', $pid, $qty, $reason); }
+function unsample_stock($sampleId) { ensure_stock_samples(); return _stock_pool_remove('stock_samples', $sampleId, 'Sample reversed'); }
 
 /* ============================================================
    BUSINESS ALERT CALCULATORS (shared by pages + cron)
@@ -262,9 +284,20 @@ function cod_holdings() {
   return $out;
 }
 
-/* FIFO-stock reorder suggestions from 28-day delivered velocity */
+function ensure_reorder_lead_col() {
+  static $done=false; if($done) return; $done=true;
+  try { q("ALTER TABLE products ADD COLUMN IF NOT EXISTS reorder_lead_days INT NOT NULL DEFAULT 0"); } catch (Exception $e) {}
+}
+
+/* FIFO-stock reorder suggestions. Two independent triggers:
+   1) velocity-based — days-of-cover from 28-day delivered sales falls at/under
+      this product's own lead time (its reorder_lead_days override, else the
+      global setting);
+   2) reorder-point floor — stock has fallen to/below "Reorder At" (low_stock)
+      even with no recent sales, so a slow mover doesn't silently run out. */
 function reorder_suggestions() {
-  $lead = max(1, (int)setting('reorder_lead_days', 7));
+  ensure_reorder_lead_col();
+  $leadGlobal = max(1, (int)setting('reorder_lead_days', 7));
   $out = [];
   try {
     $vel = [];
@@ -272,14 +305,25 @@ function reorder_suggestions() {
                    WHERE status='delivered' AND order_date >= DATE_SUB(CURDATE(), INTERVAL 28 DAY)
                    GROUP BY product_id") as $v)
       $vel[(int)$v['product_id']] = (float)$v['q'] / 28.0;   // units per day
-    foreach (rows("SELECT id,name,stock FROM products") as $p) {
-      $pd = $vel[(int)$p['id']] ?? 0;
-      if ($pd <= 0) continue;                                   // nothing selling → no suggestion
-      $cover = (int)floor(((int)$p['stock']) / $pd);            // days of stock left
-      if ($cover <= $lead) {
-        $suggest = (int)(ceil(max(0, $pd*28 - (int)$p['stock']) / 10) * 10);  // 4-week top-up, rounded to 10
-        $out[] = ['id'=>(int)$p['id'], 'name'=>$p['name'], 'stock'=>(int)$p['stock'],
-                  'per_week'=>round($pd*7,1), 'cover_days'=>$cover, 'suggest'=>max(10,$suggest)];
+    foreach (rows("SELECT id,name,stock,low_stock,reorder_lead_days FROM products") as $p) {
+      $pid = (int)$p['id']; $stock = (int)$p['stock']; $lowStock = (int)$p['low_stock'];
+      $lead = (int)$p['reorder_lead_days'] ?: $leadGlobal;   // per-product override, else global
+      $pd = $vel[$pid] ?? 0;
+      if ($pd > 0) {
+        $cover = (int)floor($stock / $pd);                       // days of stock left
+        if ($cover <= $lead) {
+          $suggest = (int)(ceil(max(0, $pd*28 - $stock) / 10) * 10);  // 4-week top-up, rounded to 10
+          $out[] = ['id'=>$pid, 'name'=>$p['name'], 'stock'=>$stock,
+                    'per_week'=>round($pd*7,1), 'cover_days'=>$cover, 'suggest'=>max(10,$suggest)];
+          continue;
+        }
+      }
+      if ($lowStock > 0 && $stock <= $lowStock) {
+        /* no recent sales to project a days-of-cover from, but it's already
+           at/under its own reorder point — still worth flagging */
+        $suggest = (int)(ceil(max(10, $lowStock*2 - $stock) / 10) * 10);
+        $out[] = ['id'=>$pid, 'name'=>$p['name'], 'stock'=>$stock,
+                  'per_week'=>0, 'cover_days'=>0, 'suggest'=>$suggest];
       }
     }
     usort($out, fn($a,$b)=>$a['cover_days']<=>$b['cover_days']);

@@ -350,6 +350,7 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
       if(!$oid||!ctype_digit($nid)) throw new Exception('Enter a numeric NCM Order ID.');
       $o=row("SELECT * FROM orders WHERE id=?",[$oid]);
       if(!$o) throw new Exception('Order not found.');
+      $prevNid=(string)($o['ncm_order_id']??'');
       $dupe=row("SELECT code FROM orders WHERE ncm_order_id=? AND id<>? AND (COALESCE(order_group,'')='' OR COALESCE(order_group,'')<>COALESCE((SELECT order_group FROM orders x WHERE x.id=?),''))",[$nid,$oid,$oid]);
       if($dupe) throw new Exception('NCM #'.$nid.' is already linked to order '.$dupe['code'].'.');
       $d=ncm()->order((int)$nid);
@@ -363,9 +364,23 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
       $chg=isset($d['delivery_charge'])?(float)$d['delivery_charge']:null;
       q("UPDATE orders SET ncm_order_id=?, courier_id=(SELECT id FROM couriers WHERE name LIKE '%NCM%' LIMIT 1) WHERE id=?",[$nid,$oid]);
       if($chg!==null) q("UPDATE orders SET delivery_charge=? WHERE id=?",[$chg,$oid]);
+      /* correcting a WRONG existing link — the old parcel's cached status/return-flag no
+         longer applies to this order, so clear it instead of showing stale info until the
+         next live sync happens to refresh it */
+      if($prevNid!=='' && $prevNid!==$nid) q("UPDATE orders SET ncm_status=NULL, ncm_return_flag=0 WHERE id=?",[$oid]);
       ncm_stamp_group($oid,$nid,$chg);   /* multi-product order: siblings get the same parcel id */
-      log_activity("Linked NCM #$nid to ".$o['code'],'NCM');
-      flash('Linked ✓ '.$o['code'].' ↔ NCM #'.$nid.($ncmName?' — '.$ncmName:'').($chg!==null?(' · delivery '.money($chg).' recorded'):''));
+      log_activity(($prevNid!==''&&$prevNid!==$nid ? "Fixed NCM link for ".$o['code']." (was #$prevNid) → #$nid" : "Linked NCM #$nid to ".$o['code']),'NCM');
+      flash(($prevNid!==''&&$prevNid!==$nid?'Fixed ✓ ':'Linked ✓ ').$o['code'].' ↔ NCM #'.$nid.($ncmName?' — '.$ncmName:'').($chg!==null?(' · delivery '.money($chg).' recorded'):''));
+    }
+    elseif ($act==='unlink_ncm') {
+      $oid=(int)($_POST['order_id']??0);
+      $o=row("SELECT * FROM orders WHERE id=?",[$oid]);
+      if(!$o) throw new Exception('Order not found.');
+      $oldNid=(string)($o['ncm_order_id']??'');
+      if($oldNid==='') throw new Exception('This order has no NCM link to remove.');
+      q("UPDATE orders SET ncm_order_id=NULL, ncm_status=NULL, ncm_return_flag=0 WHERE id=?",[$oid]);
+      log_activity("Unlinked NCM #$oldNid from ".$o['code'].' (was linked in error)','NCM');
+      flash('Unlinked ✓ '.$o['code'].' is no longer tied to NCM #'.$oldNid.' — book it again or link the correct ID.');
     }
     elseif ($act==='scan_comments') {
       if(function_exists('set_time_limit')) @set_time_limit(180);
@@ -896,7 +911,7 @@ $ncmUnits=(int)val("SELECT COALESCE(SUM(o.qty),0) FROM orders o JOIN couriers c 
               <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="keep_active"><input type="hidden" name="id" value="<?= (int)$o['id'] ?>">
               <button class="btn btn-sm" title="NCM will retry delivery — keep this order live">↩ Still active</button></form>
           <?php endif; ?>
-          <?php if($r['nid']): ?><a class="btn btn-sm btn-primary" href="<?= e(ncm_portal_url($r['nid'])) ?>" target="_blank" rel="noopener">View ↗</a> <a class="btn btn-sm" href="ncm.php?comments=<?= e($r['nid']) ?>">Thread</a> <a class="btn btn-sm" href="ncm.php?track=<?= e($r['nid']) ?>">Track</a>
+          <?php if($r['nid']): ?><a class="btn btn-sm btn-primary" href="<?= e(ncm_portal_url($r['nid'])) ?>" target="_blank" rel="noopener">View ↗</a> <a class="btn btn-sm" href="ncm.php?comments=<?= e($r['nid']) ?>">Thread</a> <a class="btn btn-sm" href="ncm.php?track=<?= e($r['nid']) ?>">Track</a> <button class="btn btn-sm" title="Wrong order linked by mistake? Fix or unlink it here" onclick='linkFor(<?= (int)$o["id"] ?>,<?= json_encode((string)$o["code"]) ?>,<?= json_encode((string)$o["phone"]) ?>,<?= json_encode((string)$r["nid"]) ?>)'>✏️</button>
           <?php elseif($connected): ?><button class="btn btn-sm btn-primary" onclick='bookFor(<?php
             if(!empty($r["_items"]) && count($r["_items"])>1){
               $pl=array_map(function($it){return ($it["product_name"]?:"Goods")." x".(int)$it["qty"];}, $r["_items"]);
@@ -1093,18 +1108,26 @@ $ncmUnits=(int)val("SELECT COALESCE(SUM(o.qty),0) FROM orders o JOIN couriers c 
   </div>
 </div>
 
-<!-- link modal -->
+<!-- link modal (also used to EDIT or UNLINK an existing — possibly wrong — link) -->
 <div class="modal-bg" id="linkModal" style="z-index:99991"><form class="modal" method="post" style="width:460px;max-width:94vw">
-  <div class="modal-head"><span>🔗 Link NCM Order</span><span class="mx" onclick="document.getElementById('linkModal').classList.remove('open');document.body.classList.remove('modal-open')">✕</span></div>
+  <div class="modal-head"><span id="lk_title">🔗 Link NCM Order</span><span class="mx" onclick="closeLinkModal()">✕</span></div>
   <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="link_manual"><input type="hidden" name="order_id" id="lk_oid">
   <div class="modal-body">
     <div class="full"><div class="muted" style="font-size:12px">Order <b id="lk_code"></b> · phone <b id="lk_phone"></b></div></div>
+    <div class="full" id="lk_current_wrap" style="display:none"><div class="muted" style="font-size:12px;background:var(--amber-bg,#fef3c7);color:#8a5a00;border-radius:8px;padding:8px 11px">⚠ Currently linked to NCM <b>#<span id="lk_current"></span></b> — enter the correct ID below to fix it, or unlink below.</div></div>
     <div class="full"><label>NCM Order ID (from NCM portal)</label><input name="ncm_id" id="lk_nid" required placeholder="e.g. 812345" inputmode="numeric"></div>
     <div class="full"><label style="display:flex;gap:8px;align-items:center;font-weight:600"><input type="checkbox" name="force" value="1" style="width:auto"> Link anyway even if the phone doesn't match</label></div>
     <div class="full muted" style="font-size:11.5px">We fetch the NCM order and verify the customer phone matches before linking — the NCM delivery charge is recorded automatically.</div>
   </div>
-  <div class="modal-foot"><button type="button" class="btn" onclick="document.getElementById('linkModal').classList.remove('open');document.body.classList.remove('modal-open')">Cancel</button><button class="btn btn-primary">🔗 Verify &amp; Link</button></div>
+  <div class="modal-foot">
+    <button type="button" class="btn" id="lk_unlink_btn" style="display:none;color:var(--red)" onclick="unlinkCurrent()">🗑 Unlink</button>
+    <button type="button" class="btn" onclick="closeLinkModal()">Cancel</button>
+    <button class="btn btn-primary">🔗 Verify &amp; Link</button>
+  </div>
 </form></div>
+<form method="post" id="unlinkForm" style="display:none">
+  <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="unlink_ncm"><input type="hidden" name="order_id" id="unlk_oid">
+</form>
 
 <!-- scan & match modal -->
 <div class="modal-bg" id="scanModal" style="z-index:99991"><form class="modal" method="post" style="width:520px;max-width:94vw" onsubmit="this.querySelector('button.btn-primary').disabled=true">
@@ -1233,13 +1256,29 @@ var NCM_LASTCOMMENT=<?= json_encode(array_map(fn($c)=>$c['text'], $commentByOrde
 var NCM_INFO=<?= json_encode(array_reduce($ncmOrders, function($acc,$o){ $nid=(string)($o['ncm_order_id']??''); if($nid!=='') $acc[$nid]="Order {$o['code']}, customer {$o['customer']}, phone {$o['phone']}, address {$o['address']}, status {$o['status']}"; return $acc; }, [])) ?>;
 
 /* auto-match a destination branch from the customer address (empty if none) */
-function linkFor(id,code,phone){
+function linkFor(id,code,phone,curNid){
   document.getElementById('lk_oid').value=id;
   document.getElementById('lk_code').textContent=code||('#'+id);
   document.getElementById('lk_phone').textContent=phone||'—';
   document.getElementById('lk_nid').value='';
+  var cw=document.getElementById('lk_current_wrap'), ub=document.getElementById('lk_unlink_btn');
+  if(curNid){
+    document.getElementById('lk_title').textContent='✏️ Fix Linked NCM Order';
+    document.getElementById('lk_current').textContent=curNid;
+    cw.style.display='block'; ub.style.display='inline-block';
+    document.getElementById('unlk_oid').value=id;
+  } else {
+    document.getElementById('lk_title').textContent='🔗 Link NCM Order';
+    cw.style.display='none'; ub.style.display='none';
+  }
   document.getElementById('linkModal').classList.add('open');document.body.classList.add('modal-open');
   setTimeout(function(){document.getElementById('lk_nid').focus();},60);
+}
+function closeLinkModal(){document.getElementById('linkModal').classList.remove('open');document.body.classList.remove('modal-open');}
+function unlinkCurrent(){
+  if(!confirm('Remove this NCM link? The order will show as not booked — you can book it again or link the correct NCM ID.')) return;
+  var f=document.getElementById('unlinkForm');
+  if(f.requestSubmit) f.requestSubmit(); else f.submit();
 }
 function bkCount(){
   var c=document.querySelectorAll('.bkc:checked').length;

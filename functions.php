@@ -448,6 +448,12 @@ function can_see($page) {
   if (isset($ov[$page])) return (bool)$ov[$page];       /* explicit per-user override */
   return $rank >= page_min_rank($page);                 /* role default */
 }
+/* writing off stock as damaged is a loss admins/managers should approve — not every
+   staff member who can view the products page */
+function can_manage_damage() {
+  $u = current_user();
+  return role_rank($u['role'] ?? '') >= 2;
+}
 
 /* ============================================================
    Stock helpers — deduct on delivery, restore on reversal

@@ -26,7 +26,8 @@ $pName = $pid ? (string)val("SELECT name FROM products WHERE id=?",[$pid]) : '';
 /* ---- per-period aggregation ---- */
 $periods=[]; $prod=[]; $prodPeriod=[];
 $ensure=function(&$a,$k){ if(!isset($a[$k])) $a[$k]=['orders'=>0,'oqty'=>0,'ordval'=>0,'delivered'=>0,'units'=>0,'revenue'=>0,'cogs'=>0,'delivery'=>0,'profit'=>0,'ads'=>0,'returned'=>0,'runits'=>0,'rloss'=>0]; };
-$Q=['pending'=>0,'processing'=>0,'shipped'=>0,'delivered'=>0,'returned'=>0,'cancelled'=>0];
+$Q=['pending'=>0,'processing'=>0,'shipped'=>0,'delivered'=>0,'returned'=>0,'cancelled'=>0,'exchanged'=>0];
+$exchangedOrders=0; $exchangedCharge=0.0;
 $deep=[];
 foreach($orders as $o){
   $k=pkey($o['order_date'],$g); $ensure($periods,$k);
@@ -35,6 +36,7 @@ foreach($orders as $o){
   $periods[$k]['orders']++;
   $periods[$k]['oqty']+=$q; $periods[$k]['ordval']+=$line;
   if(isset($Q[$o['status']])) $Q[$o['status']]+=$q;
+  if($o['status']==='exchanged'){ $exchangedOrders++; $exchangedCharge+=(float)$o['exchange_charge']; }
   $dn=$o['product_name']?:'(none)';
   if(!isset($deep[$dn])) $deep[$dn]=['orders'=>0,'oq'=>0,'dq'=>0,'pq'=>0,'rq'=>0,'rev'=>0,'cogs'=>0,'prof'=>0,'ads'=>0];
   $deep[$dn]['orders']++; $deep[$dn]['oq']+=$q;
@@ -192,7 +194,15 @@ require __DIR__.'/includes/header.php';
   <span class="qchip"><i style="background:#22c55e"></i>Delivered <b><?= number_format($Q['delivered']) ?></b></span>
   <span class="qchip"><i style="background:#ef4444"></i>Returned <b><?= number_format($Q['returned']) ?></b></span>
   <span class="qchip"><i style="background:#94a3b8"></i>Cancelled <b><?= number_format($Q['cancelled']) ?></b></span>
+  <span class="qchip"><i style="background:#2563eb"></i>Exchanged <b><?= number_format($Q['exchanged']) ?></b></span>
 </div>
+
+<?php if($exchangedOrders>0): ?>
+<div class="flash" style="background:var(--blue-bg,#dbeafe);color:var(--blue,#2563eb);display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+  🔁 <b><?= $exchangedOrders ?></b> order<?= $exchangedOrders>1?'s':'' ?> exchanged in this range — <b><?= money($exchangedCharge) ?></b> spent resending replacements.
+  <a class="btn btn-sm" style="margin-left:auto" href="analytics_exchanges.php?g=<?= e($g) ?>&from=<?= e($from) ?>&to=<?= e($to) ?>">Open Full Report →</a>
+</div>
+<?php endif; ?>
 
 
 <?php if($fRev!==null): ?>

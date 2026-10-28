@@ -7,12 +7,12 @@ function money($n) { return CURRENCY . ' ' . number_format((float)$n, 0); }
 function usd($npr) { $r=(float)setting('usd_rate', defined('USD_RATE')?USD_RATE:140); return '$'.number_format((float)$npr/max(1,$r), 2); }
 function slug($s)  { return ucwords(str_replace('_', ' ', (string)$s)); }
 
-/* status colours: delivered=green, shipped=yellow, processing/pending=neutral, cancelled/returned=red */
+/* status colours: delivered=green, shipped=yellow, processing/pending=neutral, cancelled/returned=red, exchanged=blue */
 function status_class($s) {
   $s = strtolower((string)$s);
   if (in_array($s, ['delivered','paid','active','completed'], true)) return 'p-green';
   if ($s === 'shipped') return 'p-yellow';
-  if ($s === 'confirmed') return 'p-blue';
+  if (in_array($s, ['confirmed','exchanged'], true)) return 'p-blue';
   if (in_array($s, ['cancelled','returned','inactive','unpaid','low','overdue','expense'], true)) return 'p-red';
   if ($s === 'income') return 'p-green';
   return 'p-grey';
@@ -31,6 +31,7 @@ function order_profit($o) {
     return $gross - (float)($o['delivery_charge'] ?? 0);   // net of delivery charge
   }
   if (in_array($st, ['cancelled','returned'], true)) return -1 * (float)($o['cancel_charge'] ?? 0);
+  if ($st === 'exchanged') return -1 * (float)($o['exchange_charge'] ?? 0);   // cost of resending a replacement
   return 0;
 }
 
@@ -87,6 +88,7 @@ function nav_items_raw() {
       ['analytics.php','📈','Overview'],
       ['analytics_report.php','📋','Daily & Monthly Report'],
       ['analytics_returns.php','↩️','Returns & Cancellations'],
+      ['analytics_exchanges.php','🔁','Exchanges'],
       ['analytics_branches.php','🚚','Branch Performance'],
     ]],
     ['grp','inventory','📦','Inventory', [
@@ -419,7 +421,7 @@ function role_rank($role) {
 function page_min_rank($page) {
   $map = [
     'users.php'=>3, 'settings.php'=>3, 'activity.php'=>3,
-    'accounting.php'=>2, 'salary.php'=>2, 'salary_report.php'=>2, 'lunch_management.php'=>2, 'cod.php'=>2, 'banks.php'=>2, 'daraz.php'=>2, 'pickndrop.php'=>2, 'expenses.php'=>2, 'reports.php'=>2, 'analytics.php'=>2, 'analytics_returns.php'=>2, 'analytics_customers.php'=>2, 'analytics_branches.php'=>2, 'analytics_report.php'=>2, 'suppliers.php'=>2, 'hrm.php'=>2, 'vendor_purchases.php'=>2, 'inventory.php'=>2, 'money_dashboard.php'=>2, 'assistant.php'=>2,
+    'accounting.php'=>2, 'salary.php'=>2, 'salary_report.php'=>2, 'lunch_management.php'=>2, 'cod.php'=>2, 'banks.php'=>2, 'daraz.php'=>2, 'pickndrop.php'=>2, 'expenses.php'=>2, 'reports.php'=>2, 'analytics.php'=>2, 'analytics_returns.php'=>2, 'analytics_exchanges.php'=>2, 'analytics_customers.php'=>2, 'analytics_branches.php'=>2, 'analytics_report.php'=>2, 'suppliers.php'=>2, 'hrm.php'=>2, 'vendor_purchases.php'=>2, 'inventory.php'=>2, 'money_dashboard.php'=>2, 'assistant.php'=>2,
     'ncm_debug.php'=>3,
     'ncm.php'=>1, 'ncm_comments.php'=>1, 'sales.php'=>1, 'couriers.php'=>1, 'sales_dashboard.php'=>1,   /* staff can use the courier & sales pages */
   ];

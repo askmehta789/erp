@@ -705,6 +705,17 @@ function ensure_order_group() { static $ok=false; if($ok) return;
   } catch (Exception $e) {}
   $ok=true;
 }
+/* 'exchanged': customer got the wrong/damaged item and we sent a replacement.
+   Kept as its own terminal status (not reusing 'returned') since it isn't a
+   lost sale — the customer keeps a product — just a cost to make it right. */
+function ensure_order_exchange_cols() { static $ok=false; if($ok) return; $ok=true;
+  try {
+    q("ALTER TABLE orders MODIFY COLUMN status
+       ENUM('pending','processing','shipped','delivered','cancelled','returned','exchanged')
+       NOT NULL DEFAULT 'pending'");
+  } catch (Exception $e) {}
+  try { q("ALTER TABLE orders ADD COLUMN IF NOT EXISTS exchange_charge DECIMAL(12,2) NOT NULL DEFAULT 0"); } catch (Exception $e) {}
+}
 function ensure_banks() { static $ok=false; if($ok) return;
   try { q("CREATE TABLE IF NOT EXISTS bank_accounts(
     id INT AUTO_INCREMENT PRIMARY KEY,

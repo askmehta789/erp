@@ -10,6 +10,7 @@
    ============================================================ */
 require_once __DIR__.'/db.php';
 require_once __DIR__.'/ncm_api.php';
+ensure_order_exchange_cols();
 
 /* ---- token guard (no session needed) ---- */
 $given = trim((string)($_GET['token'] ?? ($argv[1] ?? '')));
@@ -53,7 +54,7 @@ try {
        must never resurrect an order. */
     $rows = rows("SELECT o.* FROM orders o LEFT JOIN couriers c ON c.id=o.courier_id
                   WHERE c.name LIKE '%NCM%' AND COALESCE(o.ncm_order_id,'')<>''
-                    AND o.status NOT IN ('delivered','cancelled','returned')");
+                    AND o.status NOT IN ('delivered','cancelled','returned','exchanged')");
     if ($rows) {
       $ids = array_map(fn($o)=>(int)$o['ncm_order_id'], $rows);
       $res = ncm()->ordersStatuses($ids);
@@ -118,7 +119,7 @@ try {
     $pdId = (int)val("SELECT id FROM couriers WHERE LOWER(name)='pick & drop'");
     if ($pdId) {
       $rows = rows("SELECT * FROM orders WHERE courier_id=? AND COALESCE(pd_order_id,'')<>''
-                    AND status NOT IN ('delivered','cancelled','returned') LIMIT 60",[$pdId]);
+                    AND status NOT IN ('delivered','cancelled','returned','exchanged') LIMIT 60",[$pdId]);
       $n=0; $cn=0;
       foreach ($rows as $o) {
         try {

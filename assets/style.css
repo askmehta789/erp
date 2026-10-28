@@ -1199,22 +1199,27 @@ body.dark .hh-check{background:rgba(52,211,153,.12);color:#6ee7b7}
 #hotBox .htCore tbody tr.row-del td{background:#d8f5e6 !important}
 #hotBox .htCore tbody tr.row-ship td{background:#fdeccb !important}
 #hotBox .htCore tbody tr.row-red td{background:#fbdcd8 !important}
+#hotBox .htCore tbody tr.row-exchanged td{background:#dbe7ff !important}
 /* coloured left rail on the first data cell */
 #hotBox .htCore tbody tr.row-del td:first-child{box-shadow:inset 5px 0 0 #0f9d63}
 #hotBox .htCore tbody tr.row-ship td:first-child{box-shadow:inset 5px 0 0 #e0851b}
 #hotBox .htCore tbody tr.row-red td:first-child{box-shadow:inset 5px 0 0 #dc4437}
+#hotBox .htCore tbody tr.row-exchanged td:first-child{box-shadow:inset 5px 0 0 #2563eb}
 /* keep the current-cell highlight readable over tint */
 #hotBox .htCore tbody tr.row-del td.current,
 #hotBox .htCore tbody tr.row-ship td.current,
-#hotBox .htCore tbody tr.row-red td.current{background:#fff !important}
+#hotBox .htCore tbody tr.row-red td.current,
+#hotBox .htCore tbody tr.row-exchanged td.current{background:#fff !important}
 /* solid status pills to match */
 #hotBox .ht-status.delivered{background:#0f9d63;color:#fff}
 #hotBox .ht-status.shipped{background:#e0851b;color:#fff}
 #hotBox .ht-status.cancelled,#hotBox .ht-status.returned{background:#dc4437;color:#fff}
-/* cancel-charge soft reminder */
+#hotBox .ht-status.exchanged{background:#2563eb;color:#fff}
+/* cancel-charge / exchange-charge soft reminder */
 #hotBox .cc-need{color:#c77700;font-weight:800;font-size:11px;cursor:text}
 #hotBox td.cc-needcell{background:#fff6e6 !important;text-align:right}
 #hotBox .htCore tbody tr.row-red td.cc-needcell{background:#ffe9d6 !important}
+#hotBox .htCore tbody tr.row-exchanged td.cc-needcell{background:#e4edff !important}
 
 /* ============ Sales Advanced Filter ============ */
 .chips .advc{background:#7c5cf7;color:#fff;border-radius:99px;font-size:10px;padding:1px 7px;font-weight:900;margin-left:4px}
@@ -1240,7 +1245,9 @@ body.dark .hh-check{background:rgba(52,211,153,.12);color:#6ee7b7}
 #hotBox .htCore tbody tr.row-del > td{background:#d8f5e6 !important}
 #hotBox .htCore tbody tr.row-ship > td{background:#fdeccb !important}
 #hotBox .htCore tbody tr.row-red > td{background:#fbdcd8 !important}
+#hotBox .htCore tbody tr.row-exchanged > td{background:#dbe7ff !important}
 #hotBox .htCore tbody tr.row-red > td.cc-needcell{background:#ffe1d6 !important}
+#hotBox .htCore tbody tr.row-exchanged > td.cc-needcell{background:#e4edff !important}
 
 /* ============ Sales — multi-phone search modal ============ */
 .mp-bg{position:fixed;inset:0;background:rgba(30,41,59,.42);backdrop-filter:blur(6px);z-index:99992;display:flex;align-items:center;justify-content:center;padding:18px;overscroll-behavior:contain}

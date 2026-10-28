@@ -9,6 +9,7 @@ require_once __DIR__.'/functions.php';
 require_login(); require_page_access();
 repair_zero_cost_profit();   /* auto-fix orders saved with Rs.0 cost so profit is honest everywhere */
 ensure_order_group();
+ensure_order_exchange_cols();
 try { q("ALTER TABLE orders ADD COLUMN IF NOT EXISTS sales_person_id INT NULL AFTER code"); } catch (Exception $e) {}
 try { q("ALTER TABLE orders ADD INDEX idx_sales_person_id (sales_person_id)"); } catch (Exception $e) {}
 ensure_company_salesperson();
@@ -45,6 +46,11 @@ if (isset($_GET['ajax'])) {
                       ? ((isset($_POST['cancel_charge']) && $_POST['cancel_charge'] !== '' && (float)$_POST['cancel_charge'] > 0)
                           ? (float)$_POST['cancel_charge'] : 0.0)
                       : 0.0;
+        /* exchange charge = what it cost to resend a replacement — also never assumed */
+        $exchange   = $status === 'exchanged'
+                      ? ((isset($_POST['exchange_charge']) && $_POST['exchange_charge'] !== '' && (float)$_POST['exchange_charge'] > 0)
+                          ? (float)$_POST['exchange_charge'] : 0.0)
+                      : 0.0;
 
         return [
             'order_date'      => ($_POST['order_date'] ?? '') ?: date('Y-m-d'),
@@ -58,6 +64,7 @@ if (isset($_GET['ajax'])) {
             'cost_price'      => $cost,
             'delivery_charge' => $delivery,
             'cancel_charge'   => $cancel,
+            'exchange_charge' => $exchange,
             'zone'            => $zone,
             'payment_type'    => (in_array(strtolower(trim($_POST['payment_type'] ?? 'cash')), ['online','prepaid','bank_transfer','wallet'], true) ? 'prepaid' : 'cod'),
             'payment_status'  => $pay_status,
@@ -114,7 +121,7 @@ if (isset($_GET['ajax'])) {
                   'code'=>$code,'order_date'=>$odate,'customer'=>$cust,'phone'=>$phone,'address'=>$addr,
                   'sales_person_id'=>$spid,
                   'product_id'=>$pid,'qty'=>max(1,(int)($it['qty']??1)),'sell_price'=>(float)($it['sell_price']??0),
-                  'cost_price'=>$cost,'delivery_charge'=>($first?$totalDelivery:0.0),'cancel_charge'=>0.0,
+                  'cost_price'=>$cost,'delivery_charge'=>($first?$totalDelivery:0.0),'cancel_charge'=>0.0,'exchange_charge'=>0.0,
                   'zone'=>$zone,'payment_type'=>$ptype,'payment_status'=>$pay_status,'status'=>$status,
                   'courier_id'=>$cid,'remarks'=>$remarks,'order_group'=>$grp,
                 ];
@@ -270,6 +277,7 @@ require __DIR__.'/includes/header.php';
 .ht-status.delivered{background:#0f9d63}
 .ht-status.shipped{background:#e0851b}
 .ht-status.cancelled,.ht-status.returned{background:#dc4437}
+.ht-status.exchanged{background:#2563eb}
 .ht-status.pending,.ht-status.processing{background:#eef0f4;color:#64748b}
 .save-ind{display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:600;padding:5px 12px;border-radius:8px}
 .save-ind.saving{background:#fef3c7;color:#b45309}
@@ -331,6 +339,7 @@ require __DIR__.'/includes/header.php';
     <button class="chip chip-warn" id="chip-aging" onclick="applyFilter('aging')">⏳ Aging <b>0</b></button>
     <button class="chip" id="chip-cancelled" onclick="applyFilter('cancelled')">Cancelled <b>0</b></button>
     <button class="chip" id="chip-returned" onclick="applyFilter('returned')">Returned <b>0</b></button>
+    <button class="chip" id="chip-exchanged" onclick="applyFilter('exchanged')">🔁 Exchanged <b>0</b></button>
     <span style="width:1px;height:22px;background:var(--border);margin:0 3px;align-self:center"></span>
     <button class="chip" id="advBtn" onclick="toggleAdv()">⚙ Advanced <span id="advCount" class="advc" style="display:none">0</span></button>
   </div>
@@ -487,7 +496,7 @@ var ORDERS  =<?= json_encode(array_values($orders)) ?>;
 var prodNames = PRODUCTS.map(function(p){return p.name;});
 var courNames = [''].concat(COURIERS.map(function(c){return c.name;}));
 var spNames   = [''].concat(SALESPERSONS.map(function(s){return s.name;}));
-var STATUSES=['pending','processing','shipped','delivered','cancelled','returned'];
+var STATUSES=['pending','processing','shipped','delivered','cancelled','returned','exchanged'];
 var PAY_TYPES=['COD','Prepaid'];
 window.prodNames=prodNames; window.courNames=courNames.filter(Boolean); window.spNames=spNames.filter(Boolean); window.PAY_TYPES=PAY_TYPES;
 var TRK_TPL=<?= json_encode(setting('wa_tracking_template','https://nepalcanmove.com/tracking?id={id}')) ?>;
@@ -537,6 +546,7 @@ function toRow(o){
   var prod=prodById(o.product_id), cour=courById(o.courier_id), sp=spById(o.sales_person_id);
   return {
     _id:o.id, cost_price:parseFloat(o.cost_price)||0, cancel_charge:parseFloat(o.cancel_charge)||0,
+    exchange_charge:parseFloat(o.exchange_charge)||0,
     code:o.code||'', order_date:o.order_date||'', customer:o.customer||'', phone:o.phone||'',
     sales_person_name:sp?sp.name:(o.sales_person_name||''),
     address:o.address||'', product_name:prod?prod.name:(o.product_name||''),
@@ -568,6 +578,14 @@ function moneyR(inst,td,r,c,prop,val){
     var isRet=['cancelled','returned'].indexOf(String(row.status||'').toLowerCase())>-1;
     if(isRet && !(parseFloat(val)>0)){
       td.innerHTML='<span class="cc-need" title="Cancel charge differs by location — type the real amount for this delivery">✎ set charge</span>';
+      td.className+=' cc-needcell'; return td;
+    }
+  }
+  if(prop==='exchange_charge'){
+    var phys2=inst.toPhysicalRow?inst.toPhysicalRow(r):r, row2=(inst.getSourceDataAtRow?inst.getSourceDataAtRow(phys2):VIEW[phys2])||{};
+    var isExch=String(row2.status||'').toLowerCase()==='exchanged';
+    if(isExch && !(parseFloat(val)>0)){
+      td.innerHTML='<span class="cc-need" title="What did it cost to resend a replacement? Type the real amount.">✎ set charge</span>';
       td.className+=' cc-needcell'; return td;
     }
   }
@@ -734,7 +752,7 @@ function priceR(inst,td,r,c,prop,val){
   Handsontable.renderers.TextRenderer.apply(this,arguments);
   td.style.textAlign='right'; td.innerHTML=fmt(val);
   var row=VIEW[inst.toPhysicalRow?inst.toPhysicalRow(r):r]||{};
-  if((parseFloat(val)||0)>0 && potProfit(row)<0 && ['cancelled','returned'].indexOf(String(row.status).toLowerCase())<0){
+  if((parseFloat(val)||0)>0 && potProfit(row)<0 && ['cancelled','returned','exchanged'].indexOf(String(row.status).toLowerCase())<0){
     td.className+=' c-bad'; td.title='💸 Below cost + delivery — you would LOSE '+fmt(Math.abs(potProfit(row)))+' on this order';}
   return td;
 }
@@ -748,7 +766,7 @@ function profitR(inst,td,r,c,prop,val){
   var st=String(row.status).toLowerCase();
   td.style.textAlign='right'; td.style.whiteSpace='nowrap';
   if(st==='delivered'){var v=parseFloat(val)||0;td.innerHTML='<b style="color:'+(v>=0?'var(--green)':'var(--red)')+'">'+fmt(v)+'</b>';}
-  else if(st==='cancelled'||st==='returned'){var v2=parseFloat(val)||0;td.innerHTML='<span style="color:var(--red)">'+fmt(v2)+'</span>';}
+  else if(st==='cancelled'||st==='returned'||st==='exchanged'){var v2=parseFloat(val)||0;td.innerHTML='<span style="color:var(--red)">'+fmt(v2)+'</span>';}
   else{var p=potProfit(row);td.innerHTML='<span style="opacity:.75;color:'+(p>=0?'var(--green)':'var(--red)')+'">≈ '+fmt(p)+'</span>';td.title='Projected profit if delivered (FIFO cost aware)';}
   return td;
 }
@@ -767,6 +785,7 @@ var COLS=[
   {data:'sell_price',title:'Price',width:88,type:'numeric',renderer:priceR},
   {data:'delivery_charge',title:'Delivery',width:92,type:'autocomplete',source:COMMON_DELIV,strict:false,filter:false,renderer:moneyR},
   {data:'cancel_charge',title:'Cancel Chg',width:92,type:'numeric',renderer:moneyR},
+  {data:'exchange_charge',title:'Exchange Chg',width:100,type:'numeric',renderer:moneyR},
   {data:'revenue',title:'Revenue',width:98,readOnly:true,renderer:moneyR},
   {data:'payment_type',title:'Payment Type',width:110,type:'dropdown',source:PAY_TYPES,renderer:payTypeR},
   {data:'status',title:'Status',width:108,type:'dropdown',source:STATUSES,renderer:statusR},
@@ -777,7 +796,7 @@ var COLS=[
   {data:'_del',title:'',width:100,readOnly:true,renderer:delR}
 ];
 /* column show/hide (view-level; CSV export unaffected) */
-var HIDEABLE={'phone':'Phone','address':'Address','zone':'Zone','delivery_charge':'Delivery','cancel_charge':'Cancel Chg','revenue':'Revenue','payment_type':'Payment Type','payment_status':'Payment Received','courier_name':'Courier','sales_person_name':'Sales Person','remarks':'Remarks'};
+var HIDEABLE={'phone':'Phone','address':'Address','zone':'Zone','delivery_charge':'Delivery','cancel_charge':'Cancel Chg','exchange_charge':'Exchange Chg','revenue':'Revenue','payment_type':'Payment Type','payment_status':'Payment Received','courier_name':'Courier','sales_person_name':'Sales Person','remarks':'Remarks'};
 var hiddenCols={}; try{hiddenCols=JSON.parse(localStorage.getItem('sales_hidden_cols')||'{}');}catch(e){}
 function visibleCols(){return COLS.filter(function(c){return !hiddenCols[c.data];});}
 
@@ -787,10 +806,12 @@ function setSave(s,m){['saveStatus','saveStatus2'].forEach(function(id){var el=d
 function recalc(row){
   var sp=parseFloat(row.sell_price)||0, cp=parseFloat(row.cost_price)||0, qty=parseInt(row.qty)||1, st=row.status, dl=parseFloat(row.delivery_charge)||0;
   row.revenue = st==='delivered'? sp*qty : 0;
-  row.profit  = st==='delivered'? ((sp-cp)*qty - dl) : (st==='cancelled'||st==='returned'? -(parseFloat(row.cancel_charge)||0):0);
+  row.profit  = st==='delivered'? ((sp-cp)*qty - dl)
+              : (st==='cancelled'||st==='returned'? -(parseFloat(row.cancel_charge)||0)
+              : (st==='exchanged'? -(parseFloat(row.exchange_charge)||0) : 0));
 }
 function updateStats(){ updateRowCount(); if(typeof updateChips==='function')updateChips(); if(typeof updateBulkBar==='function')updateBulkBar();
-  var scope=(advActiveCount()>0||['cancelled','returned','shipped','delivered','pending','processing','today','aging'].indexOf(CURFILTER)>-1)?finalView():DATA;
+  var scope=(advActiveCount()>0||['cancelled','returned','exchanged','shipped','delivered','pending','processing','today','aging'].indexOf(CURFILTER)>-1)?finalView():DATA;
   var rev=0,del=0,prof=0,units=0;
   scope.forEach(function(o){rev+=parseFloat(o.revenue)||0;prof+=parseFloat(o.profit)||0;if(o.status==='delivered'){del+=parseFloat(o.delivery_charge)||0;units+=parseInt(o.qty)||0;}});
   var su=document.getElementById('stUnits'); if(su)su.textContent=units.toLocaleString();
@@ -824,7 +845,7 @@ function payload(row){
     product_id:prod?prod.id:'', qty:row.qty, sell_price:row.sell_price,
     delivery_charge:row.delivery_charge, zone:row.zone, payment_type:row.payment_type,
     payment_status:row.payment_status, status:row.status, courier_id:cour?cour.id:'',
-    cancel_charge:row.cancel_charge||0, remarks:row.remarks,
+    cancel_charge:row.cancel_charge||0, exchange_charge:row.exchange_charge||0, remarks:row.remarks,
     order_group:row._group||''
   };
 }
@@ -846,6 +867,7 @@ function currentView(){
     case 'aging':     return DATA.filter(isAging);
     case 'cancelled': return DATA.filter(function(o){return String(o.status).toLowerCase()==='cancelled';});
     case 'returned':  return DATA.filter(function(o){return String(o.status).toLowerCase()==='returned';});
+    case 'exchanged': return DATA.filter(function(o){return String(o.status).toLowerCase()==='exchanged';});
     case '_status':   return DATA.filter(function(o){return STATUSSET.indexOf(String(o.status).toLowerCase())>-1;});
     default:          return DATA;
   }
@@ -930,8 +952,8 @@ function updateAdvUI(){
 function esc(t){var d=document.createElement('div');d.textContent=t==null?'':t;return d.innerHTML;}
 function exportFiltered(){
   var rows=finalView();
-  var heads=['Order','Sales Person','Product','Date','Customer','Phone','Address','Zone','Qty','Price','Delivery','Cancel Chg','Revenue','Payment','Status'];
-  var keys=['code','sales_person_name','product_name','order_date','customer','phone','address','zone','qty','sell_price','delivery_charge','cancel_charge','revenue','payment_type','status'];
+  var heads=['Order','Sales Person','Product','Date','Customer','Phone','Address','Zone','Qty','Price','Delivery','Cancel Chg','Exchange Chg','Revenue','Payment','Status'];
+  var keys=['code','sales_person_name','product_name','order_date','customer','phone','address','zone','qty','sell_price','delivery_charge','cancel_charge','exchange_charge','revenue','payment_type','status'];
   var lines=[heads.join(',')];
   rows.forEach(function(r){lines.push(keys.map(function(k){var v=(r[k]==null?'':String(r[k]));return '"'+v.replace(/"/g,'""')+'"';}).join(','));});
   var blob=new Blob([lines.join('\n')],{type:'text/csv'});
@@ -947,13 +969,13 @@ function updateChips(){
     if(cnt[st]!==undefined)cnt[st]++;
     if(String(o.order_date).slice(0,10)===TODAY)cnt.today++;
     if(isAging(o))cnt.aging++;});
-  cnt.cancelled=0;cnt.returned=0;
-  scope.forEach(function(o){var st=String(o.status).toLowerCase();if(st==='cancelled')cnt.cancelled++;if(st==='returned')cnt.returned++;});
-  ['all','pending','processing','shipped','delivered','today','aging','cancelled','returned'].forEach(function(k){
+  cnt.cancelled=0;cnt.returned=0;cnt.exchanged=0;
+  scope.forEach(function(o){var st=String(o.status).toLowerCase();if(st==='cancelled')cnt.cancelled++;if(st==='returned')cnt.returned++;if(st==='exchanged')cnt.exchanged++;});
+  ['all','pending','processing','shipped','delivered','today','aging','cancelled','returned','exchanged'].forEach(function(k){
     var el=document.getElementById('chip-'+k); if(!el)return;
     el.querySelector('b').textContent=cnt[k]||0;
     el.classList.toggle('on',CURFILTER===k);
-    el.style.display=(k==='aging'&&cnt.aging===0)?'none':((k==='returned'&&cnt.returned===0)?'none':'');});
+    el.style.display=(k==='aging'&&cnt.aging===0)?'none':((k==='returned'&&cnt.returned===0)?'none':((k==='exchanged'&&cnt.exchanged===0)?'none':''));});
   updateAdvUI();
 }
 function buildGrid(data){
@@ -969,12 +991,13 @@ function buildGrid(data){
       /* colour the whole ROW by status — reliable in Handsontable 6.2.2 (cells:className is overridden by column classNames) */
       var vr=(this.getSourceDataAtRow?this.getSourceDataAtRow(row):null)||VIEW[row]; if(!vr)return;
       var tr=td.parentNode; if(!tr)return;
-      tr.classList.remove('row-del','row-ship','row-red','row-needcancel','row-grp','row-grp-first','row-grp-last');
+      tr.classList.remove('row-del','row-ship','row-red','row-exchanged','row-needcancel','row-grp','row-grp-first','row-grp-last');
       var st=String(vr.status||'').toLowerCase();
       if(st==='delivered')tr.classList.add('row-del');
       else if(st==='shipped')tr.classList.add('row-ship');
       else if(st==='cancelled'||st==='returned')tr.classList.add('row-red');
-      if(vr._needCancel)tr.classList.add('row-needcancel');
+      else if(st==='exchanged')tr.classList.add('row-exchanged');
+      if(vr._needCancel||vr._needExchange)tr.classList.add('row-needcancel');
       /* Design A — soft group band for multi-product orders (same order_group) */
       if(vr._group){
         tr.classList.add('row-grp');
@@ -1012,6 +1035,17 @@ function buildGrid(data){
           hot.setDataAtRowProp([[r,'cancel_charge',v],[r,'status','returned']]);
         }catch(e){ alert('Could not mark returned: '+e.message); }
       }},
+      'mark_exchanged':{name:'🔁 Mark EXCHANGED + cost…', callback:function(key,sel){
+        try{
+          var r=sel[0].start.row; var row=VIEW[r]; if(!row||!row._id){alert('Save the order first.');return;}
+          var def=parseFloat(row.exchange_charge)||0;
+          if(!(def>0)){ var cn=String(row.courier_name||'').toLowerCase();
+            for(var i=0;i<COURIERS.length;i++){ if(String(COURIERS[i].name||'').toLowerCase()===cn){ def=parseFloat(COURIERS[i].default_delivery)||0; break; } } }
+          var v=prompt('Cost to resend a replacement for this order (Rs.):', def||'');
+          if(v===null) return; v=parseFloat(v)||0;
+          hot.setDataAtRowProp([[r,'exchange_charge',v],[r,'status','exchanged']]);
+        }catch(e){ alert('Could not mark exchanged: '+e.message); }
+      }},
       'sep1':'---------','copy':{},'cut':{},'sep2':'---------','undo':{},'redo':{}
     }},
     fillHandle:true, autoWrapRow:true, undo:true,
@@ -1038,8 +1072,14 @@ function buildGrid(data){
           if(!(parseFloat(row.cancel_charge)>0)){ row.cancel_charge=''; row._needCancel=true; }
           else { row._needCancel=false; }
         }
+        if(prop==='status' && String(val).toLowerCase()==='exchanged'){
+          /* cost to resend varies per order — leave it for the user to type; just flag it */
+          if(!(parseFloat(row.exchange_charge)>0)){ row.exchange_charge=''; row._needExchange=true; }
+          else { row._needExchange=false; }
+        }
         if(prop==='status') _reRender=true;
         if(prop==='cancel_charge'){ row._needCancel = !(parseFloat(row.cancel_charge)>0) && ['cancelled','returned'].indexOf(String(row.status).toLowerCase())>-1; }
+        if(prop==='exchange_charge'){ row._needExchange = !(parseFloat(row.exchange_charge)>0) && String(row.status).toLowerCase()==='exchanged'; }
         if(prop==='phone'){                                   /* returning customer → auto-fill name & address */
           var info=CUSTINFO[norm10(val)];
           if(info){ if(!String(row.customer||'').trim()) row.customer=info.name;
@@ -1106,10 +1146,10 @@ function clearDashFilter(){
     }
     if(statusParam){
       var list=statusParam.split(',').map(function(s){return s.trim().toLowerCase();}).filter(Boolean);
-      var single=['pending','processing','shipped','delivered','cancelled','returned'];
+      var single=['pending','processing','shipped','delivered','cancelled','returned','exchanged'];
       if(list.length===1 && single.indexOf(list[0])>-1){ CURFILTER=list[0]; }
       else if(list.length>1){ CURFILTER='_status'; STATUSSET=list; }
-      var STLBL={pending:'Pending',processing:'Processing',shipped:'On the way',delivered:'Delivered',cancelled:'Cancelled',returned:'Returned'};
+      var STLBL={pending:'Pending',processing:'Processing',shipped:'On the way',delivered:'Delivered',cancelled:'Cancelled',returned:'Returned',exchanged:'Exchanged'};
       parts.push('<b>'+list.map(function(s){return STLBL[s]||s;}).join(' + ')+'</b>');
     }
     if(fromParam){ ADV.from=fromParam; var fi=document.getElementById('af_from'); if(fi)fi.value=fromParam; }
@@ -1332,7 +1372,7 @@ var _fb2=document.getElementById('addFormBtn2'); if(_fb2) _fb2.onclick=openOrder
 function makeBlankRow(){
   var blank={_id:0, code:'', order_date:new Date().toISOString().slice(0,10),
     customer:'', phone:'', address:'', sales_person_name:'', product_name:'',
-    qty:1, sell_price:0, cost_price:0, cancel_charge:0,
+    qty:1, sell_price:0, cost_price:0, cancel_charge:0, exchange_charge:0,
     delivery_charge:0,   /* courier cost — enter manually per destination */
     zone:(DEF_ZONE==='outside'?'Outside':'Inside'),
     payment_type:DEF_PAY_UI, payment_status:'Unpaid',
@@ -1674,8 +1714,8 @@ if(document.getElementById('sheetSearch').value.trim()!==''){
 
 /* CSV export */
 document.getElementById('csvBtn').onclick=function(){
-  var heads=['Order','Sales Person','Product','Date','Customer','Phone','Address','Zone','Quantity','Price','Delivery','Cancel Charge','Revenue','Payment Type','Status','Payment Received','Courier','Profit'];
-  var keys=['code','sales_person_name','product_name','order_date','customer','phone','address','zone','qty','sell_price','delivery_charge','cancel_charge','revenue','payment_type','status','payment_status','courier_name','profit'];
+  var heads=['Order','Sales Person','Product','Date','Customer','Phone','Address','Zone','Quantity','Price','Delivery','Cancel Charge','Exchange Charge','Revenue','Payment Type','Status','Payment Received','Courier','Profit'];
+  var keys=['code','sales_person_name','product_name','order_date','customer','phone','address','zone','qty','sell_price','delivery_charge','cancel_charge','exchange_charge','revenue','payment_type','status','payment_status','courier_name','profit'];
   var lines=[heads.join(',')];
   DATA.forEach(function(r){lines.push(keys.map(function(k){var v=(r[k]==null?'':String(r[k]));return '"'+v.replace(/"/g,'""')+'"';}).join(','));});
   var blob=new Blob([lines.join('\n')],{type:'text/csv'});

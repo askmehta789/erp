@@ -264,6 +264,8 @@ require __DIR__.'/includes/header.php';
 <script src="https://cdnjs.cloudflare.com/ajax/libs/handsontable/6.2.2/handsontable.full.min.js"></script>
 
 <style>
+#selAllBtn.on{background:var(--brand);border-color:var(--brand);color:#fff}
+#selAllBtn:disabled{opacity:.5;cursor:default}
 .htCore td{font-size:13px}
 /* ===== Signal design — dark header bar ===== */
 .htCore th{font-size:10.5px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:#aeb8d4;background:#1f2740;border-color:#2a3350 !important}
@@ -322,6 +324,7 @@ require __DIR__.'/includes/header.php';
 <div class="card" style="overflow:hidden">
   <div class="sheet-toolbar">
     <input id="sheetSearch" class="search-in" style="max-width:240px" placeholder="🔍 Search orders…" value="<?= e($_GET['q'] ?? '') ?>">
+    <button class="btn btn-sm" id="selAllBtn" onclick="toggleSelectAllVisible()" title="Select every row currently shown — respects the active filter/search/advanced filters">☑ Select All</button>
     <button class="btn btn-sm" onclick="openPhoneSearch()" title="Paste many phone numbers to find & select them all at once">📞 Multi-phone</button>
     <button class="btn btn-sm" id="sortDirBtn" onclick="toggleSortDir()" title="Flip between newest-on-top and oldest-on-top">⬇ Newest first</button>
     <button class="btn btn-sm" onclick="hot.scrollViewportTo(0,0)" title="Jump to top">⤒</button>
@@ -918,7 +921,7 @@ function toggleSortDir(){
 function newRowIndex(){ return SORTDESC?0:VIEW.length-1; }
 try{ var _sb=document.getElementById('sortDirBtn'); if(_sb)_sb.textContent=SORTDESC?'⬇ Newest first':'⬆ Oldest first'; }catch(e){}
 function finalView(){ var v=baseView(); if(advActiveCount()>0) v=v.filter(advMatch); return dirView(v); }
-function refreshView(){VIEW=finalView();hot.loadData(VIEW);updateAdvUI();}
+function refreshView(){VIEW=finalView();hot.loadData(VIEW);updateAdvUI();updateSelAllBtn();}
 function toggleAdv(){var p=document.getElementById('advPanel');p.style.display=p.style.display==='none'?'block':'none';fillAdvSources();}
 function fillAdvSources(){
   var ps=document.getElementById('af_prod'); if(ps && ps.options.length<=1){ (window.prodNames||[]).forEach(function(n){var o=document.createElement('option');o.textContent=n;ps.appendChild(o);}); }
@@ -1452,8 +1455,29 @@ function runPhoneSearch(){
   }
 }
 function updateBulkBar(){var n=selRows().length,b=document.getElementById('bulkBar');
-  if(b){b.style.display=n?'flex':'none';var el=document.getElementById('bulkN');if(el)el.textContent=n;}}
+  if(b){b.style.display=n?'flex':'none';var el=document.getElementById('bulkN');if(el)el.textContent=n;}
+  updateSelAllBtn();}
 function clearSel(){DATA.forEach(function(o){o._sel=false;});hot.render();updateBulkBar();}
+/* "Select All" always acts on VIEW — the rows currently shown after the active
+   chip filter, search and advanced filters — never the whole unfiltered sheet.
+   Clicking again toggles it off, like a header checkbox. */
+function visibleSelectable(){return VIEW.filter(function(o){return o._id;});}
+function toggleSelectAllVisible(){
+  var visible=visibleSelectable();
+  if(!visible.length)return;
+  var allSelected=visible.every(function(o){return o._sel;});
+  visible.forEach(function(o){ o._sel=!allSelected; });
+  hot.render(); updateBulkBar();
+}
+function updateSelAllBtn(){
+  var btn=document.getElementById('selAllBtn'); if(!btn)return;
+  var visible=visibleSelectable(), n=visible.length;
+  var allSelected=n>0 && visible.every(function(o){return o._sel;});
+  var scoped=(typeof CURFILTER!=='undefined' && CURFILTER!=='all') || (typeof advActiveCount==='function' && advActiveCount()>0) || (document.getElementById('sheetSearch')&&document.getElementById('sheetSearch').value.trim()!=='');
+  btn.textContent=(allSelected?'☑ Unselect All':'☐ Select All')+(n?' ('+n+(scoped?' filtered':'')+')':'');
+  btn.classList.toggle('on',allSelected);
+  btn.disabled=!n;
+}
 function markSel(status){
   var list=selRows(); if(!list.length)return;
   if(!confirm('Mark '+list.length+' order(s) as '+status+'?'))return;
@@ -1700,11 +1724,12 @@ function doDelete(){
 /* search */
 document.getElementById('sheetSearch').oninput=function(){
   var q=this.value.toLowerCase().trim();
-  if(!q){VIEW=DATA;hot.loadData(VIEW);document.getElementById('rowCount').textContent=DATA.length+' rows';var _r2=document.getElementById('rowCount2');if(_r2)_r2.textContent=DATA.length;return;}
+  if(!q){VIEW=DATA;hot.loadData(VIEW);document.getElementById('rowCount').textContent=DATA.length+' rows';var _r2=document.getElementById('rowCount2');if(_r2)_r2.textContent=DATA.length;updateSelAllBtn();return;}
   var f=DATA.filter(function(r){return ['code','customer','phone','address','product_name','sales_person_name','status','courier_name','remarks'].some(function(k){return(r[k]||'').toLowerCase().indexOf(q)>-1;});});
   VIEW=f;
   hot.loadData(VIEW);
   document.getElementById('rowCount').textContent=f.length+' of '+DATA.length+' rows';var _r3=document.getElementById('rowCount2');if(_r3)_r3.textContent=f.length;
+  updateSelAllBtn();
 };
 /* arrived here from a link like search.php's "Open Sales →" carrying ?q= — apply that
    filter immediately instead of making the person retype what they already searched */

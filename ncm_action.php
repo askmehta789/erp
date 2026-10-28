@@ -76,7 +76,7 @@ $orders = rows("SELECT o.*, p.name AS product_name FROM orders o
                 LEFT JOIN products p ON p.id=o.product_id
                 LEFT JOIN couriers c ON c.id=o.courier_id
                 WHERE c.name LIKE '%NCM%'
-                  AND o.status NOT IN ('delivered','cancelled','returned')
+                  AND o.status NOT IN ('delivered','cancelled','returned','exchanged')
                 ORDER BY o.id DESC");
 
 /* latest NCM comment per order → no-response detection (best-effort, page still works offline) */

@@ -11,6 +11,7 @@ $PAGE_TITLE = 'Sales Team';
 try { q("ALTER TABLE orders ADD COLUMN IF NOT EXISTS sales_person_id INT NULL AFTER code"); } catch (Exception $e) {}
 try { q("ALTER TABLE orders ADD INDEX idx_sales_person_id (sales_person_id)"); } catch (Exception $e) {}
 ensure_company_salesperson();
+ensure_order_exchange_cols();
 
 /* ---- date range: This Month / Last Month / This Year / All Time / Custom ---- */
 $range = in_array($_GET['range'] ?? '', ['month','last_month','year','all','custom'], true) ? $_GET['range'] : 'month';
@@ -64,11 +65,14 @@ foreach (rows("
            SUM(o.status='returned') retd,
            SUM(o.status='shipped') onway,
            SUM(o.status IN ('pending','processing')) confirmed,
+           SUM(o.status='exchanged') exchd,
            SUM(CASE WHEN o.status='delivered' THEN o.qty ELSE 0 END) units,
            SUM(CASE WHEN o.status='delivered' THEN o.sell_price*o.qty ELSE 0 END) rev,
            SUM(CASE WHEN o.status='delivered' THEN (o.sell_price-o.cost_price)*o.qty-o.delivery_charge
-                    WHEN o.status IN ('cancelled','returned') THEN -o.cancel_charge ELSE 0 END) prof,
-           SUM(CASE WHEN o.status IN ('cancelled','returned') THEN o.cancel_charge ELSE 0 END) cancf
+                    WHEN o.status IN ('cancelled','returned') THEN -o.cancel_charge
+                    WHEN o.status='exchanged' THEN -o.exchange_charge ELSE 0 END) prof,
+           SUM(CASE WHEN o.status IN ('cancelled','returned') THEN o.cancel_charge ELSE 0 END) cancf,
+           SUM(CASE WHEN o.status='exchanged' THEN o.exchange_charge ELSE 0 END) exchf
     FROM orders o WHERE o.sales_person_id IS NOT NULL $dateWhere GROUP BY o.sales_person_id", $dateParams) as $r) {
     $stat[(int)$r['spid']] = $r;
 }
@@ -91,7 +95,7 @@ foreach ($people as $p) {
         'id'=>$id, 'name'=>$p['name'], 'phone'=>$p['phone'], 'status'=>$p['status'],
         'n'=>$n, 'del'=>$G($id,'del'), 'cancd'=>$G($id,'cancd'), 'retd'=>$G($id,'retd'), 'canc'=>$canc, 'onway'=>$G($id,'onway'),
         'confirmed'=>$G($id,'confirmed'), 'units'=>$G($id,'units'), 'rev'=>$G($id,'rev'),
-        'prof'=>$G($id,'prof'), 'cancf'=>$G($id,'cancf'),
+        'prof'=>$G($id,'prof'), 'cancf'=>$G($id,'cancf'), 'exchd'=>$G($id,'exchd'), 'exchf'=>$G($id,'exchf'),
         'rate'=>$n ? round($G($id,'del')/$n*100) : 0,
         'bonus'=>$bonus[$id] ?? 0,
     ];
@@ -106,7 +110,7 @@ foreach ($ranked as &$r) {
     if ($r['n'] < 1) { $r['score'] = 0; continue; }
     $revScore = $maxRev > 0 ? ($r['rev'] / $maxRev * 100) : 0;
     $volScore = $maxN  > 0 ? ($r['n']   / $maxN  * 100) : 0;
-    $returnRate = $r['n'] ? ($r['canc'] / $r['n'] * 100) : 0;
+    $returnRate = $r['n'] ? (($r['canc'] + $r['exchd']) / $r['n'] * 100) : 0;   /* exchanges are a quality issue too, not just returns/cancels */
     $qualScore = 100 - $returnRate;
     $r['score'] = round(0.5*$revScore + 0.3*$volScore + 0.2*$qualScore, 1);
 }
@@ -119,8 +123,8 @@ $unassigned = row("SELECT COUNT(*) n,
     SUM(CASE WHEN o.status='delivered' THEN o.sell_price*o.qty ELSE 0 END) rev
     FROM orders o WHERE o.sales_person_id IS NULL $dateWhere", $dateParams);
 
-$tOrders=0;$tUnits=0;$tRev=0;$tCanc=0;
-foreach ($ranked as $r) { $tOrders+=$r['n']; $tUnits+=$r['units']; $tRev+=$r['rev']; $tCanc+=$r['canc']; }
+$tOrders=0;$tUnits=0;$tRev=0;$tCanc=0;$tExch=0;
+foreach ($ranked as $r) { $tOrders+=$r['n']; $tUnits+=$r['units']; $tRev+=$r['rev']; $tCanc+=$r['canc']; $tExch+=$r['exchd']; }
 
 $medal = ['🥇','🥈','🥉'];
 $chartLabels=[]; $chartDel=[]; $chartCancd=[]; $chartRetd=[];
@@ -189,6 +193,7 @@ a.cb:hover{transform:translateY(-1px);filter:brightness(0.96)}
   <div class="metric green"><div><div class="mv" style="font-size:20px"><?= money($tRev) ?></div><div class="ml">Delivered Revenue</div><div class="ms">by sales team</div></div><div class="mi">💰</div></div>
   <div class="metric teal"><div><div class="mv"><?= number_format($tUnits) ?></div><div class="ml">Units Delivered</div><div class="ms">total quantity</div></div><div class="mi">🏷️</div></div>
   <div class="metric red"><div><div class="mv"><?= number_format($tCanc) ?></div><div class="ml">Returned / Cancelled</div><div class="ms">across sales team</div></div><div class="mi">↩️</div></div>
+  <?php if($tExch>0): ?><div class="metric indigo"><div><div class="mv"><?= number_format($tExch) ?></div><div class="ml">Exchanged</div><div class="ms">across sales team</div></div><div class="mi">🔁</div></div><?php endif; ?>
 </div>
 
 <?php if ($podium): ?>
@@ -248,6 +253,7 @@ a.cb:hover{transform:translateY(-1px);filter:brightness(0.96)}
     <div class="ccard-grid">
       <a class="cb cb-g" href="<?= e(sales_link($r['name'], ['delivered'])) ?>" title="View <?= e($r['name']) ?>'s delivered orders"><div class="cbl">✅ Delivered</div><div class="cbv"><?= (int)$r['del'] ?></div><div class="cbs"><?= money($r['rev']) ?></div></a>
       <a class="cb cb-r" href="<?= e(sales_link($r['name'], ['cancelled','returned'])) ?>" title="View <?= e($r['name']) ?>'s returned/cancelled orders"><div class="cbl">✕ Returned/Cancelled</div><div class="cbv"><?= (int)$r['canc'] ?></div><div class="cbs">Charge: <?= money($r['cancf']) ?></div></a>
+      <?php if($r['exchd']>0): ?><a class="cb cb-r" href="<?= e(sales_link($r['name'], ['exchanged'])) ?>" title="View <?= e($r['name']) ?>'s exchanged orders"><div class="cbl">🔁 Exchanged</div><div class="cbv"><?= (int)$r['exchd'] ?></div><div class="cbs">Cost: <?= money($r['exchf']) ?></div></a><?php endif; ?>
       <a class="cb cb-y" href="<?= e(sales_link($r['name'], ['shipped'])) ?>" title="View <?= e($r['name']) ?>'s orders on the way"><div class="cbl">🚚 On the way</div><div class="cbv"><?= (int)$r['onway'] ?></div></a>
       <a class="cb cb-b" href="<?= e(sales_link($r['name'], ['pending','processing'])) ?>" title="View <?= e($r['name']) ?>'s confirmed orders"><div class="cbl">📋 Confirmed</div><div class="cbv"><?= (int)$r['confirmed'] ?></div></a>
     </div>

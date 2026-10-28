@@ -219,7 +219,20 @@ if (isset($_GET['ajax'])) {
    --------------------------------------------------------------------- */
 $PAGE_TITLE = 'Sales';
 $products = rows("SELECT id,name,sku,price,cost,stock,low_stock FROM products ORDER BY name");
-foreach ($products as &$pp) { $pp['cost'] = fifo_current_cost((int)$pp['id']); } unset($pp);
+/* bulk FIFO cost lookup instead of fifo_current_cost() per product — that was 2 DB
+   round-trips (a migration-check COUNT + the cost SELECT) for every single product on
+   every Sales page load. This is a read-only reference value (the product picker's
+   "current cost"), not the cost actually recorded on an order — that still goes through
+   fifo_current_cost() at save time via $build(), so correctness there is unaffected. */
+$fifoCosts = [];
+try {
+  ensure_stock_batches();
+  foreach (rows("SELECT product_id, unit_cost FROM stock_batches WHERE qty_left>0 ORDER BY product_id, purchase_date, id") as $b) {
+    $pid = (int)$b['product_id'];
+    if (!isset($fifoCosts[$pid])) $fifoCosts[$pid] = (float)$b['unit_cost'];   // first row per product = oldest open batch
+  }
+} catch (Exception $e) {}
+foreach ($products as &$pp) { $pp['cost'] = $fifoCosts[(int)$pp['id']] ?? (float)$pp['cost']; } unset($pp);
 try { q("ALTER TABLE couriers ADD COLUMN IF NOT EXISTS default_delivery DECIMAL(10,2) DEFAULT 0"); q("ALTER TABLE couriers ADD COLUMN IF NOT EXISTS cancel_charge DECIMAL(10,2) DEFAULT 100"); } catch (Exception $e) {}
 $couriers = rows("SELECT id,name,COALESCE(default_delivery,0) AS default_delivery,COALESCE(cancel_charge,100) AS cancel_charge FROM couriers WHERE status='active' ORDER BY name");
 $salespersons = rows("SELECT id,name FROM employees WHERE department='Sales' AND status='active' ORDER BY name");

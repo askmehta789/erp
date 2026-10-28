@@ -220,7 +220,7 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
       }
     }
     elseif ($act==='sync_all') {
-      $rows = rows("SELECT * FROM orders WHERE courier_id=? AND COALESCE(pd_order_id,'')<>'' AND status NOT IN ('delivered','cancelled','returned') LIMIT 40",[$pdId]);
+      $rows = rows("SELECT * FROM orders WHERE courier_id=? AND COALESCE(pd_order_id,'')<>'' AND status NOT IN ('delivered','cancelled','returned','exchanged') LIMIT 40",[$pdId]);
       $n=0; $cn=0;
       foreach ($rows as $o) {
         try {
@@ -283,13 +283,14 @@ $orders = rows("SELECT o.*, p.name AS product_name FROM orders o
                 WHERE o.courier_id=? AND o.order_date BETWEEN ? AND ?
                 ORDER BY o.order_date DESC, o.id DESC",[$pdId,$mStart,$mEnd]);
 
-$mOrders=count($orders); $mRev=0; $mCost=0; $mDelv=0; $mDel=0; $mRet=0; $mGross=0; $mUnits=0;
+$mOrders=count($orders); $mRev=0; $mCost=0; $mDelv=0; $mDel=0; $mRet=0; $mExch=0; $mGross=0; $mUnits=0;
 foreach ($orders as $o) {
   if ($o['status']==='delivered') {
     $mDel++; $mUnits+=(int)$o['qty']; $line=(float)$o['sell_price']*(int)$o['qty'];
     $mRev+=$line; $mCost+=(float)$o['cost_price']*(int)$o['qty']; $mDelv+=(float)$o['delivery_charge'];
     $mGross+=order_profit($o);
   } elseif (in_array($o['status'],['returned','cancelled'],true)) { $mRet++; $mGross+=order_profit($o); }
+  elseif ($o['status']==='exchanged') { $mExch++; $mGross+=order_profit($o); }
 }
 
 /* ---- COD money (all-time, from the shared engine) ---- */
@@ -305,7 +306,7 @@ $pdAgingDays = max(1, (int)setting('pd_aging_days', 5));
 $todayDt = new DateTime('today');
 
 $pdActiveOrders = rows("SELECT o.*, p.name AS product_name FROM orders o LEFT JOIN products p ON p.id=o.product_id
-                        WHERE o.courier_id=? AND o.status NOT IN ('delivered','cancelled','returned')
+                        WHERE o.courier_id=? AND o.status NOT IN ('delivered','cancelled','returned','exchanged')
                         ORDER BY o.id DESC",[$pdId]);
 $pdTotalAll     = (int)val("SELECT COUNT(*) FROM orders WHERE courier_id=?",[$pdId]);
 $pdDeliveredAll = (int)val("SELECT COUNT(*) FROM orders WHERE courier_id=? AND status='delivered'",[$pdId]);

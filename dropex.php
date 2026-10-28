@@ -106,10 +106,11 @@ $orders = rows("SELECT o.*, p.name AS product_name FROM orders o LEFT JOIN produ
                 WHERE o.courier_id=? AND o.order_date BETWEEN ? AND ?
                 ORDER BY o.order_date DESC, o.id DESC LIMIT 400",[$dxId,$mStart,$mEnd]);
 
-$mOrders=count($orders); $mDel=0; $mUnits=0; $mRev=0; $mProf=0; $mRet=0;
+$mOrders=count($orders); $mDel=0; $mUnits=0; $mRev=0; $mProf=0; $mRet=0; $mExch=0;
 foreach($orders as $o){
   if($o['status']==='delivered'){ $mDel++; $mUnits+=(int)$o['qty']; $mRev+=(float)$o['sell_price']*(int)$o['qty']; $mProf+=order_profit($o); }
   elseif(in_array($o['status'],['returned','cancelled'],true)){ $mRet++; $mProf+=order_profit($o); }
+  elseif($o['status']==='exchanged'){ $mExch++; $mProf+=order_profit($o); }
 }
 
 /* ---- COD money (all-time, from the shared engine) ---- */
@@ -343,7 +344,7 @@ echo delivery_disabled_banner('dropex.php');
       <td><b><?= e($o['product_name'] ?: '—') ?></b></td>
       <td style="text-align:right"><?= (int)$o['qty'] ?></td>
       <td style="text-align:right"><?= $cod>0?money($cod):'<span class="muted">prepaid</span>' ?></td>
-      <td style="text-align:right;font-weight:800;color:<?= ($isDel?$prof:$pot)>=0?'var(--green)':'var(--red)' ?>"><?= $isDel?money($prof):(in_array($o['status'],['returned','cancelled'],true)?money($prof):'≈ '.money($pot)) ?></td>
+      <td style="text-align:right;font-weight:800;color:<?= ($isDel?$prof:$pot)>=0?'var(--green)':'var(--red)' ?>"><?= $isDel?money($prof):(in_array($o['status'],['returned','cancelled','exchanged'],true)?money($prof):'≈ '.money($pot)) ?></td>
       <td><?= pill($o['status']) ?></td>
     </tr>
   <?php endforeach; if(!$orders): ?><tr><td colspan="8"><div class="dx-empty">No Dropex orders this month.</div></td></tr><?php endif; ?>

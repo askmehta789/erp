@@ -1,5 +1,5 @@
 <?php
-require_once __DIR__.'/functions.php'; require_login();
+require_once __DIR__.'/functions.php'; require_login(); require_page_access();
 
 /* ============================================================
    AI assistant — works FREE with no API key (built-in rules).

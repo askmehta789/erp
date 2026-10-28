@@ -222,9 +222,12 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
       if($o){
         $prev=(string)$o['status'];
         q("UPDATE orders SET status='delivered', payment_status='paid', ncm_return_flag=6, ncm_status='Delivered' WHERE id=?",[$id]);
-        try { stock_on_status_change($o['product_id']??0,$o['qty']??0,$prev,'delivered',$id); } catch (Exception $e) {}
-        log_activity('Manually confirmed DELIVERED: '.($o['code']??$id).' (return-suspect resolved by user)','NCM');
-        flash('✔ '.($o['code']??('#'.$id)).' confirmed as DELIVERED to the customer.');
+        $stockErr=null;
+        try { stock_on_status_change($o['product_id']??0,$o['qty']??0,$prev,'delivered',$id); } catch (Exception $e) { $stockErr=$e->getMessage(); }
+        log_activity('Manually confirmed DELIVERED: '.($o['code']??$id).' (return-suspect resolved by user)'.($stockErr?' — ⚠ STOCK SYNC FAILED: '.$stockErr:''),'NCM');
+        flash($stockErr
+          ? '✔ '.($o['code']??('#'.$id)).' confirmed as DELIVERED, but stock could not be updated automatically — check Products for this item. ('.$stockErr.')'
+          : '✔ '.($o['code']??('#'.$id)).' confirmed as DELIVERED to the customer.');
       }
       header('Location: ncm.php'); exit;
     }
@@ -467,7 +470,7 @@ sort($branchNames);
    to open. All-time dashboard totals come from cheap indexed COUNTs just below instead. */
 $ncmOrders = rows("SELECT o.*, p.name AS product_name, c.name AS courier_name
                    FROM orders o LEFT JOIN products p ON p.id=o.product_id LEFT JOIN couriers c ON c.id=o.courier_id
-                   WHERE c.name LIKE '%NCM%' AND o.status NOT IN ('delivered','cancelled','returned')
+                   WHERE c.name LIKE '%NCM%' AND o.status NOT IN ('delivered','cancelled','returned','exchanged')
                    ORDER BY o.id DESC");
 $mTotalAll     = (int)val("SELECT COUNT(*) FROM orders o JOIN couriers c ON c.id=o.courier_id WHERE c.name LIKE '%NCM%'");
 $mDeliveredAll = (int)val("SELECT COUNT(*) FROM orders o JOIN couriers c ON c.id=o.courier_id WHERE c.name LIKE '%NCM%' AND o.status='delivered'");
@@ -542,7 +545,16 @@ if ($liveStatus) {
       try {
         if ($mapped==='delivered') q("UPDATE orders SET status='delivered', payment_status='paid' WHERE id=?", [$o['id']]);
         else                       q("UPDATE orders SET status=? WHERE id=?", [$mapped, $o['id']]);
-        stock_on_status_change($o['product_id'] ?? 0, $o['qty'] ?? 0, $o['status'], $mapped, $o['id']); // FIFO stock sync
+        /* status write above already committed — if the stock sync below fails, that
+           must not vanish silently (it previously did, sharing the outer catch): the
+           order would show the new status with stock never adjusted, and nothing in
+           the UI or logs would reveal it. Give it its own catch so it's at least
+           recorded in Activity Logs even though the auto-sync loop keeps going. */
+        try {
+          stock_on_status_change($o['product_id'] ?? 0, $o['qty'] ?? 0, $o['status'], $mapped, $o['id']); // FIFO stock sync
+        } catch (Exception $se) {
+          log_activity('⚠ NCM auto-sync: status updated but STOCK SYNC FAILED for '.($o['code']??('#'.$o['id'])).' ('.$o['status'].'→'.$mapped.'): '.$se->getMessage(),'NCM');
+        }
         $ncmOrders[$idx]['status']=$mapped; $syncedCount++;
         $ocode = $o['code'] ?? ('#'.$o['id']);
         if ($mapped==='delivered')      notify("NCM delivered order $ocode ✅", 'delivered', 'ncm.php', 24);

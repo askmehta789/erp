@@ -3,12 +3,23 @@ require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/functions.php';
 if (current_user()) { header('Location: index.php'); exit; }
 
-/* ---- brute-force rate limit: 5 failed tries → 15-minute lock (per session+IP) ---- */
-$ip = $_SERVER['REMOTE_ADDR'] ?? '?';
-$_SESSION['login_attempts'] = $_SESSION['login_attempts'] ?? [];
-$attempts =& $_SESSION['login_attempts'];
-$attempts = array_filter($attempts, fn($t) => $t > time() - 900);   // keep last 15 min
-$locked = count($attempts) >= 5;
+/* ---- brute-force rate limit: 5 failed tries in 15 min → locked.
+   Tracked in the DB (by IP AND by username), not in $_SESSION — a session-only
+   counter resets the moment a client stops sending/reuses a fresh cookie jar,
+   which makes the lock trivially bypassable. This survives that. ---- */
+try { q("CREATE TABLE IF NOT EXISTS login_attempts(
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  ip VARCHAR(45) NOT NULL DEFAULT '',
+  username VARCHAR(80) NOT NULL DEFAULT '',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  INDEX(ip), INDEX(username), INDEX(created_at))"); } catch (Exception $e) {}
+try { q("DELETE FROM login_attempts WHERE created_at < DATE_SUB(NOW(), INTERVAL 15 MINUTE)"); } catch (Exception $e) {}
+
+$ip   = $_SERVER['REMOTE_ADDR'] ?? '?';
+$uTry = trim($_POST['username'] ?? '');
+$byIp   = (int)val("SELECT COUNT(*) FROM login_attempts WHERE ip=?", [$ip]);
+$byUser = $uTry!=='' ? (int)val("SELECT COUNT(*) FROM login_attempts WHERE username=?", [$uTry]) : 0;
+$locked = max($byIp, $byUser) >= 5;
 
 $err = '';
 if (isset($_GET['expired'])) $err = 'Session expired — please sign in again.';
@@ -18,7 +29,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   if ($locked) {
     $err = 'Too many failed attempts. Please wait 15 minutes and try again.';
   } else {
-    $u = trim($_POST['username'] ?? '');
+    $u = $uTry;
     $p = $_POST['password'] ?? '';
     $user = row("SELECT * FROM users WHERE username=? AND status='active'", [$u]);
     /* verify against a dummy hash when user not found — same timing, no enumeration */
@@ -28,12 +39,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       unset($user['password_hash']);
       $_SESSION['user'] = $user;
       $_SESSION['csrf'] = bin2hex(random_bytes(32));     // fresh CSRF token too
-      $_SESSION['login_attempts'] = [];
+      try { q("DELETE FROM login_attempts WHERE ip=? OR username=?", [$ip, $u]); } catch (Exception $e) {}
       q("UPDATE users SET last_login=NOW() WHERE id=?", [$user['id']]);
       log_activity('Logged in', 'Auth');
       header('Location: index.php'); exit;
     }
-    $attempts[] = time();
+    try { q("INSERT INTO login_attempts(ip,username) VALUES(?,?)", [$ip, $u]); } catch (Exception $e) {}
     log_activity("Failed login for '".substr($u,0,40)."' from $ip", 'Auth');
     $err = 'Invalid username or password.';
   }

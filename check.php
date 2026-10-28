@@ -3,7 +3,6 @@
 require_once __DIR__ . '/auth.php';
 require_login();
 if (!in_array(($_SESSION['user']['role'] ?? ''), ['Super Admin','Admin','Owner'], true)) { http_response_code(403); die('Admins only.'); }
-?>
 /* ============================================================
    MyStore ERP — Diagnostic & Repair (v2)
    Upload to your /erp/ folder, open in browser:
@@ -72,6 +71,7 @@ $fullCols = [
 
 $report = [];
 if ($pdo && $_SERVER['REQUEST_METHOD'] === 'POST') {
+  check_csrf();
   // create any missing tables
   $sql = file_get_contents(__DIR__ . '/database.sql');
   foreach (array_filter(array_map('trim', explode(';', $sql))) as $stmt) {
@@ -175,7 +175,7 @@ Edit the 4 lines in <code>config.php</code> with your real database name, user a
 <h2>5. Repair</h2>
 <div class="box">
 <p>Creates any missing tables and adds any missing columns. Safe to run repeatedly — it never deletes your data.</p>
-<form method="post"><button class="btn" type="submit">⚙️ Repair database now</button></form>
+<form method="post"><input type="hidden" name="csrf" value="<?= htmlspecialchars(csrf(), ENT_QUOTES, 'UTF-8') ?>"><button class="btn" type="submit">⚙️ Repair database now</button></form>
 <?php if ($report): ?>
   <h3 style="margin-top:18px">Repair report</h3>
   <div class="rep"><?php foreach ($report as $r): ?><?= $r[0]==='ok'?'✔ ':'✗ ' ?><?= htmlspecialchars($r[1])."\n" ?><?php endforeach; ?></div>

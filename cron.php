@@ -211,9 +211,10 @@ try {
   if (date('N')==1 && $emailTo!=='' && setting('last_report_week','')!==$week) {
     $from=date('Y-m-d',strtotime('-7 days')); $to=date('Y-m-d',strtotime('-1 day'));
     $os=rows("SELECT * FROM orders WHERE order_date BETWEEN ? AND ?",[$from,$to]);
-    $rev=0;$prof=0;$del=0;$ret=0;$units=0;
+    $rev=0;$prof=0;$del=0;$ret=0;$exch=0;$units=0;
     foreach($os as $o){ if($o['status']==='delivered'){$del++;$units+=(int)$o['qty'];$rev+=(float)$o['sell_price']*(int)$o['qty'];$prof+=((float)$o['sell_price']-(float)$o['cost_price'])*(int)$o['qty']-(float)$o['delivery_charge'];}
-      elseif(in_array($o['status'],['returned','cancelled'],true))$ret++; }
+      elseif(in_array($o['status'],['returned','cancelled'],true))$ret++;
+      elseif($o['status']==='exchanged')$exch++; }
     $exp=(float)val("SELECT COALESCE(SUM(amount),0) FROM expenses WHERE expense_date BETWEEN ? AND ?",[$from,$to]);
     $lowStock=(int)val("SELECT COUNT(*) FROM products WHERE stock<=low_stock");
     $store=setting('store_name','Luprah Trading');
@@ -221,6 +222,7 @@ try {
       <tr><td>Orders</td><td><b>".count($os)."</b></td></tr>
       <tr><td>Delivered</td><td><b>$del orders · $units pcs</b></td></tr>
       <tr><td>Returned/Cancelled</td><td><b>$ret</b></td></tr>
+      <tr><td>Exchanged</td><td><b>$exch</b></td></tr>
       <tr><td>Revenue</td><td><b>Rs.".number_format($rev)."</b></td></tr>
       <tr><td>Gross Profit (after delivery)</td><td><b>Rs.".number_format($prof)."</b></td></tr>
       <tr><td>Expenses</td><td><b>Rs.".number_format($exp)."</b></td></tr>

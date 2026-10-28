@@ -72,13 +72,14 @@ $orders = rows("SELECT o.*, p.name AS product_name FROM orders o
                 ORDER BY o.order_date DESC, o.id DESC",[$dzId,$mStart,$mEnd]);
 $ads = rows("SELECT * FROM daraz_ads WHERE spend_date BETWEEN ? AND ? ORDER BY spend_date DESC, id DESC",[$mStart,$mEnd]);
 
-$mOrders=count($orders); $mRev=0; $mCost=0; $mDelv=0; $mDel=0; $mRet=0; $mGross=0; $mUnits=0;
+$mOrders=count($orders); $mRev=0; $mCost=0; $mDelv=0; $mDel=0; $mRet=0; $mExch=0; $mGross=0; $mUnits=0;
 foreach ($orders as $o) {
   if ($o['status']==='delivered') {
     $mDel++; $mUnits+=(int)$o['qty']; $line=(float)$o['sell_price']*(int)$o['qty'];
     $mRev+=$line; $mCost+=(float)$o['cost_price']*(int)$o['qty']; $mDelv+=(float)$o['delivery_charge'];
     $mGross+=order_profit($o);
   } elseif (in_array($o['status'],['returned','cancelled'],true)) { $mRet++; $mGross+=order_profit($o); }
+  elseif ($o['status']==='exchanged') { $mExch++; $mGross+=order_profit($o); }
 }
 $mAds=(float)val("SELECT COALESCE(SUM(amount),0) FROM daraz_ads WHERE spend_date BETWEEN ? AND ?",[$mStart,$mEnd]);
 $mNet=$mGross-$mAds;
@@ -136,7 +137,7 @@ echo delivery_disabled_banner('daraz.php');
       <td style="text-align:right"><?= money($o['sell_price']) ?></td>
       <td style="text-align:right"><?= money($o['cost_price']) ?></td>
       <td style="text-align:right;font-weight:800;color:<?= ($isDel?$prof:$pot)>=0?'var(--green)':'var(--red)' ?>">
-        <?= $isDel ? money($prof) : (in_array($o['status'],['returned','cancelled'],true) ? money($prof) : '≈ '.money($pot)) ?></td>
+        <?= $isDel ? money($prof) : (in_array($o['status'],['returned','cancelled','exchanged'],true) ? money($prof) : '≈ '.money($pot)) ?></td>
       <td>
         <form method="post" style="display:flex;gap:5px;align-items:center">
           <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="set_status">

@@ -14,7 +14,8 @@ $pw  = $pid ? " AND o.product_id = ".$pid : "";
 $allProducts = rows("SELECT id,name FROM products ORDER BY name");
 $pName = $pid ? (string)val("SELECT name FROM products WHERE id=?",[$pid]) : '';
 
-$orders = rows("SELECT o.phone, o.customer, o.sell_price, o.cost_price, o.delivery_charge, o.cancel_charge, o.qty, o.status, o.order_date, o.product_id
+ensure_order_exchange_cols();
+$orders = rows("SELECT o.phone, o.customer, o.sell_price, o.cost_price, o.delivery_charge, o.cancel_charge, o.exchange_charge, o.qty, o.status, o.order_date, o.product_id
                 FROM orders o WHERE (COALESCE(o.customer,'')<>'' OR COALESCE(o.phone,'')<>'') $pw ORDER BY o.order_date");
 
 /* ---- per-customer roll-up — grouped by phone, falling back to name so
@@ -36,6 +37,9 @@ foreach($orders as $o){
   } elseif(in_array($o['status'],['returned','cancelled'],true)) {
     $c['bad']++;
     $c['profit']-=(float)$o['cancel_charge'];
+  } elseif($o['status']==='exchanged') {
+    $c['bad']++;
+    $c['profit']-=(float)$o['exchange_charge'];
   }
   unset($c);
 }

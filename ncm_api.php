@@ -353,6 +353,11 @@ function ncm_ensure_cols(){ static $ok=false; if($ok)return;
       if(!$has) q($ddl);
     } catch (Exception $e) {}
   }
+  /* ncm_order_id/phone are looked up by equality constantly (dupe checks, linking,
+     comment matching) but were never indexed when added via ALTER — each lookup
+     was a full-table scan. */
+  try { q("ALTER TABLE orders ADD INDEX idx_ncm_order_id (ncm_order_id)"); } catch (Exception $e) {}
+  try { q("ALTER TABLE orders ADD INDEX idx_phone (phone)"); } catch (Exception $e) {}
   $ok=true;
 }
 
@@ -361,7 +366,7 @@ function ncm_ensure_cols(){ static $ok=false; if($ok)return;
 function ncm_scan_today_comments($cap=120){
   $today=date('Y-m-d');
   $ids=[];
-  foreach(rows("SELECT ncm_order_id FROM orders WHERE COALESCE(ncm_order_id,'')<>'' AND status NOT IN ('delivered','cancelled','returned') ORDER BY id DESC LIMIT ".(int)$cap) as $r)
+  foreach(rows("SELECT ncm_order_id FROM orders WHERE COALESCE(ncm_order_id,'')<>'' AND status NOT IN ('delivered','cancelled','returned','exchanged') ORDER BY id DESC LIMIT ".(int)$cap) as $r)
     $ids[(string)$r['ncm_order_id']]=1;
   /* include ids seen in the bulk feed too (covers just-delivered ones still chatting) */
   try { foreach(ncm()->bulkComments() as $c){ $oid=(string)($c['orderid']??($c['order']??'')); if($oid!=='')$ids[$oid]=1; } } catch (Exception $e) {}

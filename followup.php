@@ -18,7 +18,7 @@ function fu_phone_stats(){
     if(!isset($st[$k])) $st[$k]=['orders'=>0,'delivered'=>0,'returned'=>0];
     $st[$k]['orders']++;
     if($o['status']==='delivered') $st[$k]['delivered']++;
-    elseif(in_array($o['status'],['returned','cancelled'],true)) $st[$k]['returned']++;
+    elseif(in_array($o['status'],['returned','cancelled','exchanged'],true)) $st[$k]['returned']++;
   }
   return $st;
 }

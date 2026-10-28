@@ -188,7 +188,7 @@ if (ncm()->configured()) { try { $bs=ncm()->branches(); $connected=is_array($bs)
 $orders = rows("SELECT o.*, p.name AS product_name FROM orders o
   LEFT JOIN products p ON p.id=o.product_id LEFT JOIN couriers c ON c.id=o.courier_id
   WHERE (c.name LIKE '%NCM%' OR o.courier_id IS NULL)
-    AND o.status NOT IN ('delivered','cancelled','returned')
+    AND o.status NOT IN ('delivered','cancelled','returned','exchanged')
   ORDER BY o.id DESC");
 
 $bookedIds = array_values(array_filter(array_map(fn($o)=>$o['ncm_order_id']??null, $orders)));

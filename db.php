@@ -164,6 +164,26 @@ function fifo_status_change($orderId,$pid,$qty,$oldStatus,$newStatus,$channel='s
   $was=($oldStatus==='delivered'); $is=($newStatus==='delivered');
   if(!$was&&$is)  fifo_consume($orderId,$pid,$qty,$channel);
   if($was&&!$is)  fifo_restore($orderId,$pid,$channel);
+  if($was&&$is&&$orderId){
+    /* status stayed 'delivered' but the product or qty may have just been
+       edited (a typo fix). Same bug class already fixed for HH/Dropex
+       (see hh_on_status_change) — without this, the OLD product stays
+       wrongly decremented and the NEW product is never decremented at all. */
+    $existingUses = rows("SELECT bu.qty, sb.product_id FROM batch_use bu
+                          JOIN stock_batches sb ON sb.id=bu.batch_id
+                          WHERE bu.order_id=? AND bu.channel=?",[(int)$orderId,$channel]);
+    if ($existingUses) {
+      $oldQty=array_sum(array_column($existingUses,'qty'));
+      $oldPid=(int)$existingUses[0]['product_id'];
+      if ($oldPid!==$pid || $oldQty!==$qty) {
+        fifo_restore($orderId,$oldPid,$channel);
+        fifo_consume($orderId,$pid,$qty,$channel);
+      }
+    }
+    /* no batch_use rows = order delivered before FIFO tracking existed; we have
+       no reliable record of what it originally consumed, so leave it alone
+       rather than guess — same conservative choice fifo_restore() already makes */
+  }
 }
 
 /* ============================================================
@@ -258,10 +278,12 @@ function unsample_stock($sampleId) { ensure_stock_samples(); return _stock_pool_
 function cod_holdings() {
   $out = [];
   try {
+    ensure_order_exchange_cols();
     $agg = rows("SELECT o.courier_id AS cid, COALESCE(c.name,'(no courier)') AS name,
                         SUM(CASE WHEN o.status='delivered' AND o.payment_type='cod' THEN o.sell_price*o.qty ELSE 0 END) AS collected,
                         SUM(CASE WHEN o.status='delivered' THEN o.delivery_charge ELSE 0 END) AS dfees,
-                        SUM(CASE WHEN o.status IN ('cancelled','returned') THEN o.cancel_charge ELSE 0 END) AS cfees
+                        SUM(CASE WHEN o.status IN ('cancelled','returned') THEN o.cancel_charge
+                                 WHEN o.status='exchanged' THEN o.exchange_charge ELSE 0 END) AS cfees
                  FROM orders o LEFT JOIN couriers c ON c.id=o.courier_id
                  WHERE o.courier_id IS NOT NULL
                  GROUP BY o.courier_id, c.name");
@@ -696,6 +718,23 @@ function repair_zero_cost_profit() { static $done=false; if($done) return; $done
     }
   } catch (Exception $e) {}
 }
+/* followup.php's confirm-before-dispatch workflow — these columns already exist on
+   production (added outside this repo's history) but were never captured in
+   database.sql or any ensure_*() function, so a fresh install hit an undefined
+   function fatal error here. Types match the live schema exactly. */
+function ensure_followup() { static $ok=false; if($ok) return; $ok=true;
+  foreach ([
+    'confirm_status' => "ALTER TABLE orders ADD COLUMN confirm_status VARCHAR(24) NOT NULL DEFAULT 'pending'",
+    'confirm_by'      => "ALTER TABLE orders ADD COLUMN confirm_by INT NULL",
+    'confirm_at'      => "ALTER TABLE orders ADD COLUMN confirm_at DATETIME NULL",
+  ] as $col=>$ddl) {
+    try {
+      $has=(int)val("SELECT COUNT(*) FROM information_schema.COLUMNS
+                     WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='orders' AND COLUMN_NAME=?",[$col]);
+      if(!$has) q($ddl);
+    } catch (Exception $e) {}
+  }
+}
 function ensure_order_group() { static $ok=false; if($ok) return;
   /* portable across MySQL and MariaDB: probe information_schema, then plain ALTER (no IF NOT EXISTS) */
   try {
@@ -703,6 +742,9 @@ function ensure_order_group() { static $ok=false; if($ok) return;
                      WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='orders' AND COLUMN_NAME='order_group'");
     if (!$has) q("ALTER TABLE orders ADD COLUMN order_group VARCHAR(24) NULL");
   } catch (Exception $e) {}
+  /* without this, every order_group lookup/join (sales.php's main sort, ncm.php's
+     group self-heal) is a full-table scan on an unindexed VARCHAR column */
+  try { q("ALTER TABLE orders ADD INDEX idx_order_group (order_group)"); } catch (Exception $e) {}
   $ok=true;
 }
 /* 'exchanged': customer got the wrong/damaged item and we sent a replacement.

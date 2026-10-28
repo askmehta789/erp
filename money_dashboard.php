@@ -28,13 +28,15 @@ try { q("CREATE TABLE IF NOT EXISTS cod_ledger(id INT AUTO_INCREMENT PRIMARY KEY
   type ENUM('in','out') NOT NULL DEFAULT 'in', courier_id INT NULL, amount DECIMAL(12,2) NOT NULL DEFAULT 0,
   method VARCHAR(20) DEFAULT 'cash', reference VARCHAR(80) DEFAULT '', note VARCHAR(255) DEFAULT '',
   created_by VARCHAR(80) DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"); } catch (Exception $e) {}
+ensure_order_exchange_cols();
 $couriers = rows("SELECT id,name FROM couriers");
 $codCollected=0; $codCharges=0;
 foreach($couriers as $c){
-  $rows_ = rows("SELECT status, sell_price, qty, delivery_charge, cancel_charge FROM orders WHERE courier_id=?",[$c['id']]);
+  $rows_ = rows("SELECT status, sell_price, qty, delivery_charge, cancel_charge, exchange_charge FROM orders WHERE courier_id=?",[$c['id']]);
   foreach($rows_ as $o){
     if($o['status']==='delivered'){ $codCollected+=(float)$o['sell_price']*(int)$o['qty']; $codCharges+=(float)$o['delivery_charge']; }
     elseif(in_array($o['status'],['returned','cancelled'],true)){ $codCharges+=(float)$o['cancel_charge']; }
+    elseif($o['status']==='exchanged'){ $codCharges+=(float)$o['exchange_charge']; }
   }
 }
 $codNetPayable = $codCollected - $codCharges;

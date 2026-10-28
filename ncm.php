@@ -236,13 +236,16 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
         $rc=null;
         if(!(isset($o['cancel_charge']) && (float)$o['cancel_charge']>0))
           $rc=ncm_return_charge($o['ncm_order_id']??'', isset($o['delivery_charge'])?(float)$o['delivery_charge']:null);
+        /* also mirror the real NCM charge onto delivery_charge — same as Pick & Drop keeps
+           its delivery_charge in sync with the courier's live (RTV-discounted) number —
+           so the Sales grid's Delivery column shows the real amount, not the pre-return one */
         if($o['status']!=='returned'){
-          if($rc!==null && $rc>0) q("UPDATE orders SET status='returned', ncm_return_flag=2, cancel_charge=? WHERE id=?",[$rc,$id]);
+          if($rc!==null && $rc>0) q("UPDATE orders SET status='returned', ncm_return_flag=2, cancel_charge=?, delivery_charge=? WHERE id=?",[$rc,$rc,$id]);
           else                    q("UPDATE orders SET status='returned', ncm_return_flag=2 WHERE id=?",[$id]);
           stock_on_status_change($o['product_id']??0,$o['qty']??0,$o['status'],'returned',$id);
           log_activity("Return confirmed for ".($o['code']??('#'.$id)).($rc?" (NCM charge Rs.".$rc.")":''),'NCM');
         } else {
-          if($rc!==null && $rc>0) q("UPDATE orders SET ncm_return_flag=2, cancel_charge=? WHERE id=?",[$rc,$id]);
+          if($rc!==null && $rc>0) q("UPDATE orders SET ncm_return_flag=2, cancel_charge=?, delivery_charge=? WHERE id=?",[$rc,$rc,$id]);
           else                    q("UPDATE orders SET ncm_return_flag=2 WHERE id=?",[$id]);
         }
         flash('↩ Marked as returned.');
@@ -533,7 +536,9 @@ if ($liveStatus) {
              but only if a charge isn't already set manually (never overwrite a human-entered number) */
           if (!(isset($o['cancel_charge']) && (float)$o['cancel_charge']>0)) {
             $rc = ncm_return_charge($nid, isset($o['delivery_charge'])?(float)$o['delivery_charge']:null);
-            if ($rc!==null && $rc>0) { try { q("UPDATE orders SET cancel_charge=? WHERE id=?",[$rc,$o['id']]); } catch (Exception $e) {} }
+            /* mirror onto delivery_charge too — same as Pick & Drop keeps delivery_charge in
+               sync with the courier's live (RTV-discounted) number */
+            if ($rc!==null && $rc>0) { try { q("UPDATE orders SET cancel_charge=?, delivery_charge=? WHERE id=?",[$rc,$rc,$o['id']]); } catch (Exception $e) {} }
           }
           notify("NCM returned order $ocode ↩️", 'ncm', 'ncm.php', 24);
         }

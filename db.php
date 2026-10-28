@@ -167,6 +167,67 @@ function fifo_status_change($orderId,$pid,$qty,$oldStatus,$newStatus,$channel='s
 }
 
 /* ============================================================
+   DAMAGED STOCK
+   Courier returns sometimes come back broken/unsellable. This writes
+   off units from the FIFO batches (oldest first, same shrinkage policy
+   as a physical recount) and logs the loss so it shows up as a real
+   cost instead of silently vanishing from stock.
+   ============================================================ */
+function ensure_stock_damage() {
+  static $done=false; if($done) return; $done=true;
+  try {
+    q("CREATE TABLE IF NOT EXISTS stock_damage(
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        product_id INT NOT NULL,
+        qty INT NOT NULL,
+        unit_cost DECIMAL(12,2) NOT NULL DEFAULT 0,
+        reason VARCHAR(160) DEFAULT '',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        INDEX(product_id))");
+  } catch (Exception $e) {}
+}
+
+/* write off $qty units of $pid as damaged; returns ['qty','unit_cost','value'] actually
+   removed (capped to what's on hand), or null if there was nothing to remove */
+function damage_stock($pid, $qty, $reason='') {
+  ensure_stock_damage(); ensure_stock_batches();
+  $pid=(int)$pid; $qty=(int)$qty;
+  if (!$pid || $qty<=0) return null;
+  batches_migrate($pid);
+  $avail = (int)val("SELECT COALESCE(SUM(qty_left),0) FROM stock_batches WHERE product_id=?",[$pid]);
+  $qty = min($qty, $avail);
+  if ($qty<=0) return null;
+  $need=$qty; $costTotal=0;
+  foreach (rows("SELECT id,qty_left,unit_cost FROM stock_batches WHERE product_id=? AND qty_left>0 ORDER BY purchase_date,id",[$pid]) as $b) {
+    if ($need<=0) break;
+    $take=min($need,(int)$b['qty_left']);
+    q("UPDATE stock_batches SET qty_left=qty_left-? WHERE id=?",[$take,(int)$b['id']]);
+    $costTotal += $take*(float)$b['unit_cost'];
+    $need-=$take;
+  }
+  $unitCost = round($costTotal/max(1,$qty),2);
+  q("INSERT INTO stock_damage(product_id,qty,unit_cost,reason) VALUES(?,?,?,?)",[$pid,$qty,$unitCost,trim($reason)]);
+  stock_cache($pid);
+  return ['qty'=>$qty,'unit_cost'=>$unitCost,'value'=>round($costTotal,2)];
+}
+
+/* undo a damage entry: delete the log row and put the units back into the
+   oldest open batch (or a fresh correction batch if none are left open) */
+function undamage_stock($damageId) {
+  ensure_stock_damage();
+  $d = row("SELECT * FROM stock_damage WHERE id=?",[(int)$damageId]);
+  if (!$d) return null;
+  $pid=(int)$d['product_id']; $qty=(int)$d['qty'];
+  $b = row("SELECT id FROM stock_batches WHERE product_id=? ORDER BY purchase_date,id LIMIT 1",[$pid]);
+  if ($b) q("UPDATE stock_batches SET qty_left=qty_left+? WHERE id=?",[$qty,(int)$b['id']]);
+  else q("INSERT INTO stock_batches(product_id,purchase_date,qty_in,qty_left,unit_cost,note) VALUES(?,?,?,?,?,'Damage reversed')",
+          [$pid,date('Y-m-d'),$qty,$qty,(float)$d['unit_cost']]);
+  q("DELETE FROM stock_damage WHERE id=?",[(int)$damageId]);
+  stock_cache($pid);
+  return $d;
+}
+
+/* ============================================================
    BUSINESS ALERT CALCULATORS (shared by pages + cron)
    ============================================================ */
 /* per-courier COD money position.

@@ -1,9 +1,11 @@
 <?php
 require_once __DIR__.'/functions.php'; require_login(); require_page_access();
 repair_zero_cost_profit();   /* auto-fix orders saved with Rs.0 cost so profit is honest everywhere */
+$canManageDamage = can_manage_damage();   /* Admin/Manager only — writing off stock is a loss, not a routine edit */
 
 /* ---- stock actions (batches) ---- */
 ensure_stock_batches();
+ensure_stock_damage();
 if (function_exists('ensure_hh_stock')) ensure_hh_stock();
 if (function_exists('ensure_dropex_stock')) ensure_dropex_stock();
 try { q("CREATE TABLE IF NOT EXISTS suppliers (
@@ -105,6 +107,34 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && in_array($_POST['_action'] ?? '', ['e
   $returnTo = (str_starts_with($returnTo,'product_detail.php?') || str_starts_with($returnTo,'products.php?')) ? $returnTo : ('products.php?open='.$pidForReturn.'#batches-'.$pidForReturn);
   header('Location: '.$returnTo); exit;
 }
+if ($_SERVER['REQUEST_METHOD']==='POST' && ($_POST['_action'] ?? '')==='damage_stock') {
+  check_csrf();
+  if (!can_manage_damage()) { flash('Only Admins and Managers can mark stock as damaged.'); header('Location: products.php'); exit; }
+  $pid=(int)($_POST['id'] ?? 0);
+  $qty=max(0,(int)($_POST['qty'] ?? 0));
+  $reason=trim((string)($_POST['reason'] ?? ''));
+  $res = damage_stock($pid,$qty,$reason);
+  if ($res) {
+    log_activity("Marked {$res['qty']} pcs damaged for product #$pid (".money($res['value']).")".($reason?" — $reason":''),'Stock');
+    flash("💥 Marked {$res['qty']} pcs damaged — ".money($res['value'])." written off.".($res['qty']<$qty?' (capped to stock on hand)':''));
+  } else {
+    flash('Nothing to mark — check the quantity and stock on hand.');
+  }
+  $returnTo = trim((string)($_POST['return_to'] ?? ''));
+  $returnTo = (str_starts_with($returnTo,'product_detail.php?') || str_starts_with($returnTo,'products.php?')) ? $returnTo : ('products.php?open='.$pid.'#batches-'.$pid);
+  header('Location: '.$returnTo); exit;
+}
+if ($_SERVER['REQUEST_METHOD']==='POST' && ($_POST['_action'] ?? '')==='undamage_stock') {
+  check_csrf();
+  if (!can_manage_damage()) { flash('Only Admins and Managers can undo a damage entry.'); header('Location: products.php'); exit; }
+  $did=(int)($_POST['damage_id'] ?? 0);
+  $d = undamage_stock($did);
+  if ($d) { log_activity("Reversed damage entry #$did (product #{$d['product_id']}, +{$d['qty']} pcs restored)",'Stock'); flash('Damage entry removed — stock restored.'); }
+  else flash('Damage entry not found — it may have already been removed.');
+  $returnTo = trim((string)($_POST['return_to'] ?? ''));
+  $returnTo = (str_starts_with($returnTo,'product_detail.php?') || str_starts_with($returnTo,'products.php?')) ? $returnTo : 'products.php';
+  header('Location: '.$returnTo); exit;
+}
 if ($_SERVER['REQUEST_METHOD']==='POST' && ($_POST['_action'] ?? '')==='bulk_category') {
   check_csrf();
   $ids = array_filter(array_map('intval', explode(',', (string)($_POST['ids'] ?? ''))));
@@ -155,6 +185,14 @@ foreach($bat as $pid=>$list){ $units=array_sum(array_map(fn($b)=>(int)$b['qty_le
    "Oldest batch: Xd" age display and the Aging filter */
 $oldestOpenBatch = [];
 foreach($bat as $pid=>$list) foreach($list as $b) if((int)$b['qty_left']>0) { $oldestOpenBatch[$pid]=$b['purchase_date']; break; }
+/* damaged/written-off stock per product (courier returns that came back unsellable) */
+$damageQty=[]; $damageVal=[];
+foreach(rows("SELECT product_id, SUM(qty) AS q, SUM(qty*unit_cost) AS v FROM stock_damage GROUP BY product_id") as $r){
+  $damageQty[(int)$r['product_id']] = (int)$r['q'];
+  $damageVal[(int)$r['product_id']] = (float)$r['v'];
+}
+$tDamageQty = array_sum($damageQty); $tDamageVal = array_sum($damageVal);
+
 /* Hungry Hunter movement history per product, for the flow panel */
 $hhMoves=[];
 foreach(rows("SELECT * FROM hh_stock ORDER BY product_id, created_at, id") as $m){ $hhMoves[(int)$m['product_id']][]=$m; }
@@ -456,6 +494,7 @@ body.dark .pd3-foot a.view{background:rgba(59,130,246,.18);color:#7dd3fc}
   <div class="pd3-tile b"><b><?= number_format($tRes) ?></b><span>Reserved</span></div>
   <div class="pd3-tile t"><b><?= money($tStockValue) ?></b><span>Stock Value</span></div>
   <div class="pd3-tile r"><b><?= money($deadStockValue) ?></b><span>Dead Stock Value<?= $deadStockCount ? ' ('.$deadStockCount.')' : '' ?></span></div>
+  <div class="pd3-tile r"><b><?= money($tDamageVal) ?></b><span>Damaged Stock<?= $tDamageQty ? ' ('.number_format($tDamageQty).' pcs)' : '' ?></span></div>
   <div class="pd3-tile b"><b><?= number_format($tLifeQty) ?></b><span>Lifetime Purchased</span></div>
   <div class="pd3-tile t"><b><?= money($tLifeAmt) ?></b><span>Purchase Amount</span></div>
   <div class="pd3-tile a"><b><?= number_format($tSold) ?></b><span>Units Sold</span></div>
@@ -518,6 +557,8 @@ body.dark .pd3-foot a.view{background:rgba(59,130,246,.18);color:#7dd3fc}
   $coverDays = $pd28>0 ? (int)floor($st/$pd28) : 999999;
   $retRate = $a['orders']>0 ? round($a['returned']/$a['orders']*100,1) : 0;
   $stockValue = $batVal[$p['id']] ?? 0;
+  $pDamageQty = $damageQty[$p['id']] ?? 0;
+  $pDamageVal = $damageVal[$p['id']] ?? 0;
   $deadStock = $st>0 && (($soldRecent[$p['id']] ?? 0) === 0);
   $agingFlag = $ageDays>=0 && $ageDays>=$stockAgeWarnDays;
   /* RTO cost/pc: what returned/cancelled parcels for this product cost us (courier's
@@ -588,12 +629,14 @@ body.dark .pd3-foot a.view{background:rgba(59,130,246,.18);color:#7dd3fc}
       <?php if($roas!==null): ?><span class="pd3-chip <?= $roas>=2?'ok':'out' ?>"><?= $roas ?>× ROAS</span><?php endif; ?>
       <?php if(isset($reoMap[$p['id']])): ?><span class="pd3-chip out">🛒 ~<?= $reoMap[$p['id']]['cover_days'] ?>d cover</span><?php endif; ?>
       <?php if($a['sold']>0): ?><span class="pd3-chip <?= $highRto?'out':'' ?>">🔁 <?= money($rtoCost) ?>/pc RTO</span><?php endif; ?>
+      <?php if($pDamageQty>0): ?><span class="pd3-chip out">💥 <?= $pDamageQty ?> damaged</span><?php endif; ?>
     </div>
     <?php if($adsVerdict==='stop'): ?><div class="pd3-verdict stop">🔴 Stop ads suggested</div>
     <?php elseif($adsVerdict==='watch'): ?><div class="pd3-verdict watch">🟡 Watch ad spend</div><?php endif; ?>
     <div class="pd3-foot">
       <a class="view" href="product_detail.php?id=<?= (int)$p['id'] ?>">📄 Details</a>
       <button type="button" onclick="openStock(<?= (int)$p['id'] ?>,'<?= e(addslashes($p['name'])) ?>',<?= (float)$p['cost'] ?>)">📦+</button>
+      <?php if($canManageDamage): ?><button type="button" onclick="openDamage(<?= (int)$p['id'] ?>,'<?= e(addslashes($p['name'])) ?>',<?= (int)$st ?>)">💥</button><?php endif; ?>
       <button type="button" data-rec="<?= e(json_encode($p)) ?>" onclick="crudEdit('products',this)">✏️</button>
     </div>
   </div>
@@ -625,6 +668,25 @@ body.dark .pd3-foot a.view{background:rgba(59,130,246,.18);color:#7dd3fc}
     </form>
   </div>
 </div>
+
+<?php if($canManageDamage): ?>
+<!-- mark damaged stock modal -->
+<div class="modal-bg" id="damageModal" style="z-index:99990">
+  <div class="modal" style="width:420px;max-width:94vw">
+    <div class="modal-head"><span>💥 Mark Damaged Stock — <span id="dm_name"></span></span><span class="mx" onclick="closeDamage()">✕</span></div>
+    <form method="post" style="padding:18px 22px" class="fgrid">
+      <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="damage_stock"><input type="hidden" name="id" id="dm_id">
+      <div class="full muted" style="font-size:11.5px" id="dm_hint"></div>
+      <div><label>Quantity (pcs) *</label><input type="number" name="qty" id="dm_qty" min="1" required placeholder="e.g. 2"></div>
+      <div class="full"><label>Reason</label><input name="reason" placeholder="e.g. damaged in courier return"></div>
+      <div class="full" style="display:flex;justify-content:flex-end;gap:10px;margin-top:4px">
+        <button type="button" class="btn" onclick="closeDamage()">Cancel</button>
+        <button class="btn btn-primary" style="background:#dc2626">💥 Write Off</button>
+      </div>
+    </form>
+  </div>
+</div>
+<?php endif; ?>
 <script>
 function openStock(id,name,cost,suggestQty){
   document.getElementById('sm_id').value=id;
@@ -635,6 +697,17 @@ function openStock(id,name,cost,suggestQty){
 }
 function closeStock(){document.getElementById('stockModal').classList.remove('open');}
 document.getElementById('stockModal').addEventListener('click',function(e){if(e.target===this)closeStock();});
+
+function openDamage(id,name,onHand){
+  document.getElementById('dm_id').value=id;
+  document.getElementById('dm_name').textContent=name;
+  document.getElementById('dm_qty').value='';
+  document.getElementById('dm_qty').max=onHand||'';
+  document.getElementById('dm_hint').textContent = onHand+' pcs currently on the shelf for this product.';
+  document.getElementById('damageModal').classList.add('open');
+}
+function closeDamage(){document.getElementById('damageModal').classList.remove('open');}
+if(document.getElementById('damageModal')) document.getElementById('damageModal').addEventListener('click',function(e){if(e.target===this)closeDamage();});
 
 document.getElementById('pd3Search').addEventListener('input', pd3ApplyFilters);
 var pd3ActiveFilter = 'all';

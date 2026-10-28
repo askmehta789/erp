@@ -92,7 +92,9 @@ try {
           elseif($mapped==='returned'){
             if(!(isset($o['cancel_charge']) && (float)$o['cancel_charge']>0)){
               $rc=ncm_return_charge($o['ncm_order_id']??'', isset($o['delivery_charge'])?(float)$o['delivery_charge']:null);
-              if($rc!==null && $rc>0){ try{ q("UPDATE orders SET cancel_charge=? WHERE id=?",[$rc,$o['id']]); }catch(Exception $e){} }
+              /* mirror onto delivery_charge too — same as Pick & Drop keeps delivery_charge in
+                 sync with the courier's live (RTV-discounted) number */
+              if($rc!==null && $rc>0){ try{ q("UPDATE orders SET cancel_charge=?, delivery_charge=? WHERE id=?",[$rc,$rc,$o['id']]); }catch(Exception $e){} }
             }
             cnotify("NCM returned order $oc ↩️",'ncm','ncm.php',24);
           }

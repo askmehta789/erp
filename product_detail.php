@@ -2,6 +2,8 @@
 require_once __DIR__.'/functions.php'; require_login(); require_page_access();
 repair_zero_cost_profit();
 ensure_stock_batches();
+ensure_stock_damage();
+$canManageDamage = can_manage_damage();   /* Admin/Manager only — writing off stock is a loss, not a routine edit */
 if (function_exists('ensure_hh_stock')) ensure_hh_stock();
 if (function_exists('ensure_dropex_stock')) ensure_dropex_stock();
 $PAGE_TITLE='Product Detail';
@@ -63,6 +65,11 @@ foreach($bat as $b){
 }
 $batUnits = array_sum(array_map(fn($b)=>(int)$b['qty_left'],$bat));
 $batAvg = $batUnits>0 ? round($batVal/$batUnits,2) : null;
+
+/* ---- damaged/written-off stock for this product ---- */
+$damage = rows("SELECT * FROM stock_damage WHERE product_id=? ORDER BY created_at DESC, id DESC",[$pid]);
+$damageQty = array_sum(array_column($damage,'qty'));
+$damageVal = array_sum(array_map(fn($d)=>(int)$d['qty']*(float)$d['unit_cost'],$damage));
 
 /* ---- stock position (same logic as products.php, scoped to one product) ---- */
 $hhCid = function_exists('hh_courier_id') ? hh_courier_id() : 0;
@@ -202,6 +209,7 @@ require __DIR__.'/includes/header.php';
   </div>
   <div class="pdd-acts">
     <button class="btn btn-sm" onclick="openStock(<?= (int)$p['id'] ?>,'<?= e(addslashes($p['name'])) ?>',<?= (float)$p['cost'] ?>)">📦+ Add Stock</button>
+    <?php if($canManageDamage): ?><button class="btn btn-sm" style="color:#dc2626" onclick="openDamage(<?= (int)$p['id'] ?>,'<?= e(addslashes($p['name'])) ?>',<?= (int)$st ?>)">💥 Mark Damaged</button><?php endif; ?>
     <button class="btn btn-sm" data-rec="<?= e(json_encode($p)) ?>" onclick="crudEdit('products',this)">✏️ Edit</button>
     <form method="post" action="products.php" style="display:inline" onsubmit="return confirm('Delete this product?')"><input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="delete"><input type="hidden" name="id" value="<?= (int)$p['id'] ?>"><button class="btn btn-sm" style="color:var(--red)">🗑 Delete</button></form>
   </div>
@@ -301,6 +309,33 @@ require __DIR__.'/includes/header.php';
     <div><label style="font-size:11px;color:var(--muted);font-weight:700">Physical recount — set exact</label><br><input type="number" name="qty" min="0" value="<?= $st ?>" style="width:110px"></div>
     <button class="btn btn-sm">Set</button>
   </form>
+</div>
+
+<div class="pdd-card">
+  <h3>💥 Damaged / Written-Off Stock</h3>
+  <?php if($damage): ?>
+  <div class="muted" style="font-size:11.5px;margin-bottom:8px">Lifetime: <b style="color:var(--ink)"><?= number_format($damageQty) ?> pcs</b> written off for <b style="color:var(--ink)"><?= money($damageVal) ?></b> total.</div>
+  <div class="table-wrap"><table class="tbl num-tbl"><thead><tr><th>Date</th><th>Qty</th><th>Rate</th><th>Value Lost</th><th style="text-align:left">Reason</th><th></th></tr></thead><tbody>
+    <?php foreach($damage as $d): ?>
+    <tr>
+      <td><?= e(date('d M Y',strtotime($d['created_at']))) ?></td>
+      <td style="font-weight:800"><?= (int)$d['qty'] ?></td>
+      <td><?= money($d['unit_cost']) ?></td>
+      <td style="color:var(--red)">− <?= money((int)$d['qty']*(float)$d['unit_cost']) ?></td>
+      <td style="text-align:left" class="muted"><?= e($d['reason']) ?></td>
+      <td style="text-align:right;white-space:nowrap">
+        <?php if($canManageDamage): ?>
+        <form method="post" action="products.php" style="display:inline" onsubmit="return confirm('Undo this damage entry? The stock will be restored.')">
+          <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="undamage_stock"><input type="hidden" name="damage_id" value="<?= (int)$d['id'] ?>">
+          <input type="hidden" name="return_to" value="product_detail.php?id=<?= (int)$p['id'] ?>">
+          <button class="iact del" title="Undo — restore stock">↩</button>
+        </form>
+        <?php endif; ?>
+      </td>
+    </tr>
+    <?php endforeach; ?>
+  </tbody></table></div>
+  <?php else: ?><span class="muted" style="font-size:12px">No damaged stock recorded.<?= $canManageDamage ? ' Click "💥 Mark Damaged" above when courier returns come back unsellable.' : ' Only Admins and Managers can record this.' ?></span><?php endif; ?>
 </div>
 
 <?php if($hhMoves): ?>
@@ -404,6 +439,26 @@ require __DIR__.'/includes/header.php';
     </form>
   </div>
 </div>
+
+<?php if($canManageDamage): ?>
+<!-- mark damaged stock modal (POSTs to products.php, returns here) -->
+<div class="modal-bg" id="damageModal" style="z-index:99990">
+  <div class="modal" style="width:420px;max-width:94vw">
+    <div class="modal-head"><span>💥 Mark Damaged Stock — <span id="dm_name"></span></span><span class="mx" onclick="closeDamage()">✕</span></div>
+    <form method="post" action="products.php" style="padding:18px 22px" class="fgrid">
+      <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="damage_stock"><input type="hidden" name="id" id="dm_id">
+      <input type="hidden" name="return_to" value="product_detail.php?id=<?= (int)$p['id'] ?>">
+      <div class="full muted" style="font-size:11.5px" id="dm_hint"></div>
+      <div><label>Quantity (pcs) *</label><input type="number" name="qty" id="dm_qty" min="1" required placeholder="e.g. 2"></div>
+      <div class="full"><label>Reason</label><input name="reason" placeholder="e.g. damaged in courier return"></div>
+      <div class="full" style="display:flex;justify-content:flex-end;gap:10px;margin-top:4px">
+        <button type="button" class="btn" onclick="closeDamage()">Cancel</button>
+        <button class="btn btn-primary" style="background:#dc2626">💥 Write Off</button>
+      </div>
+    </form>
+  </div>
+</div>
+<?php endif; ?>
 <script>
 function openStock(id,name,cost,suggestQty){
   document.getElementById('sm_id').value=id;
@@ -414,6 +469,17 @@ function openStock(id,name,cost,suggestQty){
 }
 function closeStock(){document.getElementById('stockModal').classList.remove('open');}
 document.getElementById('stockModal').addEventListener('click',function(e){if(e.target===this)closeStock();});
+
+function openDamage(id,name,onHand){
+  document.getElementById('dm_id').value=id;
+  document.getElementById('dm_name').textContent=name;
+  document.getElementById('dm_qty').value='';
+  document.getElementById('dm_qty').max=onHand||'';
+  document.getElementById('dm_hint').textContent = onHand+' pcs currently on the shelf for this product.';
+  document.getElementById('damageModal').classList.add('open');
+}
+function closeDamage(){document.getElementById('damageModal').classList.remove('open');}
+if(document.getElementById('damageModal')) document.getElementById('damageModal').addEventListener('click',function(e){if(e.target===this)closeDamage();});
 
 function openEditBatch(rec){
   document.getElementById('eb_id').value=rec.id;

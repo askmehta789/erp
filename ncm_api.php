@@ -345,9 +345,14 @@ function ncm_to_local_status(string $ncm): ?string {
    endpoint, GET /v1/order returns the current delivery_charge too, so
    this is what keeps delivery_charge in step with NCM (reweigh, RTV
    discount, …) the same way pickndrop's sync_one/sync_all does.
-   Returns ['raw'=>string,'charge'=>?float,'chargeChanged'=>bool,'statusChanged'=>bool,'newStatus'=>?string]. */
+   For a RETURNED (or returning) order, NCM reports the discounted
+   return fee on that SAME delivery_charge field, so this also mirrors
+   it onto cancel_charge — the loss figure Sales/reports actually use
+   for returns — refreshing it every sync instead of only once.
+   Returns ['raw'=>string,'charge'=>?float,'chargeChanged'=>bool,
+            'cancelChargeChanged'=>bool,'statusChanged'=>bool,'newStatus'=>?string]. */
 function ncm_sync_order_live(array $o): array {
-  $out = ['raw'=>'', 'charge'=>null, 'chargeChanged'=>false, 'statusChanged'=>false, 'newStatus'=>null];
+  $out = ['raw'=>'', 'charge'=>null, 'chargeChanged'=>false, 'cancelChargeChanged'=>false, 'statusChanged'=>false, 'newStatus'=>null];
   $nid = (string)($o['ncm_order_id'] ?? '');
   if ($nid==='') return $out;
 
@@ -361,31 +366,38 @@ function ncm_sync_order_live(array $o): array {
     q("UPDATE orders SET delivery_charge=? WHERE id=?", [$charge,$o['id']]);
     $out['chargeChanged'] = true;
   }
-  if ($liveRaw==='') return $out;
 
-  /* same classification the cron auto-sync uses, applied to this one order */
-  $curFlag = (int)($o['ncm_return_flag'] ?? 0);   /* 0 none · 1 confirm · 2 returned by you · 6 delivered by you */
-  $prevRaw = (string)($o['ncm_status'] ?? '');
-  $stg = ncm_return_stage($liveRaw);
-  $mapped = ncm_to_local_status($liveRaw);
+  $mapped = null;
+  if ($liveRaw!=='') {
+    /* same classification the cron auto-sync uses, applied to this one order */
+    $curFlag = (int)($o['ncm_return_flag'] ?? 0);   /* 0 none · 1 confirm · 2 returned by you · 6 delivered by you */
+    $prevRaw = (string)($o['ncm_status'] ?? '');
+    $stg = ncm_return_stage($liveRaw);
+    $mapped = ncm_to_local_status($liveRaw);
 
-  if ($curFlag===2 || $curFlag===6) $mapped = null;   /* human decisions are final */
-  if ($curFlag!==2 && $curFlag!==6 && ncm_vendor_bound($liveRaw)) { $mapped='returned'; $curFlag=2; $stg='final'; }
-  $wasReturnward = ($curFlag===1) || (ncm_return_stage($prevRaw)!=='none');
-  if ($mapped==='delivered' && $stg==='none' && $wasReturnward && $curFlag!==2 && $curFlag!==6) { $mapped=null; $stg='progress'; }
-  $newFlag = ($curFlag===2||$curFlag===6) ? $curFlag : ((($stg==='progress'||$stg==='ambiguous')?1:0));
+    if ($curFlag===2 || $curFlag===6) $mapped = null;   /* human decisions are final */
+    if ($curFlag!==2 && $curFlag!==6 && ncm_vendor_bound($liveRaw)) { $mapped='returned'; $curFlag=2; $stg='final'; }
+    $wasReturnward = ($curFlag===1) || (ncm_return_stage($prevRaw)!=='none');
+    if ($mapped==='delivered' && $stg==='none' && $wasReturnward && $curFlag!==2 && $curFlag!==6) { $mapped=null; $stg='progress'; }
+    $newFlag = ($curFlag===2||$curFlag===6) ? $curFlag : ((($stg==='progress'||$stg==='ambiguous')?1:0));
 
-  try { q("UPDATE orders SET ncm_status=?, ncm_return_flag=? WHERE id=?", [$liveRaw,$newFlag,$o['id']]); } catch (Exception $e) {}
+    try { q("UPDATE orders SET ncm_status=?, ncm_return_flag=? WHERE id=?", [$liveRaw,$newFlag,$o['id']]); } catch (Exception $e) {}
 
-  if ($mapped && $mapped !== $o['status']) {
-    fifo_status_change((int)$o['id'],(int)$o['product_id'],(int)$o['qty'],$o['status'],$mapped);
-    if ($mapped==='delivered') q("UPDATE orders SET status='delivered',payment_status='paid' WHERE id=?",[$o['id']]);
-    else q("UPDATE orders SET status=? WHERE id=?",[$mapped,$o['id']]);
-    if ($mapped==='returned' && !((float)($o['cancel_charge'] ?? 0)>0) && $charge!==null && $charge>0) {
-      try { q("UPDATE orders SET cancel_charge=? WHERE id=?", [$charge,$o['id']]); } catch (Exception $e) {}
+    if ($mapped && $mapped !== $o['status']) {
+      fifo_status_change((int)$o['id'],(int)$o['product_id'],(int)$o['qty'],$o['status'],$mapped);
+      if ($mapped==='delivered') q("UPDATE orders SET status='delivered',payment_status='paid' WHERE id=?",[$o['id']]);
+      else q("UPDATE orders SET status=? WHERE id=?",[$mapped,$o['id']]);
+      $out['statusChanged'] = true;
+      $out['newStatus'] = $mapped;
     }
-    $out['statusChanged'] = true;
-    $out['newStatus'] = $mapped;
+  }
+
+  /* cancel/return charge: keep it mirrored to NCM's live figure for any order
+     that is (or has just become) returned/cancelled — not just the first time. */
+  $finalStatus = $mapped ?: $o['status'];
+  if (in_array($finalStatus, ['returned','cancelled'], true) && $charge!==null && $charge>0
+      && abs($charge-(float)($o['cancel_charge'] ?? 0))>0.005) {
+    try { q("UPDATE orders SET cancel_charge=? WHERE id=?", [$charge,$o['id']]); $out['cancelChargeChanged']=true; } catch (Exception $e) {}
   }
   return $out;
 }

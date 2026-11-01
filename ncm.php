@@ -391,25 +391,33 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
       if (!$o) throw new Exception('Order not found.');
       if (empty($o['ncm_order_id'])) throw new Exception('This order is not linked to an NCM order.');
       $r = ncm_sync_order_live($o);
-      log_activity("Synced NCM #{$o['ncm_order_id']} ({$o['code']}): status ".($r['raw']?:'unknown').($r['chargeChanged']?(' · delivery updated to '.money($r['charge'])):''),'NCM');
-      flash("Synced {$o['code']} — NCM status: ".($r['raw']?:'unknown').($r['chargeChanged']?(' · delivery updated to '.money($r['charge'])):'').($r['statusChanged']?(' · order marked '.$r['newStatus']):''));
+      $parts=[];
+      if ($r['chargeChanged']) $parts[]='delivery updated to '.money($r['charge']);
+      if ($r['cancelChargeChanged']) $parts[]='cancel/return charge updated to '.money($r['charge']);
+      if ($r['statusChanged']) $parts[]='order marked '.$r['newStatus'];
+      log_activity("Synced NCM #{$o['ncm_order_id']} ({$o['code']}): status ".($r['raw']?:'unknown').($parts?(' · '.implode(' · ',$parts)):''),'NCM');
+      flash("Synced {$o['code']} — NCM status: ".($r['raw']?:'unknown').($parts?(' · '.implode(' · ',$parts)):''));
     }
     elseif ($act==='sync_all') {
       if(function_exists('set_time_limit')) @set_time_limit(180);
+      /* open orders first (need live status) but also recent returned/cancelled ones,
+         since NCM can revise the return/cancel charge after the fact too */
       $rows2 = rows("SELECT o.* FROM orders o LEFT JOIN couriers c ON c.id=o.courier_id
                      WHERE c.name LIKE '%NCM%' AND COALESCE(o.ncm_order_id,'')<>''
-                       AND o.status NOT IN ('delivered','cancelled','returned','exchanged') LIMIT 60");
-      $cn=0; $sn=0;
+                       AND o.status NOT IN ('delivered','exchanged')
+                     ORDER BY o.id DESC LIMIT 60");
+      $cn=0; $sn=0; $rn=0;
       foreach ($rows2 as $o) {
         try {
           $r = ncm_sync_order_live($o);
           if ($r['chargeChanged']) $cn++;
+          if ($r['cancelChargeChanged']) $rn++;
           if ($r['statusChanged']) $sn++;
         } catch (Exception $e) {}
         usleep(80000);
       }
-      log_activity('NCM sync-all: '.count($rows2)." checked, $sn status-updated, $cn delivery-charge updated",'NCM');
-      flash(count($rows2)." order(s) checked, $sn status updated, $cn delivery charge updated.");
+      log_activity('NCM sync-all: '.count($rows2)." checked, $sn status-updated, $cn delivery-charge updated, $rn cancel/return-charge updated",'NCM');
+      flash(count($rows2)." order(s) checked, $sn status updated, $cn delivery charge updated, $rn cancel/return charge updated.");
     }
     elseif ($act==='scan_comments') {
       if(function_exists('set_time_limit')) @set_time_limit(180);

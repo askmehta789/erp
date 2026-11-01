@@ -385,6 +385,32 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
       log_activity("Unlinked NCM #$oldNid from ".$o['code'].' (was linked in error)','NCM');
       flash('Unlinked ✓ '.$o['code'].' is no longer tied to NCM #'.$oldNid.' — book it again or link the correct ID.');
     }
+    elseif ($act==='sync_one') {
+      $oid=(int)($_POST['id']??0);
+      $o=row("SELECT * FROM orders WHERE id=?",[$oid]);
+      if (!$o) throw new Exception('Order not found.');
+      if (empty($o['ncm_order_id'])) throw new Exception('This order is not linked to an NCM order.');
+      $r = ncm_sync_order_live($o);
+      log_activity("Synced NCM #{$o['ncm_order_id']} ({$o['code']}): status ".($r['raw']?:'unknown').($r['chargeChanged']?(' · delivery updated to '.money($r['charge'])):''),'NCM');
+      flash("Synced {$o['code']} — NCM status: ".($r['raw']?:'unknown').($r['chargeChanged']?(' · delivery updated to '.money($r['charge'])):'').($r['statusChanged']?(' · order marked '.$r['newStatus']):''));
+    }
+    elseif ($act==='sync_all') {
+      if(function_exists('set_time_limit')) @set_time_limit(180);
+      $rows2 = rows("SELECT o.* FROM orders o LEFT JOIN couriers c ON c.id=o.courier_id
+                     WHERE c.name LIKE '%NCM%' AND COALESCE(o.ncm_order_id,'')<>''
+                       AND o.status NOT IN ('delivered','cancelled','returned','exchanged') LIMIT 60");
+      $cn=0; $sn=0;
+      foreach ($rows2 as $o) {
+        try {
+          $r = ncm_sync_order_live($o);
+          if ($r['chargeChanged']) $cn++;
+          if ($r['statusChanged']) $sn++;
+        } catch (Exception $e) {}
+        usleep(80000);
+      }
+      log_activity('NCM sync-all: '.count($rows2)." checked, $sn status-updated, $cn delivery-charge updated",'NCM');
+      flash(count($rows2)." order(s) checked, $sn status updated, $cn delivery charge updated.");
+    }
     elseif ($act==='scan_comments') {
       if(function_exists('set_time_limit')) @set_time_limit(180);
       [$cnt,$scn] = ncm_scan_today_comments(120);
@@ -861,6 +887,12 @@ $ncmUnits=(int)val("SELECT COALESCE(SUM(o.qty),0) FROM orders o JOIN couriers c 
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       <input id="ncmSearch" class="ncm-search" placeholder="🔍 Search order, name, phone, NCM #…" oninput="ncmFilter()">
       <button class="btn btn-sm" onclick="exportNCM()">⬇ CSV</button>
+      <?php if($connected): ?>
+      <form method="post" style="display:inline" onsubmit="return confirm('Pull live status + delivery charge from NCM for up to 60 open orders?')">
+        <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="sync_all">
+        <button class="btn btn-sm" title="Refresh status and delivery charge from NCM for open orders">🔄 Sync All</button>
+      </form>
+      <?php endif; ?>
       <?php if($connected && $pendUnbooked): ?>
       <button class="btn btn-sm btn-primary" onclick="bookAllPending()" title="Show every pending order on one page, tick them all and open the bulk-book review in one click">🚀 Book All Pending (<?= $pendUnbooked ?>)</button>
       <?php endif; ?>
@@ -923,7 +955,9 @@ $ncmUnits=(int)val("SELECT COALESCE(SUM(o.qty),0) FROM orders o JOIN couriers c 
               <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="keep_active"><input type="hidden" name="id" value="<?= (int)$o['id'] ?>">
               <button class="btn btn-sm" title="NCM will retry delivery — keep this order live">↩ Still active</button></form>
           <?php endif; ?>
-          <?php if($r['nid']): ?><a class="btn btn-sm btn-primary" href="<?= e(ncm_portal_url($r['nid'])) ?>" target="_blank" rel="noopener">View ↗</a> <a class="btn btn-sm" href="ncm.php?comments=<?= e($r['nid']) ?>">Thread</a> <a class="btn btn-sm" href="ncm.php?track=<?= e($r['nid']) ?>">Track</a> <button class="btn btn-sm" title="Wrong order linked by mistake? Fix or unlink it here" onclick='linkFor(<?= (int)$o["id"] ?>,<?= json_encode((string)$o["code"]) ?>,<?= json_encode((string)$o["phone"]) ?>,<?= json_encode((string)$r["nid"]) ?>)'>✏️</button>
+          <?php if($r['nid']): ?><a class="btn btn-sm btn-primary" href="<?= e(ncm_portal_url($r['nid'])) ?>" target="_blank" rel="noopener">View ↗</a> <a class="btn btn-sm" href="ncm.php?comments=<?= e($r['nid']) ?>">Thread</a> <a class="btn btn-sm" href="ncm.php?track=<?= e($r['nid']) ?>">Track</a>
+            <form method="post" style="display:inline"><input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="sync_one"><input type="hidden" name="id" value="<?= (int)$o['id'] ?>"><button class="btn btn-sm" title="Pull live status + delivery charge from NCM">🔄</button></form>
+            <button class="btn btn-sm" title="Wrong order linked by mistake? Fix or unlink it here" onclick='linkFor(<?= (int)$o["id"] ?>,<?= json_encode((string)$o["code"]) ?>,<?= json_encode((string)$o["phone"]) ?>,<?= json_encode((string)$r["nid"]) ?>)'>✏️</button>
           <?php elseif($connected): ?><button class="btn btn-sm btn-primary" onclick='bookFor(<?php
             if(!empty($r["_items"]) && count($r["_items"])>1){
               $pl=array_map(function($it){return ($it["product_name"]?:"Goods")." x".(int)$it["qty"];}, $r["_items"]);

@@ -338,6 +338,58 @@ function ncm_to_local_status(string $ncm): ?string {
   return null;
 }
 
+/* ------------------------------------------------------------------
+   Pull ONE NCM order's live details (status + delivery_charge) and apply
+   them to our order row — the single-order counterpart of the bulk
+   status-only sync in cron.php. Unlike the bulk /v1/orders/statuses
+   endpoint, GET /v1/order returns the current delivery_charge too, so
+   this is what keeps delivery_charge in step with NCM (reweigh, RTV
+   discount, …) the same way pickndrop's sync_one/sync_all does.
+   Returns ['raw'=>string,'charge'=>?float,'chargeChanged'=>bool,'statusChanged'=>bool,'newStatus'=>?string]. */
+function ncm_sync_order_live(array $o): array {
+  $out = ['raw'=>'', 'charge'=>null, 'chargeChanged'=>false, 'statusChanged'=>false, 'newStatus'=>null];
+  $nid = (string)($o['ncm_order_id'] ?? '');
+  if ($nid==='') return $out;
+
+  $d = ncm()->order($nid);
+  $liveRaw = (string)($d['last_delivery_status'] ?? ($d['status'] ?? ''));
+  $out['raw'] = $liveRaw;
+  $charge = (isset($d['delivery_charge']) && is_numeric($d['delivery_charge'])) ? (float)$d['delivery_charge'] : null;
+  $out['charge'] = $charge;
+
+  if ($charge!==null && abs($charge-(float)($o['delivery_charge'] ?? 0))>0.005) {
+    q("UPDATE orders SET delivery_charge=? WHERE id=?", [$charge,$o['id']]);
+    $out['chargeChanged'] = true;
+  }
+  if ($liveRaw==='') return $out;
+
+  /* same classification the cron auto-sync uses, applied to this one order */
+  $curFlag = (int)($o['ncm_return_flag'] ?? 0);   /* 0 none · 1 confirm · 2 returned by you · 6 delivered by you */
+  $prevRaw = (string)($o['ncm_status'] ?? '');
+  $stg = ncm_return_stage($liveRaw);
+  $mapped = ncm_to_local_status($liveRaw);
+
+  if ($curFlag===2 || $curFlag===6) $mapped = null;   /* human decisions are final */
+  if ($curFlag!==2 && $curFlag!==6 && ncm_vendor_bound($liveRaw)) { $mapped='returned'; $curFlag=2; $stg='final'; }
+  $wasReturnward = ($curFlag===1) || (ncm_return_stage($prevRaw)!=='none');
+  if ($mapped==='delivered' && $stg==='none' && $wasReturnward && $curFlag!==2 && $curFlag!==6) { $mapped=null; $stg='progress'; }
+  $newFlag = ($curFlag===2||$curFlag===6) ? $curFlag : ((($stg==='progress'||$stg==='ambiguous')?1:0));
+
+  try { q("UPDATE orders SET ncm_status=?, ncm_return_flag=? WHERE id=?", [$liveRaw,$newFlag,$o['id']]); } catch (Exception $e) {}
+
+  if ($mapped && $mapped !== $o['status']) {
+    fifo_status_change((int)$o['id'],(int)$o['product_id'],(int)$o['qty'],$o['status'],$mapped);
+    if ($mapped==='delivered') q("UPDATE orders SET status='delivered',payment_status='paid' WHERE id=?",[$o['id']]);
+    else q("UPDATE orders SET status=? WHERE id=?",[$mapped,$o['id']]);
+    if ($mapped==='returned' && !((float)($o['cancel_charge'] ?? 0)>0) && $charge!==null && $charge>0) {
+      try { q("UPDATE orders SET cancel_charge=? WHERE id=?", [$charge,$o['id']]); } catch (Exception $e) {}
+    }
+    $out['statusChanged'] = true;
+    $out['newStatus'] = $mapped;
+  }
+  return $out;
+}
+
 /* orders table needs two extra columns for live NCM state (self-healing) */
 function ncm_ensure_cols(){ static $ok=false; if($ok)return;
   /* portable across MySQL and MariaDB: probe information_schema, then plain ALTER */

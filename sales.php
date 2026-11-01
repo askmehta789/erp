@@ -207,6 +207,45 @@ if (isset($_GET['ajax'])) {
             echo json_encode(['ok'=>true,'updated'=>$n]); exit;
         }
 
+        if ($op === 'link_exchange') {
+            /* exchange = two real orders (the original wrong/damaged one + the
+               replacement shipment) — this links them both ways so either row
+               can show "linked to <code>" and jump straight to the other one. */
+            $id = (int)($_POST['id'] ?? 0);
+            $target = trim((string)($_POST['target'] ?? ''));
+            if (!$id || $target === '') { echo json_encode(['ok'=>false,'error'=>'Missing order or target code.']); exit; }
+            $orig = row("SELECT id,code,exchange_order_id FROM orders WHERE id=?", [$id]);
+            if (!$orig) { echo json_encode(['ok'=>false,'error'=>'Order not found.']); exit; }
+            $tgt = ctype_digit($target)
+                 ? row("SELECT id,code,exchange_order_id FROM orders WHERE id=?", [(int)$target])
+                 : row("SELECT id,code,exchange_order_id FROM orders WHERE code=?", [$target]);
+            if (!$tgt) { echo json_encode(['ok'=>false,'error'=>"No order found with code/ID '$target'."]); exit; }
+            if ((int)$tgt['id'] === $id) { echo json_encode(['ok'=>false,'error'=>'An order cannot be linked to itself.']); exit; }
+            if (!empty($orig['exchange_order_id']) && (int)$orig['exchange_order_id'] !== (int)$tgt['id']) {
+                $other = row("SELECT code FROM orders WHERE id=?", [(int)$orig['exchange_order_id']]);
+                throw new Exception($orig['code'].' is already linked to '.($other['code'] ?? ('#'.$orig['exchange_order_id'])).'. Unlink it first.');
+            }
+            if (!empty($tgt['exchange_order_id']) && (int)$tgt['exchange_order_id'] !== $id) {
+                $other = row("SELECT code FROM orders WHERE id=?", [(int)$tgt['exchange_order_id']]);
+                throw new Exception($tgt['code'].' is already linked to '.($other['code'] ?? ('#'.$tgt['exchange_order_id'])).'. Unlink it first.');
+            }
+            q("UPDATE orders SET exchange_order_id=? WHERE id=?", [(int)$tgt['id'], $id]);
+            q("UPDATE orders SET exchange_order_id=? WHERE id=?", [$id, (int)$tgt['id']]);
+            log_activity("Linked exchange: {$orig['code']} ↔ {$tgt['code']}",'Sales');
+            echo json_encode(['ok'=>true,'a'=>$fullRow($id),'b'=>$fullRow((int)$tgt['id'])]); exit;
+        }
+
+        if ($op === 'unlink_exchange') {
+            $id = (int)($_POST['id'] ?? 0);
+            $orig = row("SELECT id,code,exchange_order_id FROM orders WHERE id=?", [$id]);
+            if (!$orig) { echo json_encode(['ok'=>false,'error'=>'Order not found.']); exit; }
+            $partnerId = (int)($orig['exchange_order_id'] ?? 0);
+            q("UPDATE orders SET exchange_order_id=NULL WHERE id=?", [$id]);
+            if ($partnerId) q("UPDATE orders SET exchange_order_id=NULL WHERE id=?", [$partnerId]);
+            log_activity("Unlinked exchange for {$orig['code']}",'Sales');
+            echo json_encode(['ok'=>true,'a'=>$fullRow($id),'b'=>$partnerId ? $fullRow($partnerId) : null]); exit;
+        }
+
         echo json_encode(['ok'=>false,'error'=>'Unknown operation']); exit;
 
     } catch (Exception $ex) {
@@ -562,7 +601,7 @@ function toRow(o){
   var prod=prodById(o.product_id), cour=courById(o.courier_id), sp=spById(o.sales_person_id);
   return {
     _id:o.id, cost_price:parseFloat(o.cost_price)||0, cancel_charge:parseFloat(o.cancel_charge)||0,
-    exchange_charge:parseFloat(o.exchange_charge)||0,
+    exchange_charge:parseFloat(o.exchange_charge)||0, exchange_order_id:parseInt(o.exchange_order_id)||0,
     code:o.code||'', order_date:o.order_date||'', customer:o.customer||'', phone:o.phone||'',
     sales_person_name:sp?sp.name:(o.sales_person_name||''),
     address:o.address||'', product_name:prod?prod.name:(o.product_name||''),
@@ -711,10 +750,31 @@ function ageDays(d){if(!d)return 0;var ms=new Date(TODAY)-new Date(String(d).sli
 function isAging(row){return ['pending','processing'].indexOf(String(row.status).toLowerCase())>-1 && ageDays(row.order_date)>=AGING_DAYS;}
 
 /* ===== renderers ===== */
+function orderByIdLocal(id){
+  if(!id) return null;
+  for(var i=0;i<DATA.length;i++){ if(DATA[i]._id===id) return DATA[i]; }
+  return null;
+}
+function jumpToCode(code){
+  var sb=document.getElementById('sheetSearch');
+  if(sb){ sb.value=code; sb.dispatchEvent(new Event('input')); sb.focus(); }
+}
+function applyLinkResult(o){
+  if(!o) return;
+  var row=orderByIdLocal(o.id);
+  if(row) row.exchange_order_id=parseInt(o.exchange_order_id)||0;
+}
 function codeR(inst,td,r,c,prop,val){
   Handsontable.renderers.TextRenderer.apply(this,arguments);
   var row=VIEW[inst.toPhysicalRow?inst.toPhysicalRow(r):r]||{};
-  if(isAging(row)){td.innerHTML=(val||'')+' <span class="agepill">'+ageDays(row.order_date)+'d</span>';td.title='Pending for '+ageDays(row.order_date)+' days — dispatch or follow up';}
+  var html=(val||'');
+  if(isAging(row)){html+=' <span class="agepill">'+ageDays(row.order_date)+'d</span>';td.title='Pending for '+ageDays(row.order_date)+' days — dispatch or follow up';}
+  if(row.exchange_order_id){
+    var lk=orderByIdLocal(row.exchange_order_id);
+    var lbl=lk?lk.code:('#'+row.exchange_order_id);
+    html+=' <span style="display:inline-block;margin-top:2px;font-size:10px;background:#dbeafe;color:#1d4ed8;padding:1px 5px;border-radius:8px;cursor:pointer" title="Linked exchange order — click to jump to it" onclick="event.stopPropagation();jumpToCode('+JSON.stringify(lbl)+')">🔁 '+lbl+'</span>';
+  }
+  td.innerHTML=html;
   return td;
 }
 function custR(inst,td,r,c,prop,val){
@@ -1061,6 +1121,31 @@ function buildGrid(data){
           if(v===null) return; v=parseFloat(v)||0;
           hot.setDataAtRowProp([[r,'exchange_charge',v],[r,'status','exchanged']]);
         }catch(e){ alert('Could not mark exchanged: '+e.message); }
+      }},
+      'link_exchange':{name:'🔗 Link to replacement/original order…', callback:function(key,sel){
+        try{
+          var r=sel[0].start.row; var row=VIEW[r]; if(!row||!row._id){alert('Save the order first.');return;}
+          var cur=row.exchange_order_id?(' (currently linked to '+(orderByIdLocal(row.exchange_order_id)||{}).code+')'):'';
+          var v=prompt('Enter the OTHER order\'s code to link with '+row.code+cur+':');
+          if(v===null || !String(v).trim()) return;
+          post({op:'link_exchange',id:row._id,target:String(v).trim()},function(err,res){
+            if(err){alert('Could not link: '+err);return;}
+            applyLinkResult(res.a); applyLinkResult(res.b);
+            hot.render(); updateStats();
+          });
+        }catch(e){ alert('Could not link: '+e.message); }
+      }},
+      'unlink_exchange':{name:'✕ Unlink exchange order', callback:function(key,sel){
+        try{
+          var r=sel[0].start.row; var row=VIEW[r]; if(!row||!row._id){alert('Save the order first.');return;}
+          if(!row.exchange_order_id){alert('This order is not linked to another order.');return;}
+          if(!confirm('Unlink '+row.code+' from its exchange-linked order?')) return;
+          post({op:'unlink_exchange',id:row._id},function(err,res){
+            if(err){alert('Could not unlink: '+err);return;}
+            applyLinkResult(res.a); if(res.b) applyLinkResult(res.b);
+            hot.render(); updateStats();
+          });
+        }catch(e){ alert('Could not unlink: '+e.message); }
       }},
       'sep1':'---------','copy':{},'cut':{},'sep2':'---------','undo':{},'redo':{}
     }},

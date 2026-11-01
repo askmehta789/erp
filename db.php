@@ -757,6 +757,11 @@ function ensure_order_exchange_cols() { static $ok=false; if($ok) return; $ok=tr
        NOT NULL DEFAULT 'pending'");
   } catch (Exception $e) {}
   try { q("ALTER TABLE orders ADD COLUMN IF NOT EXISTS exchange_charge DECIMAL(12,2) NOT NULL DEFAULT 0"); } catch (Exception $e) {}
+  /* the original (wrong/damaged item) order and the replacement shipment are two
+     separate order rows — this links them both ways so either side can be opened
+     from the other, instead of the link only being readable from one direction. */
+  try { q("ALTER TABLE orders ADD COLUMN IF NOT EXISTS exchange_order_id INT NULL DEFAULT NULL"); } catch (Exception $e) {}
+  try { q("ALTER TABLE orders ADD INDEX idx_exchange_order_id (exchange_order_id)"); } catch (Exception $e) {}
 }
 function ensure_banks() { static $ok=false; if($ok) return;
   try { q("CREATE TABLE IF NOT EXISTS bank_accounts(

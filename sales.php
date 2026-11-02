@@ -216,9 +216,14 @@ if (isset($_GET['ajax'])) {
             if (!$id || $target === '') { echo json_encode(['ok'=>false,'error'=>'Missing order or target code.']); exit; }
             $orig = row("SELECT id,code,exchange_order_id FROM orders WHERE id=?", [$id]);
             if (!$orig) { echo json_encode(['ok'=>false,'error'=>'Order not found.']); exit; }
-            $tgt = ctype_digit($target)
-                 ? row("SELECT id,code,exchange_order_id FROM orders WHERE id=?", [(int)$target])
-                 : row("SELECT id,code,exchange_order_id FROM orders WHERE code=?", [$target]);
+            /* match by the order's visible code first (what users actually type/see —
+               e.g. "1956") — only fall back to the raw DB id if no code matches, since
+               a purely-numeric code (blank order_prefix) would otherwise collide with
+               an unrelated row's internal id and link the wrong order. */
+            $tgt = row("SELECT id,code,exchange_order_id FROM orders WHERE code=?", [$target]);
+            if (!$tgt && ctype_digit($target)) {
+                $tgt = row("SELECT id,code,exchange_order_id FROM orders WHERE id=?", [(int)$target]);
+            }
             if (!$tgt) { echo json_encode(['ok'=>false,'error'=>"No order found with code/ID '$target'."]); exit; }
             if ((int)$tgt['id'] === $id) { echo json_encode(['ok'=>false,'error'=>'An order cannot be linked to itself.']); exit; }
             if (!empty($orig['exchange_order_id']) && (int)$orig['exchange_order_id'] !== (int)$tgt['id']) {

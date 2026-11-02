@@ -29,8 +29,8 @@ $mAgo  = date('Y-m-d', strtotime('-30 days'));
 
 /* ---- counters ---- */
 $total=count($orders); $delivered=0; $returned=0; $cancelled=0; $shipped=0;
-$processing=0; $pending=0; $hold=0;
-$revenue=0; $profit=0; $delivery=0; $cogs=0; $returnLoss=0;
+$processing=0; $pending=0; $hold=0; $exchanged=0;
+$revenue=0; $profit=0; $delivery=0; $cogs=0; $returnLoss=0; $exchangeLoss=0;
 $orderValue=0; $deliveredValue=0; $returnedValue=0; $pendingValue=0;
 $codPending=0; $codCollected=0; $unitsDelivered=0; $tUnits=0;
 $tOrders=0; $tDelivered=0; $tCancelled=0; $tReturned=0;
@@ -53,6 +53,7 @@ foreach($orders as $o){
                        break;
     case 'returned':   $returned++;   $returnedValue+=$line; $returnLoss+=(float)$o['cancel_charge']; break;
     case 'cancelled':  $cancelled++;  $returnLoss+=(float)$o['cancel_charge']; break;
+    case 'exchanged':  $exchanged++;  $exchangeLoss+=(float)$o['exchange_charge']; break;
     case 'shipped':    $shipped++;    $pendingValue+=$line; if($o['payment_type']==='cod'&&$o['payment_status']!=='paid') $codPending+=$line; break;
     case 'processing': $processing++; $pendingValue+=$line; if($o['payment_type']==='cod'&&$o['payment_status']!=='paid') $codPending+=$line; break;
     default:           $pending++;    $pendingValue+=$line; if($o['payment_type']==='cod'&&$o['payment_status']!=='paid') $codPending+=$line;
@@ -94,6 +95,7 @@ $statusChart = [
   'Shipped'    => $shipped,
   'Cancelled'  => $cancelled,
   'Returned'   => $returned,
+  'Exchanged'  => $exchanged,
 ];
 $normalVsReturn = [ 'Normal'=>max(0,$total-$returned), 'Returned/RTV'=>$returned ];
 
@@ -175,6 +177,7 @@ if ($returned>0)     $todo[] = ['↩️','var(--red)',   "$returned returned/can
   <div class="metric orange"><div><div class="mv"><?= number_format($inDelivery) ?></div><div class="ml">In Delivery</div></div><div class="mi">🚚</div></div>
   <div class="metric indigo"><div><div class="mv"><?= number_format($pending) ?></div><div class="ml">Pending Orders</div></div><div class="mi">⏳</div></div>
   <div class="metric purple"><div><div class="mv"><?= number_format($cancelled) ?></div><div class="ml">Cancelled</div></div><div class="mi">✖️</div></div>
+  <?php if($exchanged>0): ?><div class="metric indigo"><div><div class="mv"><?= number_format($exchanged) ?></div><div class="ml">Exchanged</div><div class="ms">cost: <?= money($exchangeLoss) ?></div></div><div class="mi">🔁</div></div><?php endif; ?>
   <div class="metric teal mlink" onclick="location='cod.php'"><div><div class="mv" style="font-size:22px"><?= money($codPending) ?></div><div class="ml">COD In Transit</div><div class="ms">orders not yet delivered</div></div><div class="mi">💰</div></div>
   <div class="metric amber mlink" onclick="location='cod.php'"><div><div class="mv" style="font-size:22px"><?= money($codHeld) ?></div><div class="ml">COD With Couriers</div><div class="ms">delivered, release pending</div></div><div class="mi">🚚</div></div>
 </div>
@@ -307,6 +310,7 @@ if ($returned>0)     $todo[] = ['↩️','var(--red)',   "$returned returned/can
       <div class="info-row"><span class="it">− COGS</span><span class="iv" style="color:var(--red)"><?= money($cogs) ?></span></div>
       <div class="info-row"><span class="it">− Delivery Charges</span><span class="iv" style="color:var(--red)"><?= money($delivery) ?></span></div>
       <?php if($returnLoss>0): ?><div class="info-row"><span class="it">− Returns / Cancellation Charges</span><span class="iv" style="color:var(--red)"><?= money($returnLoss) ?></span></div><?php endif; ?>
+      <?php if($exchangeLoss>0): ?><div class="info-row"><span class="it">− Exchange Charges</span><span class="iv" style="color:var(--red)"><?= money($exchangeLoss) ?></span></div><?php endif; ?>
       <div class="info-row"><span class="it">= Gross Profit</span><span class="iv" style="color:var(--green)"><?= money($profit) ?></span></div>
       <?php if($expenseByCat): ?>
       <div class="info-row" style="cursor:pointer" onclick="toggleExpBreakdown(this)">
@@ -379,7 +383,7 @@ new Chart(document.getElementById('statusChart'),{
   type:'bar',
   data:{labels:<?= json_encode(array_keys($statusChart)) ?>,
     datasets:[{data:<?= json_encode(array_values($statusChart)) ?>,
-      backgroundColor:['#94a3b8','#6366f1','#f59e0b','#dc2626','#f43f5e'],
+      backgroundColor:['#94a3b8','#6366f1','#f59e0b','#dc2626','#f43f5e','#2563eb'],
       borderRadius:6,maxBarThickness:54}]},
   options:Object.assign({},baseOpts,{scales:{y:{beginAtZero:true,grid:{color:CH_GRID},ticks:{precision:0}},x:{grid:{display:false}}}})
 });

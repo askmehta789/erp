@@ -87,6 +87,37 @@ if (isset($_GET['cleanup_dupes'])) {
     exit;
 }
 
+/* temporary — the very first sync ran before the daraz_sku/daraz_item_name columns existed
+   (added in a later commit), so those still-unmatched rows have no SKU recorded for the
+   mapping panel to show, even though they're otherwise fine. Same pattern as cleanup_dupes:
+   delete just the orphaned-format rows (courier=Daraz, unmatched, no daraz_sku) and let a
+   fresh "Sync Orders Now" recreate them correctly — Daraz's own dedup-on-remarks fix means
+   nothing else gets touched. Token-gated, dry-run by default. */
+if (isset($_GET['resync_legacy'])) {
+    http_response_code(200);
+    header('Content-Type: text/plain; charset=utf-8');
+    $given = trim((string)($_GET['token'] ?? ''));
+    $want  = trim((string)setting('cron_token',''));
+    if ($want === '' || $given === '' || !hash_equals($want, $given)) { echo "Invalid token.\n"; exit; }
+    try {
+        $dzId = (int)val("SELECT id FROM couriers WHERE LOWER(name)='daraz' LIMIT 1");
+        $rowsToFix = rows("SELECT id FROM orders WHERE courier_id=? AND daraz_order_id IS NOT NULL AND product_id IS NULL AND (daraz_sku IS NULL OR daraz_sku='')", [$dzId]);
+        $ids = array_map(fn($r) => (int)$r['id'], $rowsToFix);
+        if (!$ids) { echo "Nothing to fix — 0 orphaned-format rows found.\n"; exit; }
+        if (($_GET['resync_legacy'] ?? '') !== 'execute') {
+            echo "DRY RUN — would delete " . count($ids) . " order row(s) so a fresh sync recreates them with SKU recorded: " . implode(',', $ids) . "\nAdd &resync_legacy=execute to actually delete, then click Sync Orders Now.\n";
+            exit;
+        }
+        $ph = implode(',', array_fill(0, count($ids), '?'));
+        $unsafe = (int)val("SELECT COUNT(*) FROM orders WHERE id IN ($ph) AND product_id IS NOT NULL", $ids);
+        if ($unsafe > 0) { echo "Refusing — $unsafe of these rows unexpectedly have a product_id set. Aborted, nothing deleted.\n"; exit; }
+        q("DELETE FROM orders WHERE id IN ($ph)", $ids);
+        log_activity("Daraz sync cleanup: deleted ".count($ids)." orphaned-format order(s) for resync with SKU tracking", 'Daraz');
+        echo "Deleted " . count($ids) . " order row(s). Now click Sync Orders Now to re-pull them with SKU tracking.\n";
+    } catch (Exception $ex) { echo "error: " . $ex->getMessage() . "\n"; }
+    exit;
+}
+
 /* plain reachability check (Daraz's app form may ping this URL with no params) */
 if ($code === '' && $error === '') {
     http_response_code(200);

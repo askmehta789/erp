@@ -19,6 +19,17 @@ header('Content-Type: text/plain; charset=utf-8');
 $code  = trim((string)($_GET['code']  ?? ''));
 $error = trim((string)($_GET['error'] ?? ''));
 
+/* temporary deploy-verification check — safe, read-only, no secrets.
+   confirms the live daraz_api.php actually matches what was pushed, since
+   stale OPcache/CDN caching can silently keep serving an old file version. */
+if (isset($_GET['filecheck'])) {
+    http_response_code(200);
+    echo "daraz_api.php md5: " . md5_file(__DIR__.'/daraz_api.php') . "\n";
+    echo "daraz_api.php mtime: " . date('Y-m-d H:i:s', filemtime(__DIR__.'/daraz_api.php')) . "\n";
+    echo "daraz_callback.php mtime: " . date('Y-m-d H:i:s', filemtime(__FILE__)) . "\n";
+    exit;
+}
+
 /* plain reachability check (Daraz's app form may ping this URL with no params) */
 if ($code === '' && $error === '') {
     http_response_code(200);

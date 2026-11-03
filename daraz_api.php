@@ -143,4 +143,172 @@ class Daraz {
   }
 
   public function connected(): bool { return trim((string)setting('daraz_access_token','')) !== ''; }
+
+  /* authenticated call — adds the current access token (auto-refreshing first if needed) */
+  private function authedCall(string $apiPath, array $params = []): array {
+    $params['access_token'] = $this->getValidAccessToken();
+    return $this->call($apiPath, $params);
+  }
+
+  /* GetOrders (/orders/get) — order headers only, no line items. $opts: created_after/
+     created_before/update_after/update_before (ISO8601), status, offset, limit (max 100). */
+  public function getOrders(array $opts = []): array {
+    $params = [];
+    foreach (['created_after','created_before','update_after','update_before','status','sort_by','sort_direction'] as $k) {
+      if (isset($opts[$k]) && $opts[$k] !== '') $params[$k] = (string)$opts[$k];
+    }
+    $params['offset'] = (string)($opts['offset'] ?? 0);
+    $params['limt']   = (string)($opts['limit'] ?? 100);   /* "limt" — Daraz's own documented (misspelled) param name */
+    $data = $this->authedCall('/orders/get', $params);
+    return $data['data'] ?? ['orders' => [], 'count' => 0, 'countTotal' => 0];
+  }
+
+  /* GetMultipleOrderItems (/orders/items/get) — line items (sku, qty-as-separate-rows, price,
+     status) for up to a batch of order ids. Daraz caps how many ids one call accepts, so callers
+     should chunk (this class doesn't chunk internally since the cap isn't documented precisely). */
+  public function getOrderItems(array $orderIds): array {
+    if (!$orderIds) return [];
+    $data = $this->authedCall('/orders/items/get', ['order_ids' => '[' . implode(',', array_map('intval', $orderIds)) . ']']);
+    return $data['data'] ?? [];
+  }
+}
+
+/* Daraz order/item status -> this ERP's internal order status */
+function daraz_map_status(string $s): string {
+  $s = strtolower(trim($s));
+  $map = [
+    'unpaid' => 'pending', 'pending' => 'pending',
+    'topack' => 'processing', 'toship' => 'processing', 'ready_to_ship' => 'processing',
+    'shipped' => 'shipped',
+    'delivered' => 'delivered',
+    'returned' => 'returned',
+    'canceled' => 'cancelled', 'cancelled' => 'cancelled', 'failed' => 'cancelled',
+  ];
+  return $map[$s] ?? 'pending';
+}
+
+/* Pull recent Daraz orders into Sales (orders table, Courier = Daraz). Idempotent — an order
+   whose daraz_order_id is already on a local row is skipped, so this is safe to run repeatedly
+   (manual button or a future cron job) without creating duplicates. A line whose Daraz SKU
+   doesn't match any local product.sku is still imported (so nothing silently gets lost) with
+   product_id left null and a ⚠ flag in Remarks for staff to fix manually, same spirit as the
+   existing "✎ set charge" flow for cancel/exchange charges. */
+function daraz_sync_orders(int $days = 14): array {
+  $daraz = new Daraz();
+  if (!$daraz->connected()) throw new Exception('Daraz is not connected yet — authorize the app first.');
+
+  try { q("ALTER TABLE orders ADD COLUMN IF NOT EXISTS daraz_order_id VARCHAR(40) NULL"); } catch (Exception $e) {}
+  try { q("ALTER TABLE orders ADD INDEX idx_daraz_order_id (daraz_order_id)"); } catch (Exception $e) {}
+
+  $dzCourier = row("SELECT id FROM couriers WHERE LOWER(name)='daraz'");
+  $dzId = (int)($dzCourier['id'] ?? 0);
+  if (!$dzId) throw new Exception('Daraz courier not found.');
+
+  $createdAfter = date('c', strtotime("-{$days} days"));
+
+  /* 1) collect order headers, paginated (hard cap 1000 to bound one run) */
+  $orders = []; $offset = 0; $limit = 100; $total = 0;
+  do {
+    $page  = $daraz->getOrders(['created_after'=>$createdAfter, 'sort_by'=>'created_at', 'sort_direction'=>'ASC', 'offset'=>$offset, 'limit'=>$limit]);
+    $batch = $page['orders'] ?? [];
+    $orders = array_merge($orders, $batch);
+    $total  = (int)($page['countTotal'] ?? count($orders));
+    $offset += $limit;
+  } while (count($batch) === $limit && $offset < $total && $offset < 1000);
+
+  if (!$orders) return ['fetched'=>0,'created'=>0,'skipped'=>0,'unmatched'=>0];
+
+  /* 2) drop ones we've already imported */
+  $allIds = array_map(fn($o) => (string)$o['order_id'], $orders);
+  $existing = [];
+  if ($allIds) {
+    $ph = implode(',', array_fill(0, count($allIds), '?'));
+    foreach (rows("SELECT DISTINCT daraz_order_id FROM orders WHERE daraz_order_id IN ($ph)", $allIds) as $r) $existing[$r['daraz_order_id']] = true;
+  }
+  $byId = [];
+  foreach ($orders as $o) if (!isset($existing[(string)$o['order_id']])) $byId[(string)$o['order_id']] = $o;
+  if (!$byId) return ['fetched'=>count($orders),'created'=>0,'skipped'=>count($orders),'unmatched'=>0];
+
+  /* 3) line items, chunked (Daraz doesn't document an exact cap — 20 is conservative) */
+  $items = [];
+  foreach (array_chunk(array_keys($byId), 20) as $chunk) {
+    foreach ($daraz->getOrderItems($chunk) as $r) $items[(string)$r['order_id']] = $r['order_items'] ?? [];
+  }
+
+  /* product lookup by SKU (case-insensitive) */
+  $productsBySku = [];
+  foreach (rows("SELECT id,sku,cost FROM products WHERE sku IS NOT NULL AND sku<>''") as $p) {
+    $productsBySku[strtolower(trim($p['sku']))] = $p;
+  }
+
+  /* same smallest-unused-number code scheme sales.php uses */
+  $pref = setting('order_prefix','ORD-'); $used = [];
+  foreach (rows("SELECT code FROM orders") as $cr) {
+    $c = (string)$cr['code']; if ($pref!=='' && strpos($c,$pref)===0) $c = substr($c, strlen($pref));
+    $n = (int)preg_replace('/\D+/','', $c); if ($n>0) $used[$n] = 1;
+  }
+  $nextNum = function() use (&$used) { $n=1; while (isset($used[$n])) $n++; $used[$n]=1; return $n; };
+
+  $created = 0; $unmatched = 0;
+  foreach ($byId as $orderId => $o) {
+    $lineItems = $items[$orderId] ?? [];
+    if (!$lineItems) continue;
+
+    /* group identical-sku line items into one qty'd Sales line (Daraz lists multi-qty as repeated items) */
+    $groups = [];
+    foreach ($lineItems as $it) {
+      $sku    = trim((string)($it['sku'] ?? '')) ?: trim((string)($it['shop_sku'] ?? ''));
+      $price  = (float)($it['item_price'] ?? $it['paid_price'] ?? 0);
+      $status = daraz_map_status((string)($it['status'] ?? 'pending'));
+      $key = $sku.'|'.$price.'|'.$status;
+      if (!isset($groups[$key])) $groups[$key] = ['sku'=>$sku,'price'=>$price,'status'=>$status,'qty'=>0];
+      $groups[$key]['qty']++;
+    }
+
+    $addr     = $o['address_shipping'] ?? [];
+    $customer = trim(($o['customer_first_name'] ?? '').' '.($o['customer_last_name'] ?? ''));
+    $phone    = trim((string)($addr['phone'] ?? ''));
+    $address  = trim(implode(', ', array_filter([$addr['address1'] ?? '', $addr['address2'] ?? '', $addr['city'] ?? ''])));
+    $orderDate = date('Y-m-d', strtotime($o['created_at'] ?? 'now'));
+    $payType   = stripos((string)($o['payment_method'] ?? ''), 'cod') !== false ? 'cod' : 'prepaid';
+    $delivery  = (float)($o['shipping_fee'] ?? 0);
+    $group     = count($groups) > 1 ? ('DZ'.$orderId) : null;
+
+    $first = true;
+    foreach ($groups as $g) {
+      $prod    = $productsBySku[strtolower($g['sku'])] ?? null;
+      $remarks = 'Daraz #'.$orderId;
+      if (!$prod) { $unmatched++; $remarks .= ' ⚠ SKU "'.$g['sku'].'" not in Products — set product/cost manually'; }
+
+      $f = [
+        'code'            => $pref.str_pad($nextNum(),4,'0',STR_PAD_LEFT),
+        'order_date'      => $orderDate,
+        'customer'        => $customer, 'phone' => $phone, 'address' => $address,
+        'product_id'      => $prod['id'] ?? null,
+        'qty'             => max(1, $g['qty']),
+        'sell_price'      => $g['price'],
+        'cost_price'      => $prod['cost'] ?? 0,
+        'delivery_charge' => $first ? $delivery : 0,
+        'cancel_charge'   => 0, 'exchange_charge' => 0,
+        'zone'            => 'inside',
+        'payment_type'    => $payType,
+        'payment_status'  => $g['status']==='delivered' ? 'paid' : 'unpaid',
+        'status'          => $g['status'],
+        'courier_id'      => $dzId,
+        'remarks'         => $remarks,
+        'order_group'     => $group,
+        'daraz_order_id'  => $orderId,
+      ];
+      $cols = implode('`,`', array_keys($f));
+      $qs   = implode(',', array_fill(0, count($f), '?'));
+      q("INSERT INTO orders(`$cols`) VALUES($qs)", array_values($f));
+      $newId = (int)db()->lastInsertId();
+      if ($prod) stock_on_status_change($prod['id'], $f['qty'], '', $f['status'], $newId);
+      $created++;
+      $first = false;
+    }
+  }
+
+  log_activity("Daraz sync: $created line(s) imported from ".count($byId)." order(s)".($unmatched ? ", $unmatched unmatched SKU(s)" : ''), 'Daraz');
+  return ['fetched'=>count($orders), 'created'=>$created, 'skipped'=>count($orders)-count($byId), 'unmatched'=>$unmatched];
 }

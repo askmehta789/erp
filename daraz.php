@@ -1,8 +1,10 @@
 <?php
-require_once __DIR__.'/functions.php'; require_login(); require_page_access();
+require_once __DIR__.'/daraz_api.php'; require_login(); require_page_access();
 $PAGE_TITLE='Daraz';
 $u = current_user();
 $isAdmin = role_rank($u['role'] ?? '') >= 3;
+$darazConnected = (new Daraz())->connected();
+$darazAccount    = setting('daraz_account','');
 
 /* Daraz is a courier/channel on your normal Sales orders.
    This page is a DASHBOARD: it reads orders where Courier = Daraz.
@@ -60,6 +62,20 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
     q("DELETE FROM daraz_ads WHERE id=?",[(int)($_POST['id'] ?? 0)]);
     flash('Ad entry deleted.'); header('Location: daraz.php?m='.urlencode($_POST['m'] ?? date('Y-m'))); exit;
   }
+  if ($act==='sync_now') {
+    try {
+      $r = daraz_sync_orders(14);
+      if ($r['created'] > 0) {
+        $msg = "Synced: {$r['created']} order line(s) imported";
+        if ($r['unmatched'] > 0) $msg .= ", {$r['unmatched']} with an unmatched SKU — check Remarks";
+        if ($r['skipped'] > 0) $msg .= " ({$r['skipped']} already synced before)";
+        flash($msg.'.');
+      } else {
+        flash($r['fetched']>0 ? "No new orders — all {$r['fetched']} seen were already synced." : 'No Daraz orders found in the last 14 days.');
+      }
+    } catch (Exception $ex) { flash('Sync failed: '.$ex->getMessage()); }
+    header('Location: daraz.php?m='.urlencode($_POST['m'] ?? date('Y-m'))); exit;
+  }
 }
 
 /* ---- month filter ---- */
@@ -89,11 +105,19 @@ require __DIR__.'/includes/header.php';
 echo delivery_disabled_banner('daraz.php');
 ?>
 <div class="page-head">
-  <div><h1><img src="assets/daraz-icon.ico" alt="Daraz" style="height:26px;vertical-align:-5px;margin-right:4px">Daraz</h1><p>Channel dashboard — orders come from Sales with Courier = <b>Daraz</b> · Daraz Order ID goes in Remarks</p></div>
+  <div><h1><img src="assets/daraz-icon.ico" alt="Daraz" style="height:26px;vertical-align:-5px;margin-right:4px">Daraz</h1>
+    <p><?= $darazConnected ? ('🟢 Connected as <b>'.e($darazAccount).'</b> — "🔄 Sync Orders Now" pulls new Daraz orders straight into Sales') : '⚪ Not connected — orders come from Sales with Courier = <b>Daraz</b> manually until the app is authorized' ?></p>
+  </div>
   <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
     <form method="get" style="display:flex;gap:6px;align-items:center">
       <input type="month" name="m" value="<?= e($m) ?>"><button class="btn btn-sm">Go</button>
     </form>
+    <?php if ($darazConnected): ?>
+      <form method="post" style="display:inline">
+        <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="sync_now"><input type="hidden" name="m" value="<?= e($m) ?>">
+        <button class="btn btn-primary" title="Pull new Daraz orders (last 14 days) into Sales">🔄 Sync Orders Now</button>
+      </form>
+    <?php endif; ?>
     <a class="btn btn-primary" href="sales.php?new=daraz">＋ New Daraz Order</a>
   </div>
 </div>

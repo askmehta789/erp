@@ -7,15 +7,12 @@
    and approves access — there is no ERP session at that point, so this
    file is intentionally public (no require_login()).
 
-   Right now this only RECEIVES the authorization code and stores it —
-   it does NOT yet exchange it for an access/refresh token. Daraz Open
-   Platform signs every token-exchange request with HMAC-SHA256 over the
-   API path + sorted params, keyed by the App Secret; that exchange will
-   be added once real App Key/Secret values are entered in Settings and
-   this flow has been run once against the live API to confirm the exact
-   signing details for this account.
+   On a real authorization (?code=...) this exchanges the one-time code
+   for an access/refresh token via daraz_api.php's signed /auth/token/create
+   call, and saves them (Daraz → Settings → Channel / Daraz API handles
+   the App Key/Secret side of this).
    ===================================================================== */
-require_once __DIR__.'/db.php';
+require_once __DIR__.'/daraz_api.php';
 
 header('Content-Type: text/plain; charset=utf-8');
 
@@ -36,13 +33,14 @@ if ($error !== '') {
     exit;
 }
 
-/* store the one-time authorization code + when it arrived; the actual
-   token exchange (code -> access_token/refresh_token) is a follow-up
-   step once App Key/Secret are configured in Settings */
 try {
-    q("INSERT INTO settings(skey,svalue) VALUES('daraz_last_auth_code',?) ON DUPLICATE KEY UPDATE svalue=VALUES(svalue)", [$code]);
-    q("INSERT INTO settings(skey,svalue) VALUES('daraz_last_auth_at',?) ON DUPLICATE KEY UPDATE svalue=VALUES(svalue)", [date('Y-m-d H:i:s')]);
-} catch (Exception $e) {}
-
-http_response_code(200);
-echo "Daraz authorization received. The ERP admin still needs to finish connecting this — nothing syncs yet.";
+    $daraz = new Daraz();
+    $tokenData = $daraz->tokenCreate($code);
+    try { log_activity('Daraz seller authorization completed ('.($tokenData['account'] ?? 'account').')', 'Daraz'); } catch (Exception $e) {}
+    http_response_code(200);
+    echo "Daraz account connected successfully. Orders will now be pulled into Luprah ERP automatically.";
+} catch (Exception $ex) {
+    try { q("INSERT INTO settings(skey,svalue) VALUES('daraz_last_auth_error',?) ON DUPLICATE KEY UPDATE svalue=VALUES(svalue)", [$ex->getMessage().' @ '.date('Y-m-d H:i:s')]); } catch (Exception $e) {}
+    http_response_code(200);
+    echo "Daraz authorization code was received, but connecting failed: ".$ex->getMessage();
+}

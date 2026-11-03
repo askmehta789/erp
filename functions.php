@@ -461,6 +461,41 @@ function can_manage_stock_adjustments() {
 }
 
 /* ============================================================
+   Per-user Sales order action permissions (Add / Edit / Delete)
+   Default stays "everyone who can open sales.php keeps full
+   access" — no behavior change — until an admin manually
+   restricts a specific user from Users → 🛒 Order Access.
+   ============================================================ */
+function ensure_order_perms() { static $ok=false; if($ok) return;
+  try { q("CREATE TABLE IF NOT EXISTS user_order_perms(
+    user_id INT NOT NULL PRIMARY KEY,
+    can_add TINYINT(1) NOT NULL DEFAULT 1,
+    can_edit TINYINT(1) NOT NULL DEFAULT 1,
+    can_delete TINYINT(1) NOT NULL DEFAULT 1)"); } catch (Exception $e) {}
+  $ok=true;
+}
+function user_order_perms_override($uid) {
+  static $cache=[];
+  $uid=(int)$uid;
+  if (!array_key_exists($uid,$cache)) {
+    ensure_order_perms();
+    $cache[$uid]=null;
+    try { $cache[$uid]=row("SELECT can_add,can_edit,can_delete FROM user_order_perms WHERE user_id=?",[$uid]) ?: null; } catch (Exception $e) {}
+  }
+  return $cache[$uid];
+}
+/* Super Admins always keep full add/edit/delete on orders; everyone else
+   defaults to full access too, unless an admin has manually restricted
+   them (Staff included — that's the whole point of the per-user toggle) */
+function order_perms($user=null) {
+  $u = $user ?: current_user();
+  if (role_rank($u['role'] ?? '') >= 3) return ['add'=>true,'edit'=>true,'delete'=>true];
+  $ov = user_order_perms_override($u['id'] ?? 0);
+  if ($ov) return ['add'=>(bool)$ov['can_add'],'edit'=>(bool)$ov['can_edit'],'delete'=>(bool)$ov['can_delete']];
+  return ['add'=>true,'edit'=>true,'delete'=>true];
+}
+
+/* ============================================================
    Stock helpers — deduct on delivery, restore on reversal
    ============================================================ */
 function adjust_stock($productId, $delta) {

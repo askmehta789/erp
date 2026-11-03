@@ -25,6 +25,18 @@ if (isset($_GET['ajax'])) {
 
     $op = $_POST['op'] ?? '';
 
+    /* per-user Add/Edit/Delete permissions (Users → 🛒 Order Access) */
+    $PERMS = order_perms();
+    if (in_array($op, ['add','create','create_multi'], true) && !$PERMS['add']) {
+        echo json_encode(['ok'=>false,'error'=>'You do not have permission to add orders.']); exit;
+    }
+    if (in_array($op, ['update','link_exchange','unlink_exchange','assign_unassigned_to_company'], true) && !$PERMS['edit']) {
+        echo json_encode(['ok'=>false,'error'=>'You do not have permission to edit orders.']); exit;
+    }
+    if ($op === 'delete' && !$PERMS['delete']) {
+        echo json_encode(['ok'=>false,'error'=>'You do not have permission to delete orders.']); exit;
+    }
+
     /* build a clean field set from POST, looking up cost + defaults */
     $build = function() {
         $pid  = (int)($_POST['product_id'] ?? 0) ?: null;
@@ -294,6 +306,7 @@ unset($o);
 
 $inside  = (int)setting('delivery_inside',  80);
 $outside = (int)setting('delivery_outside', 150);
+$ORDER_PERMS = order_perms();
 
 $sRev=0; $sDel=0; $sProf=0; $sUnits=0;
 $custStat=[]; $custInfo=[]; $delivFreq=[];
@@ -544,6 +557,7 @@ require __DIR__.'/includes/header.php';
 
 <script>
 var CSRF='<?= csrf() ?>', DEL_IN=<?= $inside ?>, DEL_OUT=<?= $outside ?>, CURRENCY='<?= CURRENCY ?>';
+var CAN_ADD_ORDER=<?= $ORDER_PERMS['add']?'true':'false' ?>, CAN_EDIT_ORDER=<?= $ORDER_PERMS['edit']?'true':'false' ?>, CAN_DELETE_ORDER=<?= $ORDER_PERMS['delete']?'true':'false' ?>;
 var DEF_STATUS=<?= json_encode(setting('default_order_status','pending')) ?>, DEF_PAY=<?= json_encode(setting('default_payment_type','COD')) ?>, DEF_ZONE=<?= json_encode(strtolower(setting('default_zone','inside'))) ?>;
 var PRODUCTS=<?= json_encode(array_values($products)) ?>;
 var CUSTSTAT=<?= json_encode($custStat) ?>, CUSTINFO=<?= json_encode($custInfo) ?>;
@@ -660,7 +674,7 @@ function delR(inst,td,r){
     if(['pending','processing'].indexOf(String(row.status).toLowerCase())>-1)
       html+='<button class="rowact" title="Book with NCM">🚚</button>';
   }
-  html+='<button class="rowdel" title="Delete">🗑</button>';
+  if(CAN_DELETE_ORDER) html+='<button class="rowdel" title="Delete">🗑</button>';
   td.innerHTML=html; td.style.textAlign='center'; td.style.whiteSpace='nowrap';
   var btns=td.querySelectorAll('button'), i=0;
   if(row._id){
@@ -669,7 +683,7 @@ function delR(inst,td,r){
     if(['pending','processing'].indexOf(String(row.status).toLowerCase())>-1)
       btns[i++].onclick=function(){window.location='ncm.php?book='+row._id;};
   }
-  btns[i].onclick=function(){openDel(phys);};
+  if(CAN_DELETE_ORDER) btns[i].onclick=function(){openDel(phys);};
   return td;
 }
 /* WhatsApp order-confirmation link (Nepal +977) */
@@ -1089,6 +1103,15 @@ function buildGrid(data){
         if(lastInGrp)  tr.classList.add('row-grp-last');
       }
     },
+    cells:function(row,col,prop){
+      var cp={};
+      if(!CAN_EDIT_ORDER){
+        var phys=this.toPhysicalRow?this.toPhysicalRow(row):row;
+        var vr=(this.getSourceDataAtRow?this.getSourceDataAtRow(phys):VIEW[phys])||{};
+        if(vr._id) cp.readOnly=true;   /* saved orders are locked; a still-blank new row (_id=0) stays editable for Add */
+      }
+      return cp;
+    },
     columnSorting:true, filters:true, dropdownMenu:true,
     beforePaste:function(data,coords){
       /* 1) an active column sort makes pasted rows jump around — drop it so paste lands exactly where you point */
@@ -1103,8 +1126,8 @@ function buildGrid(data){
       }catch(e){}
     },
     contextMenu:{items:{
-      'add_product':{name:'➕ Add another product for this customer', callback:function(key,sel){ try{var r=sel[0].start.row; var pr=hot.toPhysicalRow?hot.toPhysicalRow(r):r; addRowSameCustomer(VIEW[pr]); }catch(e){ addRowSameCustomer(); } }},
-      'mark_returned':{name:'↩ Mark RETURNED + charge…', callback:function(key,sel){
+      'add_product':{name:'➕ Add another product for this customer', hidden:function(){return !CAN_ADD_ORDER;}, callback:function(key,sel){ try{var r=sel[0].start.row; var pr=hot.toPhysicalRow?hot.toPhysicalRow(r):r; addRowSameCustomer(VIEW[pr]); }catch(e){ addRowSameCustomer(); } }},
+      'mark_returned':{name:'↩ Mark RETURNED + charge…', hidden:function(){return !CAN_EDIT_ORDER;}, callback:function(key,sel){
         try{
           var r=sel[0].start.row; var row=VIEW[r]; if(!row||!row._id){alert('Save the order first.');return;}
           var def=parseFloat(row.cancel_charge)||0;
@@ -1116,7 +1139,7 @@ function buildGrid(data){
           hot.setDataAtRowProp([[r,'cancel_charge',v],[r,'status','returned']]);
         }catch(e){ alert('Could not mark returned: '+e.message); }
       }},
-      'mark_exchanged':{name:'🔁 Mark EXCHANGED + cost…', callback:function(key,sel){
+      'mark_exchanged':{name:'🔁 Mark EXCHANGED + cost…', hidden:function(){return !CAN_EDIT_ORDER;}, callback:function(key,sel){
         try{
           var r=sel[0].start.row; var row=VIEW[r]; if(!row||!row._id){alert('Save the order first.');return;}
           var def=parseFloat(row.exchange_charge)||0;
@@ -1127,7 +1150,7 @@ function buildGrid(data){
           hot.setDataAtRowProp([[r,'exchange_charge',v],[r,'status','exchanged']]);
         }catch(e){ alert('Could not mark exchanged: '+e.message); }
       }},
-      'link_exchange':{name:'🔗 Link to replacement/original order…', callback:function(key,sel){
+      'link_exchange':{name:'🔗 Link to replacement/original order…', hidden:function(){return !CAN_EDIT_ORDER;}, callback:function(key,sel){
         try{
           var r=sel[0].start.row; var row=VIEW[r]; if(!row||!row._id){alert('Save the order first.');return;}
           var cur=row.exchange_order_id?(' (currently linked to '+(orderByIdLocal(row.exchange_order_id)||{}).code+')'):'';
@@ -1140,7 +1163,7 @@ function buildGrid(data){
           });
         }catch(e){ alert('Could not link: '+e.message); }
       }},
-      'unlink_exchange':{name:'✕ Unlink exchange order', callback:function(key,sel){
+      'unlink_exchange':{name:'✕ Unlink exchange order', hidden:function(){return !CAN_EDIT_ORDER;}, callback:function(key,sel){
         try{
           var r=sel[0].start.row; var row=VIEW[r]; if(!row||!row._id){alert('Save the order first.');return;}
           if(!row.exchange_order_id){alert('This order is not linked to another order.');return;}
@@ -1849,6 +1872,18 @@ document.getElementById('csvBtn').onclick=function(){
   var blob=new Blob([lines.join('\n')],{type:'text/csv'});
   var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='sales_export.csv';a.click();
 };
+
+/* ---- role-based order permissions (Users → 🛒 Order Access) ---- */
+(function(){
+  function lock(el,reason){ if(!el)return; el.disabled=true; el.title=reason; el.style.opacity=.5; el.style.cursor='not-allowed'; }
+  if(!CAN_ADD_ORDER){
+    ['addRowBtn','addRowBtn2','addFormBtn','addFormBtn2','importBtn'].forEach(function(id){lock(document.getElementById(id),'You do not have permission to add orders.');});
+  }
+  if(!CAN_EDIT_ORDER){
+    lock(document.getElementById('assignLuprahBtn'),'You do not have permission to edit orders.');
+    document.querySelectorAll('#bulkBar button[onclick^="markSel"]').forEach(function(b){lock(b,'You do not have permission to edit orders.');});
+  }
+})();
 </script>
 
 <?php require __DIR__.'/includes/footer.php'; ?>

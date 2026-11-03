@@ -29,6 +29,27 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
       flash('Access reset to role defaults.');
       header('Location: users.php'); exit;
     }
+    if ($a==='save_order_perms') {
+      ensure_order_perms();
+      $uid=(int)$_POST['uid'];
+      $target=row("SELECT id,role FROM users WHERE id=?",[$uid]);
+      if(!$target) flash('User not found.');
+      elseif(role_rank($target['role'])>=3) flash('Super Admins always have full access.');
+      else {
+        $add=!empty($_POST['can_add'])?1:0; $edit=!empty($_POST['can_edit'])?1:0; $del=!empty($_POST['can_delete'])?1:0;
+        q("DELETE FROM user_order_perms WHERE user_id=?",[$uid]);
+        q("INSERT INTO user_order_perms(user_id,can_add,can_edit,can_delete) VALUES(?,?,?,?)",[$uid,$add,$edit,$del]);
+        log_activity("Order access updated for user #$uid",'Users');
+        flash('Order access saved.');
+      }
+      header('Location: users.php'); exit;
+    }
+    if ($a==='reset_order_perms') {
+      ensure_order_perms();
+      q("DELETE FROM user_order_perms WHERE user_id=?",[(int)$_POST['uid']]);
+      flash('Order access reset to full (default).');
+      header('Location: users.php'); exit;
+    }
     if ($a==='delete') {
       if ((int)$_POST['id'] === (int)current_user()['id']) flash('You cannot delete your own account.');
       else { q("DELETE FROM users WHERE id=?", [(int)$_POST['id']]); flash('User deleted.'); }
@@ -95,6 +116,12 @@ $us=rows("SELECT id,name,username,email,role,status,last_login FROM users ORDER 
     $eff[$pg] = role_rank($r['role'])>=3 ? 1 : (isset($ovs[$pg]) ? (int)$ovs[$pg] : (role_rank($r['role'])>=page_min_rank($pg)?1:0));
   }
 ?><button class="iact" title="Page access" data-uid="<?= (int)$r['id'] ?>" data-name="<?= e($r['name']) ?>" data-role="<?= e($r['role']) ?>" data-eff='<?= e(json_encode($eff)) ?>' data-custom="<?= $ovs?1:0 ?>" onclick="openAccess(this)">🔑</button>
+<?php
+  ensure_order_perms();
+  $op = role_rank($r['role'])>=3 ? null : user_order_perms_override($r['id']);
+  $opEff = $op ? ['add'=>(int)$op['can_add'],'edit'=>(int)$op['can_edit'],'delete'=>(int)$op['can_delete']] : ['add'=>1,'edit'=>1,'delete'=>1];
+?>
+<button class="iact" title="Order access (Add/Edit/Delete in Sales)" data-uid="<?= (int)$r['id'] ?>" data-name="<?= e($r['name']) ?>" data-role="<?= e($r['role']) ?>" data-eff='<?= e(json_encode($opEff)) ?>' data-custom="<?= $op?1:0 ?>" onclick="openOrderAccess(this)">🛒</button>
 <button class="iact" data-rec='<?= e(json_encode($r)) ?>' onclick="editRow(this)">✏️</button>
 <form method="post" style="display:inline" onsubmit="return confirm('Delete this user?')"><input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="delete"><input type="hidden" name="id" value="<?= $r['id'] ?>"><button class="iact del">🗑</button></form></td></tr>
 <?php endforeach; ?>
@@ -142,6 +169,48 @@ $us=rows("SELECT id,name,username,email,role,status,last_login FROM users ORDER 
 <form method="post" id="accResetForm" style="display:none">
   <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="reset_access"><input type="hidden" name="uid" id="accResetUid">
 </form>
+<!-- order (sales) access modal -->
+<div class="modal-bg" id="opBg" style="z-index:99991"><form class="modal" method="post" style="width:420px;max-width:96vw">
+  <div class="modal-head"><span id="opTitle">🛒 Order Access</span><span class="mx" onclick="closeOrderAccess()">✕</span></div>
+  <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="save_order_perms"><input type="hidden" name="uid" id="opUid">
+  <div style="padding:14px 20px">
+    <p class="muted" style="font-size:12px;margin-bottom:12px">Control whether this person can Add, Edit, or Delete orders on the Sales page. Unticked actions are blocked even by direct link. <b id="opRoleNote"></b></p>
+    <label style="display:flex;gap:9px;align-items:center;font-size:13px;font-weight:600;padding:8px 9px;border-radius:9px;background:var(--surface-2);cursor:pointer;margin-bottom:6px">
+      <input type="checkbox" name="can_add" id="opAdd" value="1"> ➕ Add orders
+    </label>
+    <label style="display:flex;gap:9px;align-items:center;font-size:13px;font-weight:600;padding:8px 9px;border-radius:9px;background:var(--surface-2);cursor:pointer;margin-bottom:6px">
+      <input type="checkbox" name="can_edit" id="opEdit" value="1"> ✏️ Edit orders
+    </label>
+    <label style="display:flex;gap:9px;align-items:center;font-size:13px;font-weight:600;padding:8px 9px;border-radius:9px;background:var(--surface-2);cursor:pointer">
+      <input type="checkbox" name="can_delete" id="opDelete" value="1"> 🗑 Delete orders
+    </label>
+  </div>
+  <div class="modal-foot" style="justify-content:space-between">
+    <button type="button" class="btn" onclick="opReset()" id="opResetBtn">↺ Reset to default (full access)</button>
+    <span><button type="button" class="btn" onclick="closeOrderAccess()">Cancel</button> <button class="btn btn-primary">💾 Save</button></span>
+  </div>
+</form></div>
+<form method="post" id="opResetForm" style="display:none">
+  <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="reset_order_perms"><input type="hidden" name="uid" id="opResetUid">
+</form>
+<script>
+function openOrderAccess(btn){
+  var uid=btn.getAttribute('data-uid'), name=btn.getAttribute('data-name'), role=btn.getAttribute('data-role');
+  var eff=JSON.parse(btn.getAttribute('data-eff'));
+  if(role==='Super Admin'){ alert('Super Admins always have full access to everything.'); return; }
+  document.getElementById('opUid').value=uid;
+  document.getElementById('opResetUid').value=uid;
+  document.getElementById('opTitle').textContent='🛒 Order Access — '+name;
+  document.getElementById('opRoleNote').textContent='Role: '+role+(btn.getAttribute('data-custom')==='1'?' (has custom order access)':' (using default: full access)');
+  document.getElementById('opAdd').checked=eff.add===1;
+  document.getElementById('opEdit').checked=eff.edit===1;
+  document.getElementById('opDelete').checked=eff.delete===1;
+  document.getElementById('opBg').classList.add('open'); document.body.classList.add('modal-open');
+}
+function closeOrderAccess(){document.getElementById('opBg').classList.remove('open');document.body.classList.remove('modal-open');}
+function opReset(){ if(confirm('Remove custom order access and give this user full Add/Edit/Delete again?')) document.getElementById('opResetForm').submit(); }
+(function(){var m=document.getElementById('opBg');m.addEventListener('click',function(e){if(e.target===m)closeOrderAccess();});})();
+</script>
 <script>
 function openAccess(btn){
   var uid=btn.getAttribute('data-uid'), name=btn.getAttribute('data-name'), role=btn.getAttribute('data-role');

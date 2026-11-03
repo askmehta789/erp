@@ -125,11 +125,14 @@ echo delivery_disabled_banner('daraz.php');
 <style>
 .ncmv3 .dz-grid{display:grid;grid-template-columns:1fr 320px;gap:16px;margin-top:20px;align-items:start}
 @media(max-width:1024px){.ncmv3 .dz-grid{grid-template-columns:1fr}}
-.dz-status{display:inline-block;padding:4px 11px;border-radius:999px;font-size:11px;font-weight:800;border:none;appearance:none;cursor:pointer;color:#fff}
-.dz-status.st-pending,.dz-status.st-processing{background:#64748b}
-.dz-status.st-shipped{background:#e0851b}
-.dz-status.st-delivered{background:#0f9d63}
-.dz-status.st-returned,.dz-status.st-cancelled{background:#dc4437}
+/* !important needed to beat the app-wide "input, select, textarea { background !important }"
+   base style — found via computed-style inspection, not a guess: without it every status pill
+   rendered as invisible white-on-white regardless of selector specificity. */
+.dz-status{display:inline-block;padding:4px 11px;border-radius:999px;font-size:11px;font-weight:800;border:none!important;appearance:none;cursor:pointer;color:#fff!important;box-shadow:none!important}
+.dz-status.st-pending,.dz-status.st-processing{background:#64748b!important}
+.dz-status.st-shipped{background:#e0851b!important}
+.dz-status.st-delivered{background:#0f9d63!important}
+.dz-status.st-returned,.dz-status.st-cancelled{background:#dc4437!important}
 .dz-dc{font-size:11px;padding:5px 7px;border-radius:8px;border:1px solid rgba(148,163,184,.4);width:72px;background:rgba(255,255,255,.75)}
 body.dark .dz-dc{background:rgba(2,6,23,.5);color:var(--ink);border-color:rgba(148,163,184,.25)}
 .dz-oid{font-weight:800;display:flex;align-items:center;gap:6px}

@@ -75,10 +75,12 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
       if ($r['created'] > 0) {
         $msg = "Synced: {$r['created']} order line(s) imported";
         if ($r['unmatched'] > 0) $msg .= ", {$r['unmatched']} with an unmatched SKU — map them below";
+        if (!empty($r['cancelled_skipped'])) $msg .= ", {$r['cancelled_skipped']} cancelled line(s) skipped (not imported)";
         if ($r['skipped'] > 0) $msg .= " ({$r['skipped']} already synced before)";
         flash($msg.'.');
       } else {
-        flash($r['fetched']>0 ? "No new orders — all {$r['fetched']} seen were already synced." : 'No Daraz orders found in the last 14 days.');
+        $extra = !empty($r['cancelled_skipped']) ? " ({$r['cancelled_skipped']} cancelled line(s) skipped)" : '';
+        flash($r['fetched']>0 ? "No new orders — all {$r['fetched']} seen were already synced or cancelled.{$extra}" : 'No Daraz orders found in the last 14 days.');
       }
     } catch (Exception $ex) { flash('Sync failed: '.$ex->getMessage()); }
     header('Location: daraz.php?m='.urlencode($_POST['m'] ?? date('Y-m'))); exit;

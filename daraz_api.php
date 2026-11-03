@@ -319,22 +319,27 @@ function daraz_sync_orders(int $days = 14): array {
   }
   $nextNum = function() use (&$used) { $n=1; while (isset($used[$n])) $n++; $used[$n]=1; return $n; };
 
-  $created = 0; $unmatched = 0;
+  $created = 0; $unmatched = 0; $cancelledSkipped = 0;
   foreach ($byId as $orderId => $o) {
     $lineItems = $items[$orderId] ?? [];
     if (!$lineItems) continue;
 
-    /* group identical-sku line items into one qty'd Sales line (Daraz lists multi-qty as repeated items) */
+    /* group identical-sku line items into one qty'd Sales line (Daraz lists multi-qty as repeated items);
+       a cancelled line is dropped here, not imported at all — cancelled Daraz orders carry no real
+       inventory/revenue impact, so they're noise in Sales rather than a record worth keeping (unlike
+       "returned", which has real cost and stays) */
     $groups = [];
     foreach ($lineItems as $it) {
+      $status = daraz_map_status((string)($it['status'] ?? 'pending'));
+      if ($status === 'cancelled') { $cancelledSkipped++; continue; }
       $sku    = trim((string)($it['sku'] ?? '')) ?: trim((string)($it['shop_sku'] ?? ''));
       $price  = (float)($it['item_price'] ?? $it['paid_price'] ?? 0);
-      $status = daraz_map_status((string)($it['status'] ?? 'pending'));
       $name   = trim((string)($it['name'] ?? ''));
       $key = $sku.'|'.$price.'|'.$status;
       if (!isset($groups[$key])) $groups[$key] = ['sku'=>$sku,'name'=>$name,'price'=>$price,'status'=>$status,'qty'=>0];
       $groups[$key]['qty']++;
     }
+    if (!$groups) continue;   /* every line in this order was cancelled — nothing to import */
 
     $addr     = $o['address_shipping'] ?? [];
     $customer = trim(($o['customer_first_name'] ?? '').' '.($o['customer_last_name'] ?? ''));
@@ -382,6 +387,6 @@ function daraz_sync_orders(int $days = 14): array {
     }
   }
 
-  log_activity("Daraz sync: $created line(s) imported from ".count($byId)." order(s)".($unmatched ? ", $unmatched unmatched SKU(s)" : ''), 'Daraz');
-  return ['fetched'=>count($orders), 'created'=>$created, 'skipped'=>count($orders)-count($byId), 'unmatched'=>$unmatched];
+  log_activity("Daraz sync: $created line(s) imported from ".count($byId)." order(s)".($unmatched ? ", $unmatched unmatched SKU(s)" : '').($cancelledSkipped ? ", $cancelledSkipped cancelled line(s) skipped" : ''), 'Daraz');
+  return ['fetched'=>count($orders), 'created'=>$created, 'skipped'=>count($orders)-count($byId), 'unmatched'=>$unmatched, 'cancelled_skipped'=>$cancelledSkipped];
 }

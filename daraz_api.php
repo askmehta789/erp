@@ -20,7 +20,6 @@ class Daraz {
   private string $base = 'https://api.daraz.com.np/rest';
   private string $appKey;
   private string $appSecret;
-  private $ch = null;
 
   public function __construct() {
     $this->appKey    = trim((string)setting('daraz_app_key',''));
@@ -68,21 +67,30 @@ class Daraz {
     if ($isGet) $url .= '?' . http_build_query($all);
 
     if (function_exists('curl_init')) {
-      if ($this->ch === null) $this->ch = curl_init();
-      $ch = $this->ch;
-      curl_setopt_array($ch, [
+      /* a fresh handle per call (not reused) — cURL's internal request-type state is sticky in
+         ways that fight CURLOPT_HTTPGET on a handle that previously did a POST (see below), and
+         a reused handle isn't worth the risk for calls this infrequent */
+      $ch = curl_init();
+      $opts = [
         CURLOPT_URL            => $url,
         CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_HTTPGET        => $isGet,          /* resets any POST state from a previous reused-handle call */
-        CURLOPT_POST           => !$isGet,
-        CURLOPT_POSTFIELDS     => $isGet ? '' : http_build_query($all),
         CURLOPT_HTTPHEADER     => ['Content-Type: application/x-www-form-urlencoded'],
         CURLOPT_TIMEOUT        => 15,
         CURLOPT_CONNECTTIMEOUT => 6,
         CURLOPT_SSL_VERIFYPEER => true,
-      ]);
+      ];
+      if ($isGet) {
+        $opts[CURLOPT_HTTPGET] = true;   /* must NOT also set CURLOPT_POSTFIELDS (even '') — doing
+                                             so silently re-forces POST regardless of this flag,
+                                             confirmed empirically against a live echo endpoint */
+      } else {
+        $opts[CURLOPT_POST]       = true;
+        $opts[CURLOPT_POSTFIELDS] = http_build_query($all);
+      }
+      curl_setopt_array($ch, $opts);
       $body = curl_exec($ch);
       $err  = curl_error($ch);
+      curl_close($ch);
       if ($body === false) throw new Exception('Could not reach Daraz: ' . $err);
     } else {
       $opts = ['http' => [

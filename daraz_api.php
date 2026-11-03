@@ -279,12 +279,16 @@ function daraz_sync_orders(int $days = 14): array {
 
   if (!$orders) return ['fetched'=>0,'created'=>0,'skipped'=>0,'unmatched'=>0];
 
-  /* 2) drop ones we've already imported */
+  /* 2) drop ones we've already imported — either through this sync before (daraz_order_id set)
+     OR, same as this account's pre-existing convention, typed by hand into Remarks (bare id,
+     no daraz_order_id set). Missing the second check once already re-imported ~100 orders
+     staff had already entered manually; both are checked now. */
   $allIds = array_map(fn($o) => (string)$o['order_id'], $orders);
   $existing = [];
   if ($allIds) {
     $ph = implode(',', array_fill(0, count($allIds), '?'));
     foreach (rows("SELECT DISTINCT daraz_order_id FROM orders WHERE daraz_order_id IN ($ph)", $allIds) as $r) $existing[$r['daraz_order_id']] = true;
+    foreach (rows("SELECT DISTINCT TRIM(remarks) AS rid FROM orders WHERE daraz_order_id IS NULL AND TRIM(remarks) IN ($ph)", $allIds) as $r) $existing[$r['rid']] = true;
   }
   $byId = [];
   foreach ($orders as $o) if (!isset($existing[(string)$o['order_id']])) $byId[(string)$o['order_id']] = $o;

@@ -54,6 +54,39 @@ if (isset($_GET['dupecheck'])) {
     exit;
 }
 
+/* temporary — deletes exactly the duplicate rows ?dupecheck=1 identified (today's sync
+   re-importing orders staff had already entered manually). Token-gated with the same
+   cron_token this app already uses for other no-session automation (Settings > Automation),
+   since this file has no login. product_id was null on every duplicate (unmatched SKU), so
+   none of them touched stock — plain DELETE is safe, nothing to reverse. */
+if (isset($_GET['cleanup_dupes'])) {
+    http_response_code(200);
+    header('Content-Type: text/plain; charset=utf-8');
+    $given = trim((string)($_GET['token'] ?? ''));
+    $want  = trim((string)setting('cron_token',''));
+    if ($want === '' || $given === '' || !hash_equals($want, $given)) { echo "Invalid token.\n"; exit; }
+    try {
+        $dupeIds = rows("SELECT DISTINCT n.id
+                          FROM orders n
+                          JOIN orders o ON o.courier_id = n.courier_id AND o.daraz_order_id IS NULL AND TRIM(o.remarks) = n.daraz_order_id AND o.id <> n.id
+                          WHERE n.daraz_order_id IS NOT NULL");
+        $ids = array_map(fn($r) => (int)$r['id'], $dupeIds);
+        if (!$ids) { echo "Nothing to clean up — 0 duplicates found.\n"; exit; }
+        if (($_GET['cleanup_dupes'] ?? '') !== 'execute') {
+            echo "DRY RUN — would delete " . count($ids) . " order row(s): " . implode(',', $ids) . "\nAdd &cleanup_dupes=execute to actually delete.\n";
+            exit;
+        }
+        /* safety: refuse to touch any row with product_id set (never true for these, but guard anyway) */
+        $ph = implode(',', array_fill(0, count($ids), '?'));
+        $unsafe = (int)val("SELECT COUNT(*) FROM orders WHERE id IN ($ph) AND product_id IS NOT NULL", $ids);
+        if ($unsafe > 0) { echo "Refusing — $unsafe of these rows unexpectedly have a product_id set. Aborted, nothing deleted.\n"; exit; }
+        q("DELETE FROM orders WHERE id IN ($ph)", $ids);
+        log_activity("Daraz sync cleanup: deleted ".count($ids)." duplicate order(s) that were already entered manually", 'Daraz');
+        echo "Deleted " . count($ids) . " duplicate order row(s): " . implode(',', $ids) . "\n";
+    } catch (Exception $ex) { echo "error: " . $ex->getMessage() . "\n"; }
+    exit;
+}
+
 /* plain reachability check (Daraz's app form may ping this URL with no params) */
 if ($code === '' && $error === '') {
     http_response_code(200);

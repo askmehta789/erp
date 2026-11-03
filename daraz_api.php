@@ -48,8 +48,11 @@ class Daraz {
     return strtoupper(hash_hmac('sha256', $concat, $this->appSecret));
   }
 
-  /* POSTs a signed request to $apiPath (e.g. "/auth/token/create") with the given business params */
-  private function call(string $apiPath, array $params = []): array {
+  /* Sends a signed request to $apiPath with the given business params. Daraz enforces an exact
+     HTTP method per endpoint (not interchangeable): /auth/token/create|refresh need POST,
+     but GetOrders/GetMultipleOrderItems reject POST with "UnsupportedHTTPMethod" and need GET
+     — confirmed against the live API, not assumed. */
+  private function call(string $apiPath, array $params = [], string $method = 'POST'): array {
     if (!$this->configured()) throw new Exception('Daraz App Key/Secret not set. Add them in Settings → Channel / Daraz API.');
 
     $common = [
@@ -61,6 +64,8 @@ class Daraz {
     $all['sign'] = $this->sign($apiPath, $all);
 
     $url = $this->base . $apiPath;
+    $isGet = (strtoupper($method) === 'GET');
+    if ($isGet) $url .= '?' . http_build_query($all);
 
     if (function_exists('curl_init')) {
       if ($this->ch === null) $this->ch = curl_init();
@@ -68,8 +73,9 @@ class Daraz {
       curl_setopt_array($ch, [
         CURLOPT_URL            => $url,
         CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_POST           => true,
-        CURLOPT_POSTFIELDS     => http_build_query($all),
+        CURLOPT_HTTPGET        => $isGet,          /* resets any POST state from a previous reused-handle call */
+        CURLOPT_POST           => !$isGet,
+        CURLOPT_POSTFIELDS     => $isGet ? '' : http_build_query($all),
         CURLOPT_HTTPHEADER     => ['Content-Type: application/x-www-form-urlencoded'],
         CURLOPT_TIMEOUT        => 15,
         CURLOPT_CONNECTTIMEOUT => 6,
@@ -80,9 +86,9 @@ class Daraz {
       if ($body === false) throw new Exception('Could not reach Daraz: ' . $err);
     } else {
       $opts = ['http' => [
-        'method'  => 'POST',
-        'header'  => "Content-Type: application/x-www-form-urlencoded\r\n",
-        'content' => http_build_query($all),
+        'method'  => $isGet ? 'GET' : 'POST',
+        'header'  => $isGet ? '' : "Content-Type: application/x-www-form-urlencoded\r\n",
+        'content' => $isGet ? '' : http_build_query($all),
         'timeout' => 15,
         'ignore_errors' => true,
       ]];
@@ -145,9 +151,9 @@ class Daraz {
   public function connected(): bool { return trim((string)setting('daraz_access_token','')) !== ''; }
 
   /* authenticated call — adds the current access token (auto-refreshing first if needed) */
-  private function authedCall(string $apiPath, array $params = []): array {
+  private function authedCall(string $apiPath, array $params = [], string $method = 'GET'): array {
     $params['access_token'] = $this->getValidAccessToken();
-    return $this->call($apiPath, $params);
+    return $this->call($apiPath, $params, $method);
   }
 
   /* GetOrders (/orders/get) — order headers only, no line items. $opts: created_after/
@@ -159,7 +165,7 @@ class Daraz {
     }
     $params['offset'] = (string)($opts['offset'] ?? 0);
     $params['limt']   = (string)($opts['limit'] ?? 100);   /* "limt" — Daraz's own documented (misspelled) param name */
-    $data = $this->authedCall('/orders/get', $params);
+    $data = $this->authedCall('/orders/get', $params, 'GET');
     return $data['data'] ?? ['orders' => [], 'count' => 0, 'countTotal' => 0];
   }
 

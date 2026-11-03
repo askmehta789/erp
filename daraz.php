@@ -62,12 +62,19 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
     q("DELETE FROM daraz_ads WHERE id=?",[(int)($_POST['id'] ?? 0)]);
     flash('Ad entry deleted.'); header('Location: daraz.php?m='.urlencode($_POST['m'] ?? date('Y-m'))); exit;
   }
+  if ($act==='map_sku') {
+    try {
+      $r = daraz_map_sku_to_product(trim((string)($_POST['sku'] ?? '')), (int)($_POST['product_id'] ?? 0));
+      flash($r['fixed']>0 ? "Mapped — fixed {$r['fixed']} existing order line(s), and future syncs will match it automatically." : 'Mapped — future syncs will match it automatically.');
+    } catch (Exception $ex) { flash('Could not map: '.$ex->getMessage()); }
+    header('Location: daraz.php?m='.urlencode($_POST['m'] ?? date('Y-m'))); exit;
+  }
   if ($act==='sync_now') {
     try {
       $r = daraz_sync_orders(14);
       if ($r['created'] > 0) {
         $msg = "Synced: {$r['created']} order line(s) imported";
-        if ($r['unmatched'] > 0) $msg .= ", {$r['unmatched']} with an unmatched SKU — check Remarks";
+        if ($r['unmatched'] > 0) $msg .= ", {$r['unmatched']} with an unmatched SKU — map them below";
         if ($r['skipped'] > 0) $msg .= " ({$r['skipped']} already synced before)";
         flash($msg.'.');
       } else {
@@ -87,6 +94,8 @@ $orders = rows("SELECT o.*, p.name AS product_name FROM orders o
                 WHERE o.courier_id=? AND o.order_date BETWEEN ? AND ?
                 ORDER BY o.order_date DESC, o.id DESC",[$dzId,$mStart,$mEnd]);
 $ads = rows("SELECT * FROM daraz_ads WHERE spend_date BETWEEN ? AND ? ORDER BY spend_date DESC, id DESC",[$mStart,$mEnd]);
+$darazUnmatched = $darazConnected ? daraz_unmatched_skus() : [];
+$allProducts = $darazUnmatched ? rows("SELECT id,name,sku FROM products ORDER BY name") : [];
 
 $mOrders=count($orders); $mRev=0; $mCost=0; $mDelv=0; $mDel=0; $mRet=0; $mExch=0; $mGross=0; $mUnits=0;
 foreach ($orders as $o) {
@@ -123,6 +132,30 @@ echo delivery_disabled_banner('daraz.php');
 </div>
 <?php if($fl=flash()) echo '<div class="flash">'.e($fl).'</div>'; ?>
 
+<?php if ($darazUnmatched): ?>
+<div class="panel" style="margin-bottom:18px;border:1.5px solid #f59e0b">
+  <div class="panel-head" style="background:#fffbeb"><h2>🔗 Map Unmatched Daraz Products (<?= count($darazUnmatched) ?>)</h2>
+    <span class="muted" style="font-size:12px">Pick which product each one is — fixes every order already imported for it, and matches automatically from now on.</span></div>
+  <div class="panel-body" style="padding-top:8px">
+    <?php foreach ($darazUnmatched as $um): ?>
+      <form method="post" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:8px 0;border-bottom:1px solid var(--border)">
+        <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="map_sku"><input type="hidden" name="m" value="<?= e($m) ?>">
+        <input type="hidden" name="sku" value="<?= e($um['daraz_sku']) ?>">
+        <div style="min-width:220px"><b><?= e($um['sample_name'] ?: 'Daraz item') ?></b><br><span class="muted" style="font-size:11px">SKU: <?= e($um['daraz_sku']) ?></span></div>
+        <span class="muted" style="font-size:12px"><?= (int)$um['line_count'] ?> order line(s) waiting</span>
+        <select name="product_id" required style="flex:1;min-width:200px">
+          <option value="">— pick the matching product —</option>
+          <?php foreach ($allProducts as $p): ?>
+            <option value="<?= (int)$p['id'] ?>"><?= e($p['name']) ?><?= $p['sku'] ? ' ('.e($p['sku']).')' : '' ?></option>
+          <?php endforeach; ?>
+        </select>
+        <button class="btn btn-primary btn-sm">✓ Map it</button>
+      </form>
+    <?php endforeach; ?>
+  </div>
+</div>
+<?php endif; ?>
+
 <div class="mgrid">
   <div class="metric blue"><div><div class="mv"><?= $mOrders ?></div><div class="ml">Orders</div><div class="ms"><?= e(date('M Y',strtotime($mStart))) ?> · <?= $mDel ?> delivered</div></div><div class="mi">🛍</div></div>
   <div class="metric green"><div><div class="mv" style="font-size:19px"><?= money($mRev) ?></div><div class="ml">Delivered Revenue</div><div class="ms"><?= number_format($mUnits) ?> pcs delivered</div></div><div class="mi">💰</div></div>
@@ -152,7 +185,7 @@ echo delivery_disabled_banner('daraz.php');
     $pot=((float)$o['sell_price']-(float)$o['cost_price'])*(int)$o['qty']-(float)$o['delivery_charge'];
   ?>
     <tr data-s="<?= e(strtolower(($o['remarks']??'').' '.$o['code'].' '.($o['customer']??'').' '.($o['phone']??'').' '.($o['product_name']??''))) ?>" data-st="<?= e($o['status']) ?>">
-      <td><b><?= e($o['remarks'] ?: '—') ?></b></td>
+      <td><b><?= e($o['daraz_order_id'] ?: ($o['remarks'] ?: '—')) ?></b><?php if(!empty($o['daraz_order_id']) && !empty($o['remarks']) && strpos($o['remarks'],'⚠')!==false): ?><br><span class="muted" style="font-size:11px"><?= e($o['remarks']) ?></span><?php endif; ?></td>
       <td class="muted"><?= e($o['code']) ?></td>
       <td><?= e($o['order_date']) ?></td>
       <td><b><?= e($o['customer'] ?: '—') ?></b></td>

@@ -201,6 +201,54 @@ function daraz_map_status(string $s): string {
   return $map[$s] ?? 'pending';
 }
 
+function daraz_ensure_cols(): void {
+  static $done = false; if ($done) return;
+  try { q("ALTER TABLE orders ADD COLUMN IF NOT EXISTS daraz_order_id VARCHAR(40) NULL"); } catch (Exception $e) {}
+  try { q("ALTER TABLE orders ADD INDEX idx_daraz_order_id (daraz_order_id)"); } catch (Exception $e) {}
+  try { q("ALTER TABLE orders ADD COLUMN IF NOT EXISTS daraz_sku VARCHAR(80) NULL"); } catch (Exception $e) {}
+  try { q("ALTER TABLE orders ADD COLUMN IF NOT EXISTS daraz_item_name VARCHAR(160) NULL"); } catch (Exception $e) {}
+  try { q("ALTER TABLE products ADD COLUMN IF NOT EXISTS daraz_sku VARCHAR(80) NULL"); } catch (Exception $e) {}
+  $done = true;
+}
+
+/* Distinct Daraz SKUs sitting on imported orders with no product matched yet, newest first,
+   with a sample item name and how many order lines are waiting on it — feeds the "🔗 Map
+   Unmatched Daraz Products" panel so mapping one SKU is a single click, not per-order editing. */
+function daraz_unmatched_skus(): array {
+  daraz_ensure_cols();
+  return rows("SELECT daraz_sku, MAX(daraz_item_name) AS sample_name, COUNT(*) AS line_count, MAX(order_date) AS last_seen
+               FROM orders
+               WHERE daraz_sku IS NOT NULL AND daraz_sku<>'' AND product_id IS NULL
+                 AND courier_id = (SELECT id FROM couriers WHERE LOWER(name)='daraz' LIMIT 1)
+               GROUP BY daraz_sku ORDER BY line_count DESC, last_seen DESC");
+}
+
+/* One click = map a Daraz SKU to a local product AND retroactively fix every already-imported
+   order line that was waiting on it (sets product_id/cost_price, deducts stock the same way a
+   fresh import would, clears the ⚠ remarks flag). Future syncs pick up the mapping automatically
+   via products.daraz_sku (see daraz_sync_orders). */
+function daraz_map_sku_to_product(string $sku, int $productId): array {
+  daraz_ensure_cols();
+  $sku = trim($sku);
+  if ($sku === '' || !$productId) throw new Exception('Missing SKU or product.');
+  $prod = row("SELECT id,cost FROM products WHERE id=?", [$productId]);
+  if (!$prod) throw new Exception('Product not found.');
+
+  q("UPDATE products SET daraz_sku=? WHERE id=?", [$sku, $productId]);
+
+  $dzId = (int)val("SELECT id FROM couriers WHERE LOWER(name)='daraz' LIMIT 1");
+  $pending = rows("SELECT id,qty,status,remarks FROM orders WHERE daraz_sku=? AND product_id IS NULL AND courier_id=?", [$sku, $dzId]);
+  $fixed = 0;
+  foreach ($pending as $o) {
+    $cleanRemarks = trim(preg_replace('/\s*⚠.*$/u', '', (string)$o['remarks']));
+    q("UPDATE orders SET product_id=?, cost_price=?, remarks=? WHERE id=?", [$productId, (float)$prod['cost'], $cleanRemarks, $o['id']]);
+    stock_on_status_change($productId, (int)$o['qty'], '', $o['status'], (int)$o['id']);
+    $fixed++;
+  }
+  log_activity("Mapped Daraz SKU \"$sku\" to product #$productId — fixed $fixed existing order line(s)", 'Daraz');
+  return ['fixed' => $fixed];
+}
+
 /* Pull recent Daraz orders into Sales (orders table, Courier = Daraz). Idempotent — an order
    whose daraz_order_id is already on a local row is skipped, so this is safe to run repeatedly
    (manual button or a future cron job) without creating duplicates. A line whose Daraz SKU
@@ -211,8 +259,7 @@ function daraz_sync_orders(int $days = 14): array {
   $daraz = new Daraz();
   if (!$daraz->connected()) throw new Exception('Daraz is not connected yet — authorize the app first.');
 
-  try { q("ALTER TABLE orders ADD COLUMN IF NOT EXISTS daraz_order_id VARCHAR(40) NULL"); } catch (Exception $e) {}
-  try { q("ALTER TABLE orders ADD INDEX idx_daraz_order_id (daraz_order_id)"); } catch (Exception $e) {}
+  daraz_ensure_cols();
 
   $dzCourier = row("SELECT id FROM couriers WHERE LOWER(name)='daraz'");
   $dzId = (int)($dzCourier['id'] ?? 0);
@@ -249,10 +296,15 @@ function daraz_sync_orders(int $days = 14): array {
     foreach ($daraz->getOrderItems($chunk) as $r) $items[(string)$r['order_id']] = $r['order_items'] ?? [];
   }
 
-  /* product lookup by SKU (case-insensitive) */
+  /* product lookup by SKU (case-insensitive) — prefer the explicit Daraz-SKU mapping
+     (Settings-free, set via the "🔗 Map Unmatched Daraz Products" panel on this page),
+     falling back to the local product's own SKU in case it already happens to match */
   $productsBySku = [];
   foreach (rows("SELECT id,sku,cost FROM products WHERE sku IS NOT NULL AND sku<>''") as $p) {
     $productsBySku[strtolower(trim($p['sku']))] = $p;
+  }
+  foreach (rows("SELECT id,daraz_sku,cost FROM products WHERE daraz_sku IS NOT NULL AND daraz_sku<>''") as $p) {
+    $productsBySku[strtolower(trim($p['daraz_sku']))] = $p;   /* takes priority — set after, overwrites a sku-only hit */
   }
 
   /* same smallest-unused-number code scheme sales.php uses */
@@ -274,8 +326,9 @@ function daraz_sync_orders(int $days = 14): array {
       $sku    = trim((string)($it['sku'] ?? '')) ?: trim((string)($it['shop_sku'] ?? ''));
       $price  = (float)($it['item_price'] ?? $it['paid_price'] ?? 0);
       $status = daraz_map_status((string)($it['status'] ?? 'pending'));
+      $name   = trim((string)($it['name'] ?? ''));
       $key = $sku.'|'.$price.'|'.$status;
-      if (!isset($groups[$key])) $groups[$key] = ['sku'=>$sku,'price'=>$price,'status'=>$status,'qty'=>0];
+      if (!isset($groups[$key])) $groups[$key] = ['sku'=>$sku,'name'=>$name,'price'=>$price,'status'=>$status,'qty'=>0];
       $groups[$key]['qty']++;
     }
 
@@ -292,7 +345,7 @@ function daraz_sync_orders(int $days = 14): array {
     foreach ($groups as $g) {
       $prod    = $productsBySku[strtolower($g['sku'])] ?? null;
       $remarks = 'Daraz #'.$orderId;
-      if (!$prod) { $unmatched++; $remarks .= ' ⚠ SKU "'.$g['sku'].'" not in Products — set product/cost manually'; }
+      if (!$prod) { $unmatched++; $remarks .= ' ⚠ '.($g['name'] ?: 'item').' — SKU "'.$g['sku'].'" not mapped yet'; }
 
       $f = [
         'code'            => $pref.str_pad($nextNum(),4,'0',STR_PAD_LEFT),
@@ -312,6 +365,8 @@ function daraz_sync_orders(int $days = 14): array {
         'remarks'         => $remarks,
         'order_group'     => $group,
         'daraz_order_id'  => $orderId,
+        'daraz_sku'       => $g['sku'] !== '' ? $g['sku'] : null,
+        'daraz_item_name' => $g['name'] !== '' ? $g['name'] : null,
       ];
       $cols = implode('`,`', array_keys($f));
       $qs   = implode(',', array_fill(0, count($f), '?'));

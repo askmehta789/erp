@@ -112,65 +112,113 @@ $mAds=(float)val("SELECT COALESCE(SUM(amount),0) FROM daraz_ads WHERE spend_date
 $mNet=$mGross-$mAds;
 $mRoas=$mAds>0?round($mRev/$mAds,2):null;
 
+/* bar widths for the metric tiles — all bounded 0-100 */
+$pDel   = $mOrders ? round($mDel/$mOrders*100) : 0;
+$pCost  = $mRev>0 ? min(100, round($mCost/$mRev*100)) : 0;
+$pAds   = $mRev>0 ? min(100, round($mAds/$mRev*100)) : 0;
+$pNet   = $mRev>0 ? max(0, min(100, round($mNet/$mRev*100))) : 0;
+$pRoas  = $mRoas!==null ? max(0, min(100, round($mRoas/5*100))) : 0;
+
 require __DIR__.'/includes/header.php';
 echo delivery_disabled_banner('daraz.php');
 ?>
-<div class="page-head">
-  <div><h1><img src="assets/daraz-icon.ico" alt="Daraz" style="height:26px;vertical-align:-5px;margin-right:4px">Daraz</h1>
-    <p><?= $darazConnected ? ('🟢 Connected as <b>'.e($darazAccount).'</b> — "🔄 Sync Orders Now" pulls new Daraz orders straight into Sales') : '⚪ Not connected — orders come from Sales with Courier = <b>Daraz</b> manually until the app is authorized' ?></p>
+<style>
+.ncmv3 .dz-grid{display:grid;grid-template-columns:1fr 320px;gap:16px;margin-top:20px;align-items:start}
+@media(max-width:1024px){.ncmv3 .dz-grid{grid-template-columns:1fr}}
+.dz-status{display:inline-block;padding:4px 11px;border-radius:999px;font-size:11px;font-weight:800;border:none;appearance:none;cursor:pointer;color:#fff}
+.dz-status.st-pending,.dz-status.st-processing{background:#64748b}
+.dz-status.st-shipped{background:#e0851b}
+.dz-status.st-delivered{background:#0f9d63}
+.dz-status.st-returned,.dz-status.st-cancelled{background:#dc4437}
+.dz-dc{font-size:11px;padding:5px 7px;border-radius:8px;border:1px solid rgba(148,163,184,.4);width:72px;background:rgba(255,255,255,.75)}
+body.dark .dz-dc{background:rgba(2,6,23,.5);color:var(--ink);border-color:rgba(148,163,184,.25)}
+.dz-oid{font-weight:800;display:flex;align-items:center;gap:6px}
+.dz-oid .dz-dot{width:7px;height:7px;border-radius:50%;background:#f85606;flex:none}
+.dz-warn{color:#b45309;font-size:11px;margin-top:2px;display:block;max-width:260px;white-space:normal}
+.dz-map-row{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:12px 0;border-bottom:1px solid rgba(148,163,184,.18)}
+.dz-map-row:last-child{border-bottom:none}
+.dz-map-title{font-weight:700;font-size:13px}
+.dz-map-sku{color:var(--muted);font-size:11px;margin-top:1px}
+.dz-map-panel{border-radius:18px;padding:4px 20px 8px;margin-bottom:18px;
+  background:linear-gradient(135deg,rgba(251,191,36,.14),rgba(249,115,22,.08));
+  border:1px solid rgba(245,158,11,.35);box-shadow:0 8px 28px rgba(245,158,11,.10)}
+body.dark .dz-map-panel{background:linear-gradient(135deg,rgba(251,191,36,.08),rgba(249,115,22,.05));border-color:rgba(245,158,11,.25)}
+.dz-map-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:14px 0 6px}
+.dz-map-head h2{font-size:14px;margin:0;font-weight:800;color:#b45309}
+body.dark .dz-map-head h2{color:#fbbf24}
+.dz-empty{padding:40px 20px;text-align:center;color:var(--muted)}
+.dz-empty .big{font-size:32px;margin-bottom:8px}
+</style>
+
+<div class="ncmv3">
+<div class="ncm-hero">
+  <div class="nh-left">
+    <h1><img src="assets/daraz-icon.ico" alt="Daraz" style="height:28px;vertical-align:-6px;margin-right:6px"><span class="grad">Daraz Channel</span></h1>
+    <p>Auto-synced orders · SKU mapping · ad spend &amp; ROAS — cancelled Daraz orders are never imported</p>
+    <div class="nh-status">
+      <?php if ($darazConnected): ?>
+        <span class="live"><span class="d"></span> LIVE · Connected as <?= e($darazAccount) ?></span>
+      <?php else: ?>
+        <span class="live off"><span class="d"></span> Not connected — <a href="settings.php">authorize in Settings → Channel / Daraz API</a></span>
+      <?php endif; ?>
+    </div>
   </div>
-  <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-    <form method="get" style="display:flex;gap:6px;align-items:center">
-      <input type="month" name="m" value="<?= e($m) ?>"><button class="btn btn-sm">Go</button>
+  <div class="nh-actions">
+    <form method="get" style="display:inline-flex;gap:6px;align-items:center">
+      <input type="month" name="m" value="<?= e($m) ?>" style="border-radius:999px;padding:9px 14px;border:1px solid rgba(148,163,184,.35);background:rgba(255,255,255,.7);font-size:13px">
+      <button class="btn nh-ghost">Go</button>
     </form>
     <?php if ($darazConnected): ?>
       <form method="post" style="display:inline">
         <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="sync_now"><input type="hidden" name="m" value="<?= e($m) ?>">
-        <button class="btn btn-primary" title="Pull new Daraz orders (last 14 days) into Sales">🔄 Sync Orders Now</button>
+        <button class="btn nh-ghost" title="Pull new Daraz orders (last 14 days) into Sales — cancelled ones are skipped">🔄 Sync Orders Now</button>
       </form>
     <?php endif; ?>
-    <a class="btn btn-primary" href="sales.php?new=daraz">＋ New Daraz Order</a>
+    <a class="btn nh-cta" href="sales.php?new=daraz">＋ New Daraz Order</a>
   </div>
 </div>
+
 <?php if($fl=flash()) echo '<div class="flash">'.e($fl).'</div>'; ?>
 
 <?php if ($darazUnmatched): ?>
-<div class="panel" style="margin-bottom:18px;border:1.5px solid #f59e0b">
-  <div class="panel-head" style="background:#fffbeb"><h2>🔗 Map Unmatched Daraz Products (<?= count($darazUnmatched) ?>)</h2>
-    <span class="muted" style="font-size:12px">Pick which product each one is — fixes every order already imported for it, and matches automatically from now on.</span></div>
-  <div class="panel-body" style="padding-top:8px">
-    <?php foreach ($darazUnmatched as $um): ?>
-      <form method="post" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:8px 0;border-bottom:1px solid var(--border)">
-        <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="map_sku"><input type="hidden" name="m" value="<?= e($m) ?>">
-        <input type="hidden" name="sku" value="<?= e($um['daraz_sku']) ?>">
-        <div style="min-width:220px"><b><?= e($um['sample_name'] ?: 'Daraz item') ?></b><br><span class="muted" style="font-size:11px">SKU: <?= e($um['daraz_sku']) ?></span></div>
-        <span class="muted" style="font-size:12px"><?= (int)$um['line_count'] ?> order line(s) waiting</span>
-        <select name="product_id" required style="flex:1;min-width:200px">
-          <option value="">— pick the matching product —</option>
-          <?php foreach ($allProducts as $p): ?>
-            <option value="<?= (int)$p['id'] ?>"><?= e($p['name']) ?><?= $p['sku'] ? ' ('.e($p['sku']).')' : '' ?></option>
-          <?php endforeach; ?>
-        </select>
-        <button class="btn btn-primary btn-sm">✓ Map it</button>
-      </form>
-    <?php endforeach; ?>
+<div class="dz-map-panel">
+  <div class="dz-map-head">
+    <h2>🔗 Map Unmatched Daraz Products (<?= count($darazUnmatched) ?>)</h2>
+    <span class="muted" style="font-size:12px">Pick the matching product — fixes every order already imported for it, and matches automatically from now on.</span>
   </div>
+  <?php foreach ($darazUnmatched as $um): ?>
+    <form method="post" class="dz-map-row">
+      <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="map_sku"><input type="hidden" name="m" value="<?= e($m) ?>">
+      <input type="hidden" name="sku" value="<?= e($um['daraz_sku']) ?>">
+      <div style="min-width:220px;flex:1">
+        <div class="dz-map-title"><?= e($um['sample_name'] ?: 'Daraz item') ?></div>
+        <div class="dz-map-sku">SKU: <?= e($um['daraz_sku']) ?> · <?= (int)$um['line_count'] ?> order line(s) waiting</div>
+      </div>
+      <select name="product_id" required style="flex:1;min-width:200px;border-radius:10px;padding:8px 10px;border:1px solid rgba(148,163,184,.35);background:rgba(255,255,255,.8)">
+        <option value="">— pick the matching product —</option>
+        <?php foreach ($allProducts as $p): ?>
+          <option value="<?= (int)$p['id'] ?>"><?= e($p['name']) ?><?= $p['sku'] ? ' ('.e($p['sku']).')' : '' ?></option>
+        <?php endforeach; ?>
+      </select>
+      <button class="btn nh-cta" style="padding:8px 16px;font-size:12.5px">✓ Map it</button>
+    </form>
+  <?php endforeach; ?>
 </div>
 <?php endif; ?>
 
 <div class="mgrid">
-  <div class="metric blue"><div><div class="mv"><?= $mOrders ?></div><div class="ml">Orders</div><div class="ms"><?= e(date('M Y',strtotime($mStart))) ?> · <?= $mDel ?> delivered</div></div><div class="mi">🛍</div></div>
-  <div class="metric green"><div><div class="mv" style="font-size:19px"><?= money($mRev) ?></div><div class="ml">Delivered Revenue</div><div class="ms"><?= number_format($mUnits) ?> pcs delivered</div></div><div class="mi">💰</div></div>
-  <div class="metric amber"><div><div class="mv" style="font-size:19px"><?= money($mCost) ?></div><div class="ml">Product Cost</div><div class="ms">FIFO actual</div></div><div class="mi">📦</div></div>
-  <div class="metric orange"><div><div class="mv" style="font-size:19px"><?= money($mAds) ?></div><div class="ml">Ads Spend</div><div class="ms">Daraz sponsored</div></div><div class="mi">📣</div></div>
-  <div class="metric <?= $mNet>=0?'teal':'red' ?>"><div><div class="mv" style="font-size:19px"><?= money($mNet) ?></div><div class="ml">Net (after ads)</div><div class="ms">profit − ads</div></div><div class="mi">🧾</div></div>
-  <div class="metric indigo"><div><div class="mv"><?= $mRoas!==null?$mRoas.'×':'—' ?></div><div class="ml">ROAS</div><div class="ms">revenue / ads</div></div><div class="mi">🎯</div></div>
+  <div class="metric blue"><span class="g">🛍</span><div class="mv"><?= $mOrders ?></div><div class="ml"><?= e(date('M Y',strtotime($mStart))) ?> · <?= $mDel ?> delivered</div><div class="bar"><i style="width:100%;background:linear-gradient(90deg,#3b82f6,#6366f1)"></i></div></div>
+  <div class="metric green"><span class="g">💰</span><div class="mv" style="font-size:19px"><?= money($mRev) ?></div><div class="ml">Delivered Rev · <?= number_format($mUnits) ?> pcs</div><div class="bar"><i style="width:<?= $pDel ?>%;background:#22c55e"></i></div></div>
+  <div class="metric amber"><span class="g">📦</span><div class="mv" style="font-size:19px"><?= money($mCost) ?></div><div class="ml">Product Cost · FIFO</div><div class="bar"><i style="width:<?= $pCost ?>%;background:#f59e0b"></i></div></div>
+  <div class="metric orange"><span class="g">📣</span><div class="mv" style="font-size:19px"><?= money($mAds) ?></div><div class="ml">Ads Spend</div><div class="bar"><i style="width:<?= $pAds ?>%;background:#f97316"></i></div></div>
+  <div class="metric <?= $mNet>=0?'teal':'red' ?>"><span class="g">🧾</span><div class="mv" style="font-size:19px"><?= money($mNet) ?></div><div class="ml">Net (after ads)</div><div class="bar"><i style="width:<?= $pNet ?>%;background:<?= $mNet>=0?'#14b8a6':'#ef4444' ?>"></i></div></div>
+  <div class="metric indigo"><span class="g">🎯</span><div class="mv"><?= $mRoas!==null?$mRoas.'×':'—' ?></div><div class="ml">ROAS · revenue/ads</div><div class="bar"><i style="width:<?= $pRoas ?>%;background:#6366f1"></i></div></div>
 </div>
 
 <div class="dz-grid">
 <div class="panel">
   <div class="panel-head" style="flex-wrap:wrap;gap:10px"><h2>📦 Daraz Orders — <?= e(date('F Y',strtotime($mStart))) ?></h2>
-    <input id="dzSearch" placeholder="🔍 Search order id, customer, phone, product…" style="max-width:280px" oninput="dzFilter()">
+    <input id="dzSearch" class="ncm-search" placeholder="🔍 Search order id, customer, phone, product…" style="max-width:280px;border-radius:999px;padding:9px 14px" oninput="dzFilter()">
     <span class="muted" style="font-size:12px"><?= $mRet ?> returned/cancelled · edit any order in <a href="sales.php">Sales</a></span></div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;padding:0 18px 10px" id="dzChips">
     <?php $dzCounts=['all'=>count($orders)]; foreach($orders as $oC){ $dzCounts[$oC['status']]=($dzCounts[$oC['status']]??0)+1; }
@@ -185,9 +233,13 @@ echo delivery_disabled_banner('daraz.php');
     $isDel=$o['status']==='delivered';
     $prof=order_profit($o);
     $pot=((float)$o['sell_price']-(float)$o['cost_price'])*(int)$o['qty']-(float)$o['delivery_charge'];
+    $hasWarn = !empty($o['daraz_order_id']) && !empty($o['remarks']) && strpos($o['remarks'],'⚠')!==false;
   ?>
     <tr data-s="<?= e(strtolower(($o['remarks']??'').' '.$o['code'].' '.($o['customer']??'').' '.($o['phone']??'').' '.($o['product_name']??''))) ?>" data-st="<?= e($o['status']) ?>">
-      <td><b><?= e($o['daraz_order_id'] ?: ($o['remarks'] ?: '—')) ?></b><?php if(!empty($o['daraz_order_id']) && !empty($o['remarks']) && strpos($o['remarks'],'⚠')!==false): ?><br><span class="muted" style="font-size:11px"><?= e($o['remarks']) ?></span><?php endif; ?></td>
+      <td>
+        <div class="dz-oid"><span class="dz-dot"></span><?= e($o['daraz_order_id'] ?: ($o['remarks'] ?: '—')) ?></div>
+        <?php if($hasWarn): ?><span class="dz-warn">⚠ <?= e(str_replace('Daraz #'.$o['daraz_order_id'].' ⚠ ','',$o['remarks'])) ?></span><?php endif; ?>
+      </td>
       <td class="muted"><?= e($o['code']) ?></td>
       <td><?= e($o['order_date']) ?></td>
       <td><b><?= e($o['customer'] ?: '—') ?></b></td>
@@ -198,10 +250,10 @@ echo delivery_disabled_banner('daraz.php');
       <td style="text-align:right;font-weight:800;color:<?= ($isDel?$prof:$pot)>=0?'var(--green)':'var(--red)' ?>">
         <?= $isDel ? money($prof) : (in_array($o['status'],['returned','cancelled','exchanged'],true) ? money($prof) : '≈ '.money($pot)) ?></td>
       <td>
-        <form method="post" style="display:flex;gap:5px;align-items:center">
+        <form method="post" style="display:flex;gap:5px;align-items:center;flex-wrap:wrap">
           <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="set_status">
           <input type="hidden" name="id" value="<?= (int)$o['id'] ?>"><input type="hidden" name="m" value="<?= e($m) ?>">
-          <select name="status" class="dz-st st-<?= e($o['status']) ?>">
+          <select name="status" class="dz-status st-<?= e($o['status']) ?>" onchange="this.className='dz-status st-'+this.value">
             <?php foreach(['pending','processing','shipped','delivered','returned','cancelled'] as $st): ?>
               <option value="<?= $st ?>"<?= $o['status']===$st?' selected':'' ?>><?= ucfirst($st) ?></option>
             <?php endforeach; ?>
@@ -211,7 +263,18 @@ echo delivery_disabled_banner('daraz.php');
         </form>
       </td>
     </tr>
-  <?php endforeach; if(!$orders) echo '<tr><td colspan="10"><div class="empty">No Daraz orders this month — click "＋ New Daraz Order" (it opens Sales with Courier preset to Daraz; put the Daraz Order ID in Remarks).</div></td></tr>'; ?>
+  <?php endforeach; if(!$orders): ?>
+  <tr><td colspan="10">
+    <div class="dz-empty">
+      <div class="big">📦</div>
+      <?php if ($darazConnected): ?>
+        No Daraz orders this month yet — click <b>🔄 Sync Orders Now</b> above, or <b>＋ New Daraz Order</b> to add one by hand.
+      <?php else: ?>
+        No Daraz orders this month — connect Daraz in Settings to auto-sync, or click <b>＋ New Daraz Order</b> to add one by hand (put the Daraz Order ID in Remarks).
+      <?php endif; ?>
+    </div>
+  </td></tr>
+  <?php endif; ?>
   </tbody></table></div>
 </div>
 
@@ -223,7 +286,7 @@ echo delivery_disabled_banner('daraz.php');
       <input type="date" name="spend_date" value="<?= date('Y-m-d') ?>" style="width:128px">
       <input type="number" step="any" min="1" name="amount" placeholder="Amount" required style="flex:1;min-width:90px">
       <input name="note" placeholder="note (optional)" style="width:100%">
-      <button class="btn btn-primary btn-sm" style="width:100%">＋ Add Spend</button>
+      <button class="btn nh-cta" style="width:100%">＋ Add Spend</button>
     </form>
     <table class="tbl led-tbl"><thead><tr><th>Date</th><th style="text-align:right">Amount</th><th>Note</th><?php if($isAdmin): ?><th></th><?php endif; ?></tr></thead><tbody>
       <?php foreach($ads as $a): ?>
@@ -237,6 +300,7 @@ echo delivery_disabled_banner('daraz.php');
   </div>
 </aside>
 </div>
+</div><!-- /ncmv3 -->
 <script>
 var dzF='all';
 function dzTab(b){dzF=b.getAttribute('data-f');document.querySelectorAll('#dzChips .ntab').forEach(function(x){x.classList.toggle('on',x===b);});dzFilter();}

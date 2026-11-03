@@ -57,6 +57,11 @@ $groups = [
     'pd_pickup_address'  => ['Default Pickup Business Address (must match a registered address — set up on the Pick & Drop page)','text'],
     'pd_aging_days'      => ['Aging Alert After (days)','number'],
   ],
+  'Channel / Daraz API' => [
+    'daraz_app_key'      => ['Daraz App Key','text'],
+    'daraz_app_secret'   => ['Daraz App Secret','text'],
+    'daraz_redirect_uri' => ['Daraz Redirect / Callback URL (register this exact URL in the Daraz app form, e.g. https://yourdomain.com/erp/daraz_callback.php)','text'],
+  ],
   'Automation (cron, backups, weekly email)' => [
     'cron_token'   => ['Cron Secret Token (auto-generated)','text'],
     'report_email' => ['Weekly Report Email (blank = Business Email)','text'],
@@ -193,7 +198,7 @@ if (trim((string)setting('cron_token','')) === '') {
 $PAGE_TITLE='Settings'; require __DIR__.'/includes/header.php';
 
 /* which fields render full-width */
-$fullFields = ['store_name','store_address','store_tagline','ncm_api_key','pd_api_key','pd_api_secret','pd_pickup_address','ai_api_key','gemini_api_key','product_categories','expense_categories','gdrive_client_id','gdrive_client_secret'];
+$fullFields = ['store_name','store_address','store_tagline','ncm_api_key','pd_api_key','pd_api_secret','pd_pickup_address','ai_api_key','gemini_api_key','product_categories','expense_categories','gdrive_client_id','gdrive_client_secret','daraz_app_key','daraz_app_secret','daraz_redirect_uri'];
 ?>
 <div class="page-head"><div><h1>⚙️ Settings</h1><p>Configure your store, finances, courier, AI and appearance</p></div></div>
 <?php if($fl=flash()) echo '<div class="flash">'.e($fl).'</div>'; ?>

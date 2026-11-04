@@ -24,6 +24,13 @@ try { q("CREATE TABLE IF NOT EXISTS daraz_ads(
   note VARCHAR(160) DEFAULT '',
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"); } catch (Exception $e) {}
 
+/* after a POST, return to the same date range the user was looking at */
+function dz_back(): string {
+  $q = [];
+  foreach (['m','from','to','range'] as $k) if (!empty($_POST[$k])) $q[$k] = (string)$_POST[$k];
+  return 'daraz.php'.($q ? '?'.http_build_query($q) : '');
+}
+
 if ($_SERVER['REQUEST_METHOD']==='POST') {
   check_csrf();
   if (($_POST['_action'] ?? '')==='set_status') {
@@ -46,7 +53,7 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
       log_activity("Daraz order {$o['code']}: status $old→$new, delivery ".money($dc),'Daraz');
       flash("Order {$o['code']} updated — Sales page reflects it instantly.");
     }
-    header('Location: daraz.php?m='.urlencode($_POST['m'] ?? date('Y-m'))); exit;
+    header('Location: '.dz_back()); exit;
   }
   check_csrf();
   $act = $_POST['_action'] ?? '';
@@ -57,18 +64,18 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
         [($_POST['spend_date'] ?? '') ?: date('Y-m-d'), $amt, trim($_POST['note'] ?? '')]);
       log_activity("Daraz ad spend ".money($amt),'Daraz'); flash('Ad spend recorded: '.money($amt));
     } else flash('Amount must be greater than 0.');
-    header('Location: daraz.php?m='.urlencode($_POST['m'] ?? date('Y-m'))); exit;
+    header('Location: '.dz_back()); exit;
   }
   if ($act==='del_ad' && $isAdmin) {
     q("DELETE FROM daraz_ads WHERE id=?",[(int)($_POST['id'] ?? 0)]);
-    flash('Ad entry deleted.'); header('Location: daraz.php?m='.urlencode($_POST['m'] ?? date('Y-m'))); exit;
+    flash('Ad entry deleted.'); header('Location: '.dz_back()); exit;
   }
   if ($act==='map_sku') {
     try {
       $r = daraz_map_sku_to_product(trim((string)($_POST['sku'] ?? '')), (int)($_POST['product_id'] ?? 0));
       flash($r['fixed']>0 ? "Mapped — fixed {$r['fixed']} existing order line(s), and future syncs will match it automatically." : 'Mapped — future syncs will match it automatically.');
     } catch (Exception $ex) { flash('Could not map: '.$ex->getMessage()); }
-    header('Location: daraz.php?m='.urlencode($_POST['m'] ?? date('Y-m'))); exit;
+    header('Location: '.dz_back()); exit;
   }
   if ($act==='sync_now') {
     try {
@@ -84,13 +91,40 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
         flash($r['fetched']>0 ? "No new orders — all {$r['fetched']} seen were already synced or cancelled.{$extra}" : 'No Daraz orders found in the last 14 days.');
       }
     } catch (Exception $ex) { flash('Sync failed: '.$ex->getMessage()); }
-    header('Location: daraz.php?m='.urlencode($_POST['m'] ?? date('Y-m'))); exit;
+    header('Location: '.dz_back()); exit;
   }
 }
 
-/* ---- month filter ---- */
-$m = preg_match('/^\d{4}-\d{2}$/', $_GET['m'] ?? '') ? $_GET['m'] : date('Y-m');
-$mStart = $m.'-01'; $mEnd = date('Y-m-t', strtotime($mStart));
+/* ---- date range: quick preset, custom from/to, or a month (default: this month) ---- */
+$isDate = fn($d) => is_string($d) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $d) && strtotime($d);
+$m     = preg_match('/^\d{4}-\d{2}$/', $_GET['m'] ?? '') ? $_GET['m'] : date('Y-m');
+$range = $_GET['range'] ?? '';
+$today = date('Y-m-d');
+$presets = [
+  'today'     => ['Today',        $today, $today],
+  'yesterday' => ['Yesterday',    date('Y-m-d', strtotime('-1 day')), date('Y-m-d', strtotime('-1 day'))],
+  '7d'        => ['Last 7 days',  date('Y-m-d', strtotime('-6 days')), $today],
+  '30d'       => ['Last 30 days', date('Y-m-d', strtotime('-29 days')), $today],
+  'month'     => ['This month',   date('Y-m-01'), date('Y-m-t')],
+  'lastmonth' => ['Last month',   date('Y-m-01', strtotime('first day of last month')), date('Y-m-t', strtotime('last day of last month'))],
+];
+if (isset($presets[$range])) {
+  [$rangeLabel, $mStart, $mEnd] = $presets[$range];
+} elseif ($isDate($_GET['from'] ?? '') && $isDate($_GET['to'] ?? '')) {
+  $range = 'custom';
+  $mStart = $_GET['from']; $mEnd = $_GET['to'];
+  if ($mStart > $mEnd) [$mStart, $mEnd] = [$mEnd, $mStart];
+  $rangeLabel = date('j M', strtotime($mStart)).' – '.date('j M Y', strtotime($mEnd));
+} else {
+  $range = isset($_GET['m']) ? 'm' : 'month';
+  $mStart = $m.'-01'; $mEnd = date('Y-m-t', strtotime($mStart));
+  $rangeLabel = date('F Y', strtotime($mStart));
+}
+/* hidden fields every POST form carries so the redirect comes back to this same view */
+$dzKeep = '';
+if ($range === 'custom') $dzKeep = '<input type="hidden" name="from" value="'.e($mStart).'"><input type="hidden" name="to" value="'.e($mEnd).'">';
+elseif ($range === 'm')  $dzKeep = '<input type="hidden" name="m" value="'.e($m).'">';
+elseif ($range !== 'month') $dzKeep = '<input type="hidden" name="range" value="'.e($range).'">';
 
 $orders = rows("SELECT o.*, p.name AS product_name FROM orders o
                 LEFT JOIN products p ON p.id=o.product_id
@@ -202,6 +236,26 @@ body.dark .dz-col{background:rgba(2,6,23,.35)}
 .dz-col-amt{font-size:11.5px;color:var(--muted);margin:2px 0 6px}
 .dz-mini{font-size:11.5px;padding:6px 8px;border-radius:9px;background:rgba(148,163,184,.12);margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-left:3px solid var(--c)}
 .dz-mini span{color:var(--muted)}
+/* date range bar */
+.dz-range{display:flex;align-items:center;gap:10px 14px;flex-wrap:wrap;margin-top:16px;padding:12px 16px}
+.dz-range-lbl{font-size:13px}
+.dz-pills{display:flex;gap:6px;flex-wrap:wrap}
+.dz-pill{padding:6px 12px;border-radius:999px;font-size:12px;font-weight:700;text-decoration:none;color:var(--ink);border:1px solid rgba(148,163,184,.35);background:rgba(255,255,255,.6)}
+body.dark .dz-pill{background:rgba(2,6,23,.4)}
+.dz-pill:hover{border-color:#f85606}
+.dz-pill.on{background:#f85606;border-color:#f85606;color:#fff}
+.dz-range-form{display:inline-flex;gap:6px;align-items:center;margin-left:auto}
+.dz-range-form + .dz-range-form{margin-left:0}
+.dz-range-form input{border-radius:999px;padding:7px 12px;border:1px solid rgba(148,163,184,.35);font-size:12.5px}
+/* order filter toolbar */
+.dz-fbarx{display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:0 18px 12px}
+.dz-fbarx .ncm-search{flex:1;min-width:200px;max-width:300px;border-radius:999px;padding:8px 14px}
+.dz-fbarx select{border-radius:999px;padding:8px 12px;font-size:12.5px;border:1px solid rgba(148,163,184,.35);max-width:220px}
+.dz-tog{padding:6px 12px;border-radius:999px;font-size:12px;font-weight:700;cursor:pointer;border:1px dashed rgba(148,163,184,.6);background:transparent;color:var(--ink)}
+.dz-tog.on{border-style:solid;border-color:#f85606;background:rgba(248,86,6,.12);color:#c2410c}
+body.dark .dz-tog.on{color:#fdba74}
+.dz-clear{font-size:12px;color:var(--muted);text-decoration:none}
+.dz-sum{margin-left:auto;font-size:12.5px;color:var(--muted)}
 /* order rows */
 .dz-cust b{display:block}
 .dz-sub{font-size:11.5px;color:var(--muted);margin-top:1px}
@@ -224,18 +278,32 @@ body.dark .dz-col{background:rgba(2,6,23,.35)}
     </div>
   </div>
   <div class="nh-actions">
-    <form method="get" style="display:inline-flex;gap:6px;align-items:center">
-      <input type="month" name="m" value="<?= e($m) ?>" style="border-radius:999px;padding:9px 14px;border:1px solid rgba(148,163,184,.35);background:rgba(255,255,255,.7);font-size:13px">
-      <button class="btn nh-ghost">Go</button>
-    </form>
     <?php if ($darazConnected): ?>
       <form method="post" style="display:inline">
-        <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="sync_now"><input type="hidden" name="m" value="<?= e($m) ?>">
+        <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="sync_now"><?= $dzKeep ?>
         <button class="btn nh-ghost" title="Pull new Daraz orders (last 14 days) into Sales — cancelled ones are skipped">🔄 Sync Orders Now</button>
       </form>
     <?php endif; ?>
     <a class="btn nh-cta" href="sales.php?new=daraz">＋ New Daraz Order</a>
   </div>
+</div>
+
+<div class="panel dz-range">
+  <span class="dz-range-lbl">📅 Showing <b><?= e($rangeLabel) ?></b></span>
+  <div class="dz-pills">
+    <?php foreach ($presets as $pk => [$plbl]): $on = $range===$pk || ($pk==='month' && $range==='month'); ?>
+      <a class="dz-pill<?= $on?' on':'' ?>" href="daraz.php?range=<?= $pk ?>"><?= e($plbl) ?></a>
+    <?php endforeach; ?>
+  </div>
+  <form method="get" class="dz-range-form">
+    <input type="date" name="from" value="<?= e($mStart) ?>" aria-label="From date">
+    <span class="muted">to</span>
+    <input type="date" name="to" value="<?= e($mEnd) ?>" aria-label="To date">
+    <button class="btn nh-ghost">Apply</button>
+  </form>
+  <form method="get" class="dz-range-form">
+    <input type="month" name="m" value="<?= e($range==='m' ? $m : substr($mStart,0,7)) ?>" aria-label="Pick a month" onchange="this.form.submit()">
+  </form>
 </div>
 
 <?php if($fl=flash()) echo '<div class="flash">'.e($fl).'</div>'; ?>
@@ -248,7 +316,7 @@ body.dark .dz-col{background:rgba(2,6,23,.35)}
   </div>
   <?php foreach ($darazUnmatched as $um): ?>
     <form method="post" class="dz-map-row">
-      <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="map_sku"><input type="hidden" name="m" value="<?= e($m) ?>">
+      <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="map_sku"><?= $dzKeep ?>
       <input type="hidden" name="sku" value="<?= e($um['daraz_sku']) ?>">
       <div style="min-width:220px;flex:1">
         <div class="dz-map-title"><?= e($um['sample_name'] ?: 'Daraz item') ?></div>
@@ -267,7 +335,7 @@ body.dark .dz-col{background:rgba(2,6,23,.35)}
 <?php endif; ?>
 
 <div class="mgrid">
-  <div class="metric blue"><span class="g">🛍</span><div class="mv"><?= $mOrders ?></div><div class="ml"><?= e(date('M Y',strtotime($mStart))) ?> · <?= $mDel ?> delivered</div><div class="bar"><i style="width:100%;background:linear-gradient(90deg,#3b82f6,#6366f1)"></i></div></div>
+  <div class="metric blue"><span class="g">🛍</span><div class="mv"><?= $mOrders ?></div><div class="ml"><?= e($rangeLabel) ?> · <?= $mDel ?> delivered</div><div class="bar"><i style="width:100%;background:linear-gradient(90deg,#3b82f6,#6366f1)"></i></div></div>
   <div class="metric green"><span class="g">💰</span><div class="mv" style="font-size:19px"><?= money($mRev) ?></div><div class="ml">Delivered Rev · <?= number_format($mUnits) ?> pcs</div><div class="bar"><i style="width:<?= $pDel ?>%;background:#22c55e"></i></div></div>
   <div class="metric amber"><span class="g">📦</span><div class="mv" style="font-size:19px"><?= money($mCost) ?></div><div class="ml">Product Cost · FIFO</div><div class="bar"><i style="width:<?= $pCost ?>%;background:#f59e0b"></i></div></div>
   <div class="metric orange"><span class="g">📣</span><div class="mv" style="font-size:19px"><?= money($mAds) ?></div><div class="ml">Ads Spend</div><div class="bar"><i style="width:<?= $pAds ?>%;background:#f97316"></i></div></div>
@@ -277,7 +345,7 @@ body.dark .dz-col{background:rgba(2,6,23,.35)}
 
 <div class="panel dz-funnel">
   <div class="dz-funnel-head">
-    <h2>💸 Where the money went — <?= e(date('F Y',strtotime($mStart))) ?></h2>
+    <h2>💸 Where the money went — <?= e($rangeLabel) ?></h2>
     <span class="muted" style="font-size:12px">Out of <b><?= money($mRev) ?></b> delivered revenue<?= $mNet<0 ? ' · <b style="color:var(--red)">net loss '.money(-$mNet).'</b>' : '' ?></span>
   </div>
   <?php if ($fBase > 0): ?>
@@ -292,7 +360,7 @@ body.dark .dz-col{background:rgba(2,6,23,.35)}
     <?php endforeach; ?>
   </div>
   <?php else: ?>
-    <div class="muted" style="font-size:13px;padding:6px 0">No delivered revenue yet this month — the breakdown appears once orders are delivered.</div>
+    <div class="muted" style="font-size:13px;padding:6px 0">No delivered revenue yet in this period — the breakdown appears once orders are delivered.</div>
   <?php endif; ?>
 </div>
 
@@ -311,9 +379,36 @@ body.dark .dz-col{background:rgba(2,6,23,.35)}
 
 <div class="dz-grid">
 <div class="panel">
+  <?php
+    $prodOpts = [];
+    foreach ($orders as $oP) { $pl = $oP['product_name'] ?: ($oP['daraz_item_name'] ?? '') ?: '—'; $prodOpts[$pl] = ($prodOpts[$pl] ?? 0) + 1; }
+    ksort($prodOpts, SORT_NATURAL | SORT_FLAG_CASE);
+  ?>
   <div class="panel-head" style="flex-wrap:wrap;gap:10px"><h2>📦 Daraz Orders <span id="dzShowing" class="muted" style="font-size:12px;font-weight:600">· all <?= count($orders) ?></span></h2>
-    <input id="dzSearch" class="ncm-search" placeholder="🔍 Search order id, customer, phone, product…" style="max-width:280px;border-radius:999px;padding:9px 14px" oninput="dzFilter()">
-    <span class="muted" style="font-size:12px"><a href="#" onclick="dzPipe(null);return false">Show all</a> · edit any order in <a href="sales.php">Sales</a></span></div>
+    <span class="muted" style="font-size:12px">edit any order in <a href="sales.php">Sales</a></span></div>
+  <div class="dz-fbarx">
+    <input id="dzSearch" class="ncm-search" placeholder="🔍 Order id, customer, phone, product…" oninput="dzFilter()">
+    <select id="dzProd" onchange="dzFilter()" aria-label="Filter by product">
+      <option value="">All products</option>
+      <?php foreach ($prodOpts as $pl => $pc): ?><option value="<?= e($pl) ?>"><?= e($pl) ?> (<?= $pc ?>)</option><?php endforeach; ?>
+    </select>
+    <select id="dzPay" onchange="dzFilter()" aria-label="Filter by payment">
+      <option value="">COD + prepaid</option><option value="cod">COD only</option><option value="prepaid">Prepaid only</option>
+    </select>
+    <select id="dzSort" onchange="dzSort()" aria-label="Sort orders">
+      <option value="new">Newest first</option><option value="old">Oldest first</option>
+      <option value="profit_hi">Highest profit</option><option value="profit_lo">Lowest profit / loss</option>
+      <option value="val_hi">Highest order value</option>
+    </select>
+  </div>
+  <div class="dz-fbarx" style="padding-top:0">
+    <button type="button" class="dz-tog" data-k="loss" onclick="dzTog(this)">🔻 Loss only</button>
+    <button type="button" class="dz-tog" data-k="nodc" onclick="dzTog(this)" title="Delivered orders with no Daraz delivery/commission charge entered">💸 Delivered, no Daraz charge</button>
+    <button type="button" class="dz-tog" data-k="warn" onclick="dzTog(this)">⚠ Unmapped SKU</button>
+    <button type="button" class="dz-tog" data-k="nophone" onclick="dzTog(this)">📵 No phone</button>
+    <a href="#" class="dz-clear" onclick="dzClear();return false">✕ Clear filters</a>
+    <span class="dz-sum" id="dzSum"></span>
+  </div>
 <div class="table-wrap"><table class="tbl led-tbl"><thead><tr>
     <th>Order</th><th>Customer · product</th><th style="text-align:right">Price / cost</th><th style="text-align:right">Profit</th><th>Status</th>
   </tr></thead><tbody>
@@ -323,8 +418,16 @@ body.dark .dz-col{background:rgba(2,6,23,.35)}
     $pot=((float)$o['sell_price']-(float)$o['cost_price'])*(int)$o['qty']-(float)$o['delivery_charge'];
     $hasWarn = !empty($o['daraz_order_id']) && !empty($o['remarks']) && strpos($o['remarks'],'⚠')!==false;
   ?>
-    <?php $ph = preg_replace('/\D+/','',(string)($o['phone'] ?? '')); ?>
-    <tr data-s="<?= e(strtolower(($o['remarks']??'').' '.$o['code'].' '.($o['customer']??'').' '.($o['phone']??'').' '.($o['product_name']??''))) ?>" data-st="<?= e($o['status']) ?>" data-g="<?= e($stGroup[$o['status']] ?? 'pack') ?>">
+    <?php
+      $ph = preg_replace('/\D+/','',(string)($o['phone'] ?? ''));
+      $rowProfit = ($isDel || in_array($o['status'],['returned','cancelled','exchanged'],true)) ? $prof : $pot;
+      $rowVal = (float)$o['sell_price']*(int)$o['qty'];
+      $pl = $o['product_name'] ?: ($o['daraz_item_name'] ?? '') ?: '—';
+    ?>
+    <tr data-s="<?= e(strtolower(($o['remarks']??'').' '.$o['code'].' '.($o['customer']??'').' '.($o['phone']??'').' '.($o['product_name']??''))) ?>" data-st="<?= e($o['status']) ?>" data-g="<?= e($stGroup[$o['status']] ?? 'pack') ?>"
+        data-prod="<?= e($pl) ?>" data-pay="<?= e($o['payment_type'] ?? '') ?>" data-profit="<?= round($rowProfit,2) ?>" data-val="<?= round($rowVal,2) ?>"
+        data-dc="<?= (float)$o['delivery_charge']>0 ? 1 : 0 ?>" data-warn="<?= $hasWarn ? 1 : 0 ?>" data-ph="<?= $ph!=='' ? 1 : 0 ?>"
+        data-date="<?= e($o['order_date']) ?>" data-id="<?= (int)$o['id'] ?>">
       <td>
         <div class="dz-oid"><span class="dz-dot"></span><?= e($o['daraz_order_id'] ?: ($o['remarks'] ?: '—')) ?></div>
         <div class="dz-sub"><?= e($o['code']) ?> · <?= e($o['order_date']) ?></div>
@@ -341,7 +444,7 @@ body.dark .dz-col{background:rgba(2,6,23,.35)}
       <td>
         <form method="post" style="display:flex;gap:5px;align-items:center;flex-wrap:nowrap;min-width:215px">
           <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="set_status">
-          <input type="hidden" name="id" value="<?= (int)$o['id'] ?>"><input type="hidden" name="m" value="<?= e($m) ?>">
+          <input type="hidden" name="id" value="<?= (int)$o['id'] ?>"><?= $dzKeep ?>
           <select name="status" class="dz-status st-<?= e($o['status']) ?>" onchange="this.className='dz-status st-'+this.value">
             <?php foreach(['pending','processing','shipped','delivered','returned','cancelled'] as $st): ?>
               <option value="<?= $st ?>"<?= $o['status']===$st?' selected':'' ?>><?= ucfirst($st) ?></option>
@@ -357,9 +460,9 @@ body.dark .dz-col{background:rgba(2,6,23,.35)}
     <div class="dz-empty">
       <div class="big">📦</div>
       <?php if ($darazConnected): ?>
-        No Daraz orders this month yet — click <b>🔄 Sync Orders Now</b> above, or <b>＋ New Daraz Order</b> to add one by hand.
+        No Daraz orders in this period yet — click <b>🔄 Sync Orders Now</b> above, or <b>＋ New Daraz Order</b> to add one by hand.
       <?php else: ?>
-        No Daraz orders this month — connect Daraz in Settings to auto-sync, or click <b>＋ New Daraz Order</b> to add one by hand (put the Daraz Order ID in Remarks).
+        No Daraz orders in this period — connect Daraz in Settings to auto-sync, or click <b>＋ New Daraz Order</b> to add one by hand (put the Daraz Order ID in Remarks).
       <?php endif; ?>
     </div>
   </td></tr>
@@ -368,10 +471,10 @@ body.dark .dz-col{background:rgba(2,6,23,.35)}
 </div>
 
 <aside class="panel">
-  <div class="panel-head"><h2>📣 Ads Spend</h2><span class="muted" style="font-size:12px"><?= e(date('M Y',strtotime($mStart))) ?>: <b><?= money($mAds) ?></b></span></div>
+  <div class="panel-head"><h2>📣 Ads Spend</h2><span class="muted" style="font-size:12px"><?= e($rangeLabel) ?>: <b><?= money($mAds) ?></b></span></div>
   <div class="panel-body" style="padding-top:8px">
     <form method="post" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
-      <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="add_ad"><input type="hidden" name="m" value="<?= e($m) ?>">
+      <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="add_ad"><?= $dzKeep ?>
       <input type="date" name="spend_date" value="<?= date('Y-m-d') ?>" style="width:128px">
       <input type="number" step="any" min="1" name="amount" placeholder="Amount" required style="flex:1;min-width:90px">
       <input name="note" placeholder="note (optional)" style="width:100%">
@@ -382,9 +485,9 @@ body.dark .dz-col{background:rgba(2,6,23,.35)}
       <tr><td><?= e($a['spend_date']) ?></td>
           <td style="text-align:right;font-weight:700"><?= money($a['amount']) ?></td>
           <td class="muted" style="white-space:normal"><?= e($a['note'] ?: '—') ?></td>
-          <?php if($isAdmin): ?><td><form method="post" style="display:inline" onsubmit="return confirm('Delete?')"><input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="del_ad"><input type="hidden" name="id" value="<?= (int)$a['id'] ?>"><input type="hidden" name="m" value="<?= e($m) ?>"><button class="rowdel">🗑</button></form></td><?php endif; ?>
+          <?php if($isAdmin): ?><td><form method="post" style="display:inline" onsubmit="return confirm('Delete?')"><input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="del_ad"><input type="hidden" name="id" value="<?= (int)$a['id'] ?>"><?= $dzKeep ?><button class="rowdel">🗑</button></form></td><?php endif; ?>
       </tr>
-      <?php endforeach; if(!$ads) echo '<tr><td colspan="4"><div class="empty" style="padding:14px">No ad spend recorded this month.</div></td></tr>'; ?>
+      <?php endforeach; if(!$ads) echo '<tr><td colspan="4"><div class="empty" style="padding:14px">No ad spend recorded in this period.</div></td></tr>'; ?>
     </tbody></table>
   </div>
 </aside>
@@ -399,15 +502,53 @@ function dzPipe(b){
   dzFilter();
   if(dzF!=='all'){var t=document.getElementById('dzSearch');if(t)t.scrollIntoView({behavior:'smooth',block:'center'});}
 }
+var dzT={};   /* active toggle filters: loss, nodc, warn, nophone */
+function dzTog(b){var k=b.getAttribute('data-k');dzT[k]=!dzT[k];b.classList.toggle('on',dzT[k]);dzFilter();}
+function dzClear(){
+  dzT={};document.querySelectorAll('.dz-tog').forEach(function(b){b.classList.remove('on');});
+  ['dzSearch','dzProd','dzPay'].forEach(function(id){var el=document.getElementById(id);if(el)el.value='';});
+  dzF='all';document.querySelectorAll('#dzPipe .dz-col').forEach(function(x){x.classList.remove('on');});
+  dzFilter();
+}
+function dzMoney(v){return 'Rs. '+Math.round(v).toLocaleString('en-IN');}
 function dzFilter(){
-  var q=(document.getElementById('dzSearch').value||'').toLowerCase().trim(), n=0;
+  var q=(document.getElementById('dzSearch').value||'').toLowerCase().trim();
+  var prod=document.getElementById('dzProd').value, pay=document.getElementById('dzPay').value;
+  var n=0, val=0, prof=0;
   document.querySelectorAll('tr[data-s]').forEach(function(tr){
-    var okS=!q||tr.getAttribute('data-s').indexOf(q)>-1;
-    var okF=dzF==='all'||tr.getAttribute('data-g')===dzF;
-    var show=okS&&okF; tr.style.display=show?'':'none'; if(show)n++;
+    var a=function(k){return tr.getAttribute('data-'+k);};
+    var p=parseFloat(a('profit'))||0;
+    var show=(!q||a('s').indexOf(q)>-1)
+      &&(dzF==='all'||a('g')===dzF)
+      &&(!prod||a('prod')===prod)
+      &&(!pay||a('pay')===pay)
+      &&(!dzT.loss||p<0)
+      &&(!dzT.nodc||(a('st')==='delivered'&&a('dc')==='0'))
+      &&(!dzT.warn||a('warn')==='1')
+      &&(!dzT.nophone||a('ph')==='0');
+    tr.style.display=show?'':'none';
+    if(show){n++;val+=parseFloat(a('val'))||0;prof+=p;}
   });
   var lbl={all:'all',pack:'to pack',shipped:'shipped',delivered:'delivered',returned:'returned'}[dzF];
   var s=document.getElementById('dzShowing'); if(s)s.textContent='· '+lbl+' '+n;
+  var sm=document.getElementById('dzSum');
+  if(sm)sm.innerHTML=n+' order'+(n===1?'':'s')+' · value <b>'+dzMoney(val)+'</b> · profit <b style="color:'+(prof>=0?'var(--green)':'var(--red)')+'">'+dzMoney(prof)+'</b>';
 }
+function dzSort(){
+  var how=document.getElementById('dzSort').value, tb=document.querySelector('tr[data-s]');
+  if(!tb)return; tb=tb.parentNode;
+  var rows=[].slice.call(tb.querySelectorAll('tr[data-s]'));
+  var num=function(tr,k){return parseFloat(tr.getAttribute('data-'+k))||0;};
+  var key=function(tr){return tr.getAttribute('data-date')+'|'+String(num(tr,'id')).padStart(9,'0');};
+  rows.sort(function(x,y){
+    if(how==='old')return key(x)<key(y)?-1:1;
+    if(how==='profit_hi')return num(y,'profit')-num(x,'profit');
+    if(how==='profit_lo')return num(x,'profit')-num(y,'profit');
+    if(how==='val_hi')return num(y,'val')-num(x,'val');
+    return key(x)<key(y)?1:-1;
+  });
+  rows.forEach(function(r){tb.appendChild(r);});
+}
+dzFilter();
 </script>
 <?php require __DIR__.'/includes/footer.php'; ?>

@@ -120,6 +120,36 @@ $pAds   = $mRev>0 ? min(100, round($mAds/$mRev*100)) : 0;
 $pNet   = $mRev>0 ? max(0, min(100, round($mNet/$mRev*100))) : 0;
 $pRoas  = $mRoas!==null ? max(0, min(100, round($mRoas/5*100))) : 0;
 
+/* ---- profit funnel: where each rupee of delivered revenue went ---- */
+$mRetLoss = 0;   /* cancel/return/exchange charges — order_profit() is negative for those */
+foreach ($orders as $o) if (in_array($o['status'],['returned','cancelled','exchanged'],true)) $mRetLoss += max(0, -order_profit($o));
+$funnel = [
+  ['Product cost',   $mCost,          '#f59e0b'],
+  ['Daraz charges',  $mDelv,          '#f85606'],
+  ['Ads',            $mAds,           '#8b5cf6'],
+  ['Return losses',  $mRetLoss,       '#ef4444'],
+  ['Net profit',     max(0,$mNet),    '#14b8a6'],
+];
+$fBase = max($mRev, array_sum(array_column($funnel,1)));
+
+/* ---- status pipeline (kanban-style summary that also filters the list) ---- */
+$pipe = [
+  'pack'      => ['To pack',   ['pending','processing'],              '#64748b'],
+  'shipped'   => ['Shipped',   ['shipped'],                           '#e0851b'],
+  'delivered' => ['Delivered', ['delivered'],                         '#0f9d63'],
+  'returned'  => ['Returned',  ['returned','cancelled','exchanged'],  '#dc4437'],
+];
+$stGroup = [];
+foreach ($pipe as $gk => $g) foreach ($g[1] as $st) $stGroup[$st] = $gk;
+$pipeData = [];
+foreach ($pipe as $gk => $g) $pipeData[$gk] = ['n'=>0,'amt'=>0,'items'=>[]];
+foreach ($orders as $o) {
+  $gk = $stGroup[$o['status']] ?? 'pack';
+  $pipeData[$gk]['n']++;
+  $pipeData[$gk]['amt'] += (float)$o['sell_price']*(int)$o['qty'];
+  if (count($pipeData[$gk]['items']) < 3) $pipeData[$gk]['items'][] = $o;
+}
+
 require __DIR__.'/includes/header.php';
 echo delivery_disabled_banner('daraz.php');
 ?>
@@ -150,6 +180,32 @@ body.dark .dz-map-panel{background:linear-gradient(135deg,rgba(251,191,36,.08),r
 .dz-map-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:14px 0 6px}
 .dz-map-head h2{font-size:14px;margin:0;font-weight:800;color:#b45309}
 body.dark .dz-map-head h2{color:#fbbf24}
+/* profit funnel (Option A) */
+.dz-funnel{margin-top:18px;padding:16px 20px 18px}
+.dz-funnel-head{display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.dz-funnel-head h2{font-size:14px;margin:0;font-weight:800}
+.dz-fbar{display:flex;height:34px;border-radius:12px;overflow:hidden;background:rgba(148,163,184,.15)}
+.dz-fbar i{display:flex;align-items:center;justify-content:center;color:#fff;font-style:normal;font-size:11px;font-weight:800;white-space:nowrap;overflow:hidden;min-width:0;transition:flex .4s}
+.dz-flegend{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-top:12px}
+.dz-flegend div{font-size:12px;color:var(--muted)}
+.dz-flegend b{display:block;font-size:15px;color:var(--ink);margin-top:2px}
+.dz-flegend .sw{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:6px;vertical-align:0}
+/* status pipeline (Option B) */
+.dz-pipe{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:16px}
+@media(max-width:900px){.dz-pipe{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.dz-col{display:flex;flex-direction:column;justify-content:flex-start;align-items:stretch;cursor:pointer;padding:12px 12px 10px;border-radius:16px;border:1px solid rgba(148,163,184,.25);background:rgba(255,255,255,.55);transition:transform .15s,border-color .15s;text-align:left;font:inherit;color:inherit}
+body.dark .dz-col{background:rgba(2,6,23,.35)}
+.dz-col:hover{transform:translateY(-2px)}
+.dz-col.on{border-color:var(--c);box-shadow:0 0 0 2px var(--c) inset}
+.dz-col-h{display:flex;justify-content:space-between;align-items:center;font-weight:800;font-size:13px}
+.dz-col-n{background:var(--c);color:#fff;border-radius:999px;padding:1px 9px;font-size:12px}
+.dz-col-amt{font-size:11.5px;color:var(--muted);margin:2px 0 6px}
+.dz-mini{font-size:11.5px;padding:6px 8px;border-radius:9px;background:rgba(148,163,184,.12);margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-left:3px solid var(--c)}
+.dz-mini span{color:var(--muted)}
+/* order rows */
+.dz-cust b{display:block}
+.dz-sub{font-size:11.5px;color:var(--muted);margin-top:1px}
+.dz-sub a{color:#0f9d63;text-decoration:none;font-weight:700}
 .dz-empty{padding:40px 20px;text-align:center;color:var(--muted)}
 .dz-empty .big{font-size:32px;margin-bottom:8px}
 </style>
@@ -219,19 +275,47 @@ body.dark .dz-map-head h2{color:#fbbf24}
   <div class="metric indigo"><span class="g">🎯</span><div class="mv"><?= $mRoas!==null?$mRoas.'×':'—' ?></div><div class="ml">ROAS · revenue/ads</div><div class="bar"><i style="width:<?= $pRoas ?>%;background:#6366f1"></i></div></div>
 </div>
 
-<div class="dz-grid">
-<div class="panel">
-  <div class="panel-head" style="flex-wrap:wrap;gap:10px"><h2>📦 Daraz Orders — <?= e(date('F Y',strtotime($mStart))) ?></h2>
-    <input id="dzSearch" class="ncm-search" placeholder="🔍 Search order id, customer, phone, product…" style="max-width:280px;border-radius:999px;padding:9px 14px" oninput="dzFilter()">
-    <span class="muted" style="font-size:12px"><?= $mRet ?> returned/cancelled · edit any order in <a href="sales.php">Sales</a></span></div>
-    <div style="display:flex;gap:6px;flex-wrap:wrap;padding:0 18px 10px" id="dzChips">
-    <?php $dzCounts=['all'=>count($orders)]; foreach($orders as $oC){ $dzCounts[$oC['status']]=($dzCounts[$oC['status']]??0)+1; }
-    foreach(['all'=>'All','pending'=>'Pending','processing'=>'Processing','shipped'=>'Shipped','delivered'=>'Delivered','returned'=>'Returned','cancelled'=>'Cancelled'] as $k=>$lbl): if($k!=='all'&&empty($dzCounts[$k]))continue; ?>
-      <button class="ntab<?= $k==='all'?' on':'' ?>" data-f="<?= $k ?>" onclick="dzTab(this)"><?= $lbl ?> <span class="ntab-n"><?= (int)($dzCounts[$k]??0) ?></span></button>
+<div class="panel dz-funnel">
+  <div class="dz-funnel-head">
+    <h2>💸 Where the money went — <?= e(date('F Y',strtotime($mStart))) ?></h2>
+    <span class="muted" style="font-size:12px">Out of <b><?= money($mRev) ?></b> delivered revenue<?= $mNet<0 ? ' · <b style="color:var(--red)">net loss '.money(-$mNet).'</b>' : '' ?></span>
+  </div>
+  <?php if ($fBase > 0): ?>
+  <div class="dz-fbar">
+    <?php foreach ($funnel as [$lbl,$val,$col]): if ($val<=0) continue; $pc=round($val/$fBase*100,1); ?>
+      <i style="flex:<?= $pc ?>;background:<?= $col ?>" title="<?= e($lbl.': '.money($val).' ('.$pc.'%)') ?>"><?= $pc>=7 ? e($lbl).' '.round($pc).'%' : '' ?></i>
     <?php endforeach; ?>
   </div>
+  <div class="dz-flegend">
+    <?php foreach ($funnel as [$lbl,$val,$col]): ?>
+      <div><span class="sw" style="background:<?= $col ?>"></span><?= e($lbl) ?><b><?= money($val) ?> <span class="muted" style="font-size:11px;font-weight:600"><?= $fBase>0?round($val/$fBase*100).'%':'' ?></span></b></div>
+    <?php endforeach; ?>
+  </div>
+  <?php else: ?>
+    <div class="muted" style="font-size:13px;padding:6px 0">No delivered revenue yet this month — the breakdown appears once orders are delivered.</div>
+  <?php endif; ?>
+</div>
+
+<div class="dz-pipe" id="dzPipe">
+  <?php foreach ($pipe as $gk => [$lbl,$sts,$col]): $pd=$pipeData[$gk]; ?>
+  <button type="button" class="dz-col" data-g="<?= $gk ?>" style="--c:<?= $col ?>" onclick="dzPipe(this)">
+    <div class="dz-col-h"><span><?= e($lbl) ?></span><span class="dz-col-n"><?= $pd['n'] ?></span></div>
+    <div class="dz-col-amt"><?= money($pd['amt']) ?> order value</div>
+    <?php foreach ($pd['items'] as $it): ?>
+      <div class="dz-mini"><?= e($it['customer'] ?: '—') ?> <span>· <?= e($it['product_name'] ?: ($it['daraz_item_name'] ?? '') ?: 'item') ?><?= (int)$it['qty']>1 ? ' ×'.(int)$it['qty'] : '' ?></span></div>
+    <?php endforeach; if (!$pd['items']): ?><div class="dz-mini" style="border-left-color:transparent"><span>Nothing here</span></div><?php endif; ?>
+    <?php if ($pd['n'] > 3): ?><div class="dz-col-amt" style="margin:6px 0 0">+<?= $pd['n']-3 ?> more · click to show</div><?php endif; ?>
+  </button>
+  <?php endforeach; ?>
+</div>
+
+<div class="dz-grid">
+<div class="panel">
+  <div class="panel-head" style="flex-wrap:wrap;gap:10px"><h2>📦 Daraz Orders <span id="dzShowing" class="muted" style="font-size:12px;font-weight:600">· all <?= count($orders) ?></span></h2>
+    <input id="dzSearch" class="ncm-search" placeholder="🔍 Search order id, customer, phone, product…" style="max-width:280px;border-radius:999px;padding:9px 14px" oninput="dzFilter()">
+    <span class="muted" style="font-size:12px"><a href="#" onclick="dzPipe(null);return false">Show all</a> · edit any order in <a href="sales.php">Sales</a></span></div>
 <div class="table-wrap"><table class="tbl led-tbl"><thead><tr>
-    <th>Daraz Order ID</th><th>Order</th><th>Date</th><th>Customer</th><th>Product</th><th>Qty</th><th>Price</th><th>Cost</th><th>Profit</th><th>Status</th>
+    <th>Order</th><th>Customer · product</th><th style="text-align:right">Price / cost</th><th style="text-align:right">Profit</th><th>Status</th>
   </tr></thead><tbody>
   <?php foreach($orders as $o):
     $isDel=$o['status']==='delivered';
@@ -239,22 +323,23 @@ body.dark .dz-map-head h2{color:#fbbf24}
     $pot=((float)$o['sell_price']-(float)$o['cost_price'])*(int)$o['qty']-(float)$o['delivery_charge'];
     $hasWarn = !empty($o['daraz_order_id']) && !empty($o['remarks']) && strpos($o['remarks'],'⚠')!==false;
   ?>
-    <tr data-s="<?= e(strtolower(($o['remarks']??'').' '.$o['code'].' '.($o['customer']??'').' '.($o['phone']??'').' '.($o['product_name']??''))) ?>" data-st="<?= e($o['status']) ?>">
+    <?php $ph = preg_replace('/\D+/','',(string)($o['phone'] ?? '')); ?>
+    <tr data-s="<?= e(strtolower(($o['remarks']??'').' '.$o['code'].' '.($o['customer']??'').' '.($o['phone']??'').' '.($o['product_name']??''))) ?>" data-st="<?= e($o['status']) ?>" data-g="<?= e($stGroup[$o['status']] ?? 'pack') ?>">
       <td>
         <div class="dz-oid"><span class="dz-dot"></span><?= e($o['daraz_order_id'] ?: ($o['remarks'] ?: '—')) ?></div>
+        <div class="dz-sub"><?= e($o['code']) ?> · <?= e($o['order_date']) ?></div>
         <?php if($hasWarn): ?><span class="dz-warn">⚠ <?= e(str_replace('Daraz #'.$o['daraz_order_id'].' ⚠ ','',$o['remarks'])) ?></span><?php endif; ?>
       </td>
-      <td class="muted"><?= e($o['code']) ?></td>
-      <td><?= e($o['order_date']) ?></td>
-      <td><b><?= e($o['customer'] ?: '—') ?></b></td>
-      <td><b><?= e($o['product_name'] ?: '—') ?></b></td>
-      <td style="text-align:right"><?= (int)$o['qty'] ?></td>
-      <td style="text-align:right"><?= money($o['sell_price']) ?></td>
-      <td style="text-align:right"><?= money($o['cost_price']) ?></td>
+      <td class="dz-cust">
+        <b><?= e($o['customer'] ?: '—') ?></b>
+        <?php if ($ph !== ''): ?><div class="dz-sub"><?= e($o['phone']) ?><?php if (strlen($ph)===10 && $ph[0]==='9'): ?> · <a href="https://wa.me/977<?= e($ph) ?>" target="_blank" rel="noopener" title="Open WhatsApp chat">WhatsApp</a><?php endif; ?></div><?php endif; ?>
+        <div class="dz-sub"><?= e($o['product_name'] ?: ($o['daraz_item_name'] ?? '') ?: '—') ?> × <?= (int)$o['qty'] ?></div>
+      </td>
+      <td style="text-align:right"><?= money((float)$o['sell_price']*(int)$o['qty']) ?><div class="dz-sub">cost <?= money((float)$o['cost_price']*(int)$o['qty']) ?></div></td>
       <td style="text-align:right;font-weight:800;color:<?= ($isDel?$prof:$pot)>=0?'var(--green)':'var(--red)' ?>">
         <?= $isDel ? money($prof) : (in_array($o['status'],['returned','cancelled','exchanged'],true) ? money($prof) : '≈ '.money($pot)) ?></td>
       <td>
-        <form method="post" style="display:flex;gap:5px;align-items:center;flex-wrap:wrap">
+        <form method="post" style="display:flex;gap:5px;align-items:center;flex-wrap:nowrap;min-width:215px">
           <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="set_status">
           <input type="hidden" name="id" value="<?= (int)$o['id'] ?>"><input type="hidden" name="m" value="<?= e($m) ?>">
           <select name="status" class="dz-status st-<?= e($o['status']) ?>" onchange="this.className='dz-status st-'+this.value">
@@ -268,7 +353,7 @@ body.dark .dz-map-head h2{color:#fbbf24}
       </td>
     </tr>
   <?php endforeach; if(!$orders): ?>
-  <tr><td colspan="10">
+  <tr><td colspan="5">
     <div class="dz-empty">
       <div class="big">📦</div>
       <?php if ($darazConnected): ?>
@@ -307,14 +392,22 @@ body.dark .dz-map-head h2{color:#fbbf24}
 </div><!-- /ncmv3 -->
 <script>
 var dzF='all';
-function dzTab(b){dzF=b.getAttribute('data-f');document.querySelectorAll('#dzChips .ntab').forEach(function(x){x.classList.toggle('on',x===b);});dzFilter();}
+function dzPipe(b){
+  var g=b?b.getAttribute('data-g'):'all';
+  dzF=(g===dzF)?'all':g;   /* clicking the active column again clears the filter */
+  document.querySelectorAll('#dzPipe .dz-col').forEach(function(x){x.classList.toggle('on',x.getAttribute('data-g')===dzF);});
+  dzFilter();
+  if(dzF!=='all'){var t=document.getElementById('dzSearch');if(t)t.scrollIntoView({behavior:'smooth',block:'center'});}
+}
 function dzFilter(){
-  var q=(document.getElementById('dzSearch').value||'').toLowerCase().trim();
+  var q=(document.getElementById('dzSearch').value||'').toLowerCase().trim(), n=0;
   document.querySelectorAll('tr[data-s]').forEach(function(tr){
     var okS=!q||tr.getAttribute('data-s').indexOf(q)>-1;
-    var okF=dzF==='all'||tr.getAttribute('data-st')===dzF;
-    tr.style.display=(okS&&okF)?'':'none';
+    var okF=dzF==='all'||tr.getAttribute('data-g')===dzF;
+    var show=okS&&okF; tr.style.display=show?'':'none'; if(show)n++;
   });
+  var lbl={all:'all',pack:'to pack',shipped:'shipped',delivered:'delivered',returned:'returned'}[dzF];
+  var s=document.getElementById('dzShowing'); if(s)s.textContent='· '+lbl+' '+n;
 }
 </script>
 <?php require __DIR__.'/includes/footer.php'; ?>

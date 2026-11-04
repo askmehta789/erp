@@ -14,6 +14,7 @@ $darazAccount    = setting('daraz_account','');
 $dzCourier = row("SELECT id FROM couriers WHERE LOWER(name)='daraz'");
 if (!$dzCourier) { try { q("INSERT INTO couriers(name,status) VALUES('Daraz','active')"); } catch (Exception $e) { try { q("INSERT INTO couriers(name) VALUES('Daraz')"); } catch (Exception $e2) {} } $dzCourier = row("SELECT id FROM couriers WHERE LOWER(name)='daraz'"); }
 $dzId = (int)($dzCourier['id'] ?? 0);
+try { daraz_fix_existing_phones($dzId); } catch (Exception $e) {}
 
 /* ads spend table (Daraz sponsored ads — separate from other expenses) */
 try { q("CREATE TABLE IF NOT EXISTS daraz_ads(

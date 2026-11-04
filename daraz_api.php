@@ -255,6 +255,33 @@ function daraz_map_sku_to_product(string $sku, int $productId): array {
    doesn't match any local product.sku is still imported (so nothing silently gets lost) with
    product_id left null and a ⚠ flag in Remarks for staff to fix manually, same spirit as the
    existing "✎ set charge" flow for cancel/exchange charges. */
+/* Daraz sends phones as "9779812345678" / "+977 98..." — staff want the plain 10-digit Nepali
+   mobile. Strip non-digits, drop the 977 country code (and a leading 0), keep the last 10 digits.
+   Anything that doesn't look like a mobile (e.g. a short landline) is returned digits-only. */
+function daraz_clean_phone(string $raw): string {
+  $d = preg_replace('/\D+/', '', $raw);
+  if ($d === '') return trim($raw);
+  if (strlen($d) > 10 && strpos($d, '977') === 0) $d = substr($d, 3);
+  if (strlen($d) > 10 && $d[0] === '0') $d = ltrim($d, '0');
+  if (strlen($d) > 10) $d = substr($d, -10);
+  return $d;
+}
+
+/* one-off-but-idempotent repair for Daraz-courier orders already saved with a 977 prefix;
+   cheap (only touches rows whose phone still contains 977 or non-digits), so safe to call on
+   every Daraz page load / sync */
+function daraz_fix_existing_phones(int $dzId): int {
+  if ($dzId <= 0) return 0;
+  $fixed = 0;
+  foreach (rows("SELECT id, phone FROM orders WHERE courier_id=? AND phone IS NOT NULL AND phone<>''
+                 AND (phone LIKE '977%' OR phone LIKE '+%' OR phone REGEXP '[^0-9]')", [$dzId]) as $r) {
+    $clean = daraz_clean_phone((string)$r['phone']);
+    if ($clean !== $r['phone']) { q("UPDATE orders SET phone=? WHERE id=?", [$clean, (int)$r['id']]); $fixed++; }
+  }
+  if ($fixed) log_activity("Daraz: cleaned 977 prefix from $fixed order phone number(s)", 'Daraz');
+  return $fixed;
+}
+
 function daraz_sync_orders(int $days = 14): array {
   $daraz = new Daraz();
   if (!$daraz->connected()) throw new Exception('Daraz is not connected yet — authorize the app first.');
@@ -264,6 +291,7 @@ function daraz_sync_orders(int $days = 14): array {
   $dzCourier = row("SELECT id FROM couriers WHERE LOWER(name)='daraz'");
   $dzId = (int)($dzCourier['id'] ?? 0);
   if (!$dzId) throw new Exception('Daraz courier not found.');
+  daraz_fix_existing_phones($dzId);
 
   $createdAfter = date('c', strtotime("-{$days} days"));
 
@@ -343,7 +371,7 @@ function daraz_sync_orders(int $days = 14): array {
 
     $addr     = $o['address_shipping'] ?? [];
     $customer = trim(($o['customer_first_name'] ?? '').' '.($o['customer_last_name'] ?? ''));
-    $phone    = trim((string)($addr['phone'] ?? ''));
+    $phone    = daraz_clean_phone((string)($addr['phone'] ?? ''));
     $address  = trim(implode(', ', array_filter([$addr['address1'] ?? '', $addr['address2'] ?? '', $addr['city'] ?? ''])));
     $orderDate = date('Y-m-d', strtotime($o['created_at'] ?? 'now'));
     $payType   = stripos((string)($o['payment_method'] ?? ''), 'cod') !== false ? 'cod' : 'prepaid';

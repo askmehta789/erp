@@ -22,18 +22,33 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
     $note=trim($_POST['note'] ?? '');
     /* leave and work-from-home days carry no lunch allowance at all — enforced server-side too, not just in the UI */
     if ($att!=='present') { $ordered=0; $amt=0; }
+    if (!$ordered) $amt=0;
+    $old = $id ? row("SELECT * FROM lunch_orders WHERE id=?",[$id]) : null;
     if (!$eid) {
       flash('Pick an employee.');
+    } elseif ($id && !$old) {
+      flash('That lunch entry no longer exists — it may have been deleted. Add it again if needed.');
     } else {
       $existing=row("SELECT id FROM lunch_orders WHERE employee_id=? AND order_date=?",[$eid,$d]);
       if ($existing && (int)$existing['id']!==$id) {
         flash('Lunch entry already exists for this employee on this date. Open it from the table below (✏️) to edit it instead of adding a new one.');
+      } elseif ($old) {
+        /* edit = update THIS row by id. The old upsert-by-(employee,date) silently
+           created a second row whenever the date or employee was changed while
+           editing, leaving the original behind and double-counting it */
+        q("UPDATE lunch_orders SET employee_id=?, order_date=?, order_amount=?, attendance=?, lunch_ordered=?, note=? WHERE id=?",
+          [$eid,$d,$amt,$att,$ordered,$note,$id]);
+        lunch_sync_salary_entry($eid, bs_ym_of($d));
+        /* moved to another person or month → that old salary month must drop it too */
+        if ((int)$old['employee_id']!==$eid || bs_ym_of($old['order_date'])!==bs_ym_of($d))
+          lunch_sync_salary_entry((int)$old['employee_id'], bs_ym_of($old['order_date']));
+        log_activity("Updated lunch entry #$id (emp #$eid, $d)",'Lunch Management');
+        flash('Lunch entry updated — '.dual_date($d).'.');
       } else {
-        q("INSERT INTO lunch_orders(employee_id,order_date,order_amount,attendance,lunch_ordered,note) VALUES(?,?,?,?,?,?)
-           ON DUPLICATE KEY UPDATE order_amount=VALUES(order_amount),attendance=VALUES(attendance),lunch_ordered=VALUES(lunch_ordered),note=VALUES(note)",
+        q("INSERT INTO lunch_orders(employee_id,order_date,order_amount,attendance,lunch_ordered,note) VALUES(?,?,?,?,?,?)",
           [$eid,$d,$amt,$att,$ordered,$note]);
         lunch_sync_salary_entry($eid, bs_ym_of($d));
-        log_activity(($id?'Updated':'Added')." lunch entry for emp #$eid on $d",'Lunch Management');
+        log_activity("Added lunch entry for emp #$eid on $d",'Lunch Management');
         flash('Lunch entry saved for '.dual_date($d).'.');
       }
     }
@@ -43,19 +58,22 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
   if ($act==='save_bulk') {
     $bd=preg_match('/^\d{4}-\d{2}-\d{2}$/',$_POST['entry_date'] ?? '')?$_POST['entry_date']:date('Y-m-d');
     $bym=bs_ym_of($bd);
-    $eids=$_POST['employee_id'] ?? [];
-    $atts=$_POST['attendance'] ?? [];
-    $ords=$_POST['lunch_ordered'] ?? [];
-    $amts=$_POST['order_amount'] ?? [];
-    $notes=$_POST['note'] ?? [];
+    /* every field is keyed by employee id (name="attendance[12]"), never a bare list:
+       the browser leaves disabled inputs (lunch fields on a Leave/No-lunch row) out of
+       the POST entirely, so positional lists used to shift and hand one person's
+       lunch values to the next person in the table */
+    $atts=(array)($_POST['attendance'] ?? []);
+    $ords=(array)($_POST['lunch_ordered'] ?? []);
+    $amts=(array)($_POST['order_amount'] ?? []);
+    $notes=(array)($_POST['note'] ?? []);
     $saved=0;
-    foreach ($eids as $i=>$eidRaw) {
-      $eid=(int)$eidRaw;
+    foreach ($atts as $eidKey=>$attRaw) {
+      $eid=(int)$eidKey;
       if (!$eid) continue;
-      $att=in_array($atts[$i] ?? '',['present','leave','wfh','holiday'],true)?$atts[$i]:'present';
-      $ordered=(($ords[$i] ?? '1')==='1') ? 1 : 0;
-      $amt=max(0,(float)($amts[$i] ?? 0));
-      $note=trim($notes[$i] ?? '');
+      $att=in_array($attRaw,['present','leave','wfh','holiday'],true)?$attRaw:'present';
+      $ordered=(($ords[$eidKey] ?? '0')==='1') ? 1 : 0;
+      $amt=$ordered ? max(0,(float)($amts[$eidKey] ?? 0)) : 0;
+      $note=trim((string)($notes[$eidKey] ?? ''));
       if ($att!=='present') { $ordered=0; $amt=0; }
       q("INSERT INTO lunch_orders(employee_id,order_date,order_amount,attendance,lunch_ordered,note) VALUES(?,?,?,?,?,?)
          ON DUPLICATE KEY UPDATE order_amount=VALUES(order_amount),attendance=VALUES(attendance),lunch_ordered=VALUES(lunch_ordered),note=VALUES(note)",
@@ -65,7 +83,7 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
     }
     log_activity("Bulk-logged lunch/attendance for $saved staff on $bd",'Lunch Management');
     flash("Saved attendance & lunch for $saved staff — ".dual_date($bd).".");
-    header('Location: lunch_management.php?m='.urlencode($backM).'&d='.urlencode($bd)); exit;
+    header('Location: lunch_management.php?m='.urlencode($bym).'&d='.urlencode($bd).($backEmp?'&emp='.$backEmp:'').'#quickDaily'); exit;
   }
 
   if ($act==='del_entry' && $isAdmin) {
@@ -107,7 +125,14 @@ $mRange = bs_month_range($bsY,$bsM);
 if (!$mRange) { $m = bs_ym_of(date('Y-m-d')); [$bsY,$bsM] = array_map('intval', explode('-', $m)); $mRange = bs_month_range($bsY,$bsM); }
 [$mStart,$mEnd] = $mRange;
 
-$allEmps = rows("SELECT id,name,salary,lunch_rate FROM employees ORDER BY name");
+/* staff = real, active people only. The "Luprah" company account (is_company=1, used
+   as a salesperson) and inactive/former staff used to show up here too — inflating
+   Pending Entries and getting rows in Quick Daily Entry. Anyone who already has
+   lunch logged in this month is still included so their history isn't hidden. */
+$allEmps = rows("SELECT id,name,salary,lunch_rate,status FROM employees e
+                 WHERE (COALESCE(e.is_company,0)=0 AND COALESCE(e.status,'active')<>'inactive')
+                    OR EXISTS(SELECT 1 FROM lunch_orders lo WHERE lo.employee_id=e.id AND lo.order_date BETWEEN ? AND ?)
+                 ORDER BY name", [$mStart,$mEnd]);
 $empName = []; foreach ($allEmps as $ae) $empName[(int)$ae['id']] = $ae['name'];
 
 $lunchAgg = lunch_monthly_agg($mStart, $mEnd, $empFilter);
@@ -134,8 +159,13 @@ function lm_dp_url($page,$m,$empFilter,$d) {
    bulk "quick daily entry" prefill and the pending-count stat */
 $dayEntries = [];
 foreach (rows("SELECT * FROM lunch_orders WHERE order_date=?",[$d]) as $t) $dayEntries[(int)$t['employee_id']] = $t;
-$loggedToday = array_fill_keys(array_keys($dayEntries), true);
-$pendingEntries = count($allEmps) - count($loggedToday);
+$dayStaffIds = array_column(rows("SELECT id FROM employees WHERE COALESCE(is_company,0)=0 AND COALESCE(status,'active')<>'inactive'"), 'id');
+$dayStaffIds = array_map('intval', $dayStaffIds);
+$dayStaff = array_values(array_filter(
+  rows("SELECT id,name,salary,lunch_rate FROM employees ORDER BY name"),
+  fn($e) => in_array((int)$e['id'], $dayStaffIds, true) || isset($dayEntries[(int)$e['id']])
+));
+$pendingEntries = count(array_filter($dayStaff, fn($e) => !isset($dayEntries[(int)$e['id']])));
 
 /* bonus/deduction from the main payroll ledger, so "Final Salary" here matches
    Staff Salary's Payable exactly — Payable = Base + Bonus + Lunch − Deduction */
@@ -198,7 +228,7 @@ $lunchLabel = fn($s) => ['ok'=>'Completed','leave'=>'Leave','review'=>'Requires 
 <?php if($fl=flash()) echo '<div class="flash">'.e($fl).'</div>'; ?>
 
 <div class="mgrid">
-  <div class="metric blue"><div><div class="mv" style="font-size:19px"><?= number_format(count($allEmps)) ?></div><div class="ml">Total Staff</div></div><div class="mi">👥</div></div>
+  <div class="metric blue"><div><div class="mv" style="font-size:19px"><?= number_format(count($dayStaffIds)) ?></div><div class="ml">Active Staff</div></div><div class="mi">👥</div></div>
   <div class="metric teal"><div><div class="mv" style="font-size:19px"><?= number_format($tEligible) ?></div><div class="ml">Eligible Lunch Days</div><div class="ms">from actual attendance</div></div><div class="mi">📅</div></div>
   <div class="metric indigo"><div><div class="mv" style="font-size:19px"><?= money($tAllowance) ?></div><div class="ml">Lunch Allowance</div><div class="ms"><?= e(bs_ym_label($m)) ?></div></div><div class="mi">🍱</div></div>
   <div class="metric red"><div><div class="mv" style="font-size:19px"><?= money($tActual) ?></div><div class="ml">Actual Lunch Expense</div></div><div class="mi">🧾</div></div>
@@ -226,7 +256,7 @@ $lunchLabel = fn($s) => ['ok'=>'Completed','leave'=>'Leave','review'=>'Requires 
 </style>
 <div class="panel" style="margin-top:16px">
   <div class="panel-head"><h2>🗓 Monthly Calendar — <?= e(bs_ym_label($m)) ?></h2>
-    <span class="muted" style="font-size:12px">every staff member, every day — click a cell to fix that date</span></div>
+    <span class="muted" style="font-size:12px">click any day to edit that entry (or add one if it's blank)</span></div>
   <div class="table-wrap" style="overflow-x:auto">
     <table class="cal-tbl"><thead><tr>
       <th class="cal-name">Employee</th>
@@ -252,7 +282,7 @@ $lunchLabel = fn($s) => ['ok'=>'Completed','leave'=>'Leave','review'=>'Requires 
           }
         ?>
           <td class="cal-cell <?= $cls ?><?= $isToday?' cal-today':'' ?>">
-            <a href="?m=<?= e($m) ?>&d=<?= e($cd['ad']) ?>&emp=<?= $empFilter ?>#quickDaily" title="<?= e(date('d M Y',strtotime($cd['ad']))).' — '.e($title) ?>"><?= $txt ?></a>
+            <a href="?m=<?= e($m) ?>&d=<?= e($cd['ad']) ?>&emp=<?= $empFilter ?>#quickDaily" data-eid="<?= $eid ?>" data-date="<?= e($cd['ad']) ?>" onclick="return lmCell(this)" title="<?= e(date('d M Y',strtotime($cd['ad']))).' — '.e($title).($row?' · click to edit':'') ?>"><?= $txt ?></a>
           </td>
         <?php endforeach; ?>
       </tr>
@@ -267,34 +297,40 @@ $lunchLabel = fn($s) => ['ok'=>'Completed','leave'=>'Leave','review'=>'Requires 
     <span class="muted" style="font-size:12px">mark everyone at once instead of one by one — edit only the rows that differ, then Save All</span></div>
   <form method="post">
     <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="save_bulk">
-    <input type="hidden" name="entry_date" value="<?= e($d) ?>"><input type="hidden" name="m" value="<?= e($m) ?>">
+    <input type="hidden" name="entry_date" value="<?= e($d) ?>"><input type="hidden" name="m" value="<?= e($m) ?>"><input type="hidden" name="back_emp" value="<?= $empFilter ?>">
     <div class="table-wrap"><table class="tbl num-tbl" id="bulkTbl"><thead><tr>
       <th>Employee</th><th>Attendance</th><th>Lunch Ordered</th><th class="right">Amount</th><th>Note</th>
     </tr></thead><tbody>
-    <?php foreach($allEmps as $ae): $eid=(int)$ae['id']; $ex=$dayEntries[$eid] ?? null;
+    <?php foreach($dayStaff as $ae): $eid=(int)$ae['id']; $ex=$dayEntries[$eid] ?? null;
       $rAtt = $ex ? $ex['attendance'] : 'present';
       $rOrd = $ex ? (int)$ex['lunch_ordered'] : 1;
       $rAmt = $ex ? (float)$ex['order_amount'] : (float)$ae['lunch_rate'];
       $rNote = $ex ? (string)$ex['note'] : '';
     ?>
       <tr data-rate="<?= (float)$ae['lunch_rate'] ?>">
-        <td><b><?= e($ae['name']) ?></b><input type="hidden" name="employee_id[]" value="<?= $eid ?>"></td>
-        <td><select name="attendance[]" class="bulk-att" onchange="bulkRowToggle(this)">
+        <td><b><?= e($ae['name']) ?></b><?php if($ex): ?> <span class="pill p-green" style="font-size:10px">saved</span><?php endif; ?></td>
+        <td><select name="attendance[<?= $eid ?>]" class="bulk-att" onchange="bulkRowToggle(this)">
           <option value="present"<?= $rAtt==='present'?' selected':'' ?>>Present</option>
           <option value="wfh"<?= $rAtt==='wfh'?' selected':'' ?>>Work From Home</option>
           <option value="leave"<?= $rAtt==='leave'?' selected':'' ?>>Leave</option>
           <option value="holiday"<?= $rAtt==='holiday'?' selected':'' ?>>Holiday</option>
         </select></td>
-        <td><select name="lunch_ordered[]" class="bulk-ord" onchange="bulkRowToggle(this)"<?= $rAtt!=='present'?' disabled':'' ?>>
+        <td><select name="lunch_ordered[<?= $eid ?>]" class="bulk-ord" onchange="bulkRowToggle(this)"<?= $rAtt!=='present'?' disabled':'' ?>>
           <option value="1"<?= $rOrd?' selected':'' ?>>Yes</option>
           <option value="0"<?= !$rOrd?' selected':'' ?>>No</option>
         </select></td>
-        <td class="right"><input type="number" name="order_amount[]" class="bulk-amt" value="<?= $rAmt ?>" step="any" min="0" style="width:100px;text-align:right"<?= ($rAtt!=='present'||!$rOrd)?' disabled':'' ?>></td>
-        <td><input type="text" name="note[]" value="<?= e($rNote) ?>" placeholder="optional" style="width:100%"></td>
+        <td class="right"><input type="number" name="order_amount[<?= $eid ?>]" class="bulk-amt" value="<?= $rAmt ?>" step="any" min="0" style="width:100px;text-align:right"<?= ($rAtt!=='present'||!$rOrd)?' disabled':'' ?>></td>
+        <td><input type="text" name="note[<?= $eid ?>]" value="<?= e($rNote) ?>" placeholder="optional" style="width:100%"></td>
       </tr>
-    <?php endforeach; if(!$allEmps): ?><tr><td colspan="5"><div class="empty">No staff yet.</div></td></tr><?php endif; ?>
+    <?php endforeach; if(!$dayStaff): ?><tr><td colspan="5"><div class="empty">No staff yet.</div></td></tr><?php endif; ?>
     </tbody></table></div>
-    <div style="padding:14px 0 4px"><button class="btn btn-primary">💾 Save All (<?= count($allEmps) ?> staff)</button></div>
+    <div style="padding:14px 0 4px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <span class="muted" style="font-size:12px">Set everyone to:</span>
+      <button type="button" class="btn btn-sm" onclick="bulkSetAll('present')">Present</button>
+      <button type="button" class="btn btn-sm" onclick="bulkSetAll('holiday')">🎉 Holiday</button>
+      <button type="button" class="btn btn-sm" onclick="bulkSetAll('wfh')">🏠 WFH</button>
+    </div>
+    <div style="padding:8px 0 4px"><button class="btn btn-primary">💾 Save All (<?= count($dayStaff) ?> staff)</button></div>
   </form>
 </div>
 
@@ -338,7 +374,7 @@ $lunchLabel = fn($s) => ['ok'=>'Completed','leave'=>'Leave','review'=>'Requires 
       <td class="muted" style="white-space:normal"><?= e($en['note'] ?: '—') ?></td>
       <td style="white-space:nowrap">
         <button type="button" class="iact" title="Edit" data-rec="<?= e(json_encode($en)) ?>" onclick="editEntry(JSON.parse(this.getAttribute('data-rec')))">✏️</button>
-        <?php if($isAdmin): ?><form method="post" style="display:inline" onsubmit="return confirm('Delete this lunch entry?')"><input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="del_entry"><input type="hidden" name="id" value="<?= (int)$en['id'] ?>"><input type="hidden" name="m" value="<?= e($m) ?>"><button class="iact del" title="Delete">🗑</button></form><?php endif; ?>
+        <?php if($isAdmin): ?><form method="post" style="display:inline" onsubmit="return confirm('Delete this lunch entry?')"><input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="del_entry"><input type="hidden" name="id" value="<?= (int)$en['id'] ?>"><input type="hidden" name="m" value="<?= e($m) ?>"><input type="hidden" name="back_emp" value="<?= $empFilter ?>"><button class="iact del" title="Delete">🗑</button></form><?php endif; ?>
       </td>
     </tr>
   <?php endforeach; if(!$entries) echo '<tr><td colspan="10"><div class="empty">No lunch entries logged this month yet.</div></td></tr>'; ?>
@@ -427,10 +463,10 @@ $lunchLabel = fn($s) => ['ok'=>'Completed','leave'=>'Leave','review'=>'Requires 
   <input type="hidden" name="m" value="<?= e($m) ?>"><input type="hidden" name="back_emp" value="<?= $empFilter ?>">
   <div class="modal-body">
     <div><label>Date *</label><input type="date" name="entry_date" id="lm_date" value="<?= e($d) ?>" required onchange="lmCheckDup();lmCalc()"></div>
-    <div><label>Employee *</label><select name="employee_id" id="lm_emp" required onchange="lmCheckDup();lmCalc()"><option value="">—</option>
+    <div><label>Employee *</label><select name="employee_id" id="lm_emp" required onchange="lmFillRate();lmCheckDup();lmCalc()"><option value="">—</option>
       <?php foreach($allEmps as $ae): ?><option value="<?= (int)$ae['id'] ?>" data-rate="<?= (float)$ae['lunch_rate'] ?>"><?= e($ae['name']) ?></option><?php endforeach; ?></select></div>
-    <div><label>Attendance *</label><select name="attendance" id="lm_att" onchange="lmCalc()"><option value="present">Present</option><option value="wfh">Work From Home</option><option value="leave">Leave</option><option value="holiday">Holiday</option></select></div>
-    <div><label>Lunch Ordered</label><select name="lunch_ordered" id="lm_ordered" onchange="lmCalc()"><option value="1">Yes</option><option value="0">No</option></select></div>
+    <div><label>Attendance *</label><select name="attendance" id="lm_att" onchange="lmFillRate();lmCalc()"><option value="present">Present</option><option value="wfh">Work From Home</option><option value="leave">Leave</option><option value="holiday">Holiday</option></select></div>
+    <div><label>Lunch Ordered</label><select name="lunch_ordered" id="lm_ordered" onchange="lmFillRate();lmCalc()"><option value="1">Yes</option><option value="0">No</option></select></div>
     <div class="full" id="lm_dup_warn" style="display:none;background:var(--red-bg);color:var(--red);padding:9px 12px;border-radius:9px;font-size:12.5px"></div>
     <div><label>Actual Lunch Amount (Rs.)</label><input type="number" step="any" min="0" name="order_amount" id="lm_amount" value="0" oninput="lmCalc()"></div>
     <div><label>&nbsp;</label><div id="lm_bs" class="muted" style="padding-top:9px;font-weight:700"></div></div>
@@ -444,7 +480,25 @@ $lunchLabel = fn($s) => ['ok'=>'Completed','leave'=>'Leave','review'=>'Requires 
 var LM_PAY_UNUSED = <?= lunch_pay_unused() ? 'true' : 'false' ?>;
 var LM_OVER_MODE = <?= json_encode(lunch_over_allowance_setting()) ?>;
 var DUP_MAP = <?= json_encode($dupMap) ?>;
-var BS_LABELS=<?php $lbl=[]; for($i=-60;$i<=30;$i++){$dd=date('Y-m-d',strtotime("$i days")); $lbl[$dd]=bs_pretty($dd);} echo json_encode($lbl); ?>;
+var BS_LABELS=<?php
+  /* recent days + every day of the month being viewed, so editing an older entry
+     still shows its Nepali date (it used to go blank past 60 days back) */
+  $lbl=[]; for($i=-60;$i<=30;$i++){$dd=date('Y-m-d',strtotime("$i days")); $lbl[$dd]=bs_pretty($dd);}
+  foreach ($calDays as $cd) $lbl[$cd['ad']] = bs_pretty($cd['ad']);
+  echo json_encode($lbl); ?>;
+/* calendar cell → edit the logged entry, or start a new one pre-filled for that person + day */
+function lmCell(a){
+  var eid=a.getAttribute('data-eid'), dt=a.getAttribute('data-date'), rec=DUP_MAP[eid+'_'+dt];
+  if (rec) editEntry(rec); else openEntry(eid, dt);
+  return false;
+}
+/* Quick Daily Entry: set every row at once (e.g. a public holiday) */
+function bulkSetAll(att){
+  document.querySelectorAll('#bulkTbl tbody tr').forEach(function(tr){
+    var s=tr.querySelector('.bulk-att'); if(!s) return;
+    s.value=att; bulkRowToggle(s);
+  });
+}
 
 function bulkRowToggle(el){
   var tr=el.closest('tr'), rate=parseFloat(tr.getAttribute('data-rate')||'0');
@@ -460,6 +514,12 @@ function bulkRowToggle(el){
 function lmRate(){
   var emp=document.getElementById('lm_emp'), opt=emp.options[emp.selectedIndex];
   return opt ? parseFloat(opt.getAttribute('data-rate')||'0') : 0;
+}
+/* present + ordered with no amount yet → start from the person's daily rate */
+function lmFillRate(){
+  var amt=document.getElementById('lm_amount');
+  if (document.getElementById('lm_att').value==='present' && document.getElementById('lm_ordered').value==='1'
+      && !(parseFloat(amt.value)>0)) amt.value = lmRate() || 0;
 }
 function lmCalc(){
   var att=document.getElementById('lm_att').value;
@@ -520,14 +580,16 @@ function lmCheckDup(){
     warn.style.display='none'; save.disabled=false;
   }
 }
-function openEntry(eid){
+function openEntry(eid, dt){
   document.getElementById('lmTitle').textContent='＋ Daily Lunch Entry';
   document.getElementById('lm_id').value='';
-  document.getElementById('lm_date').value=document.querySelector('input[name="d"]')?document.querySelector('input[name="d"]').value:'<?= e($d) ?>';
-  if(eid) document.getElementById('lm_emp').value=eid;
+  document.getElementById('lm_date').value=dt || (document.querySelector('input[name="d"]')?document.querySelector('input[name="d"]').value:'<?= e($d) ?>');
+  document.getElementById('lm_emp').value=eid ? String(eid) : '';
   document.getElementById('lm_att').value='present';
   document.getElementById('lm_ordered').value='1';
-  document.getElementById('lm_amount').value='0';
+  /* default the amount to the person's daily rate — it used to start at 0, so a quick
+     Save on a present+ordered day paid out the full allowance as if they ate for free */
+  document.getElementById('lm_amount').value=lmRate() || 0;
   document.getElementById('lm_note').value='';
   document.getElementById('lm_dup_warn').style.display='none';
   document.getElementById('lm_save').disabled=false;

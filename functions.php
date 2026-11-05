@@ -624,7 +624,22 @@ function ensure_lunch_system() {
     INDEX(employee_id))"); } catch (Exception $e) {}
   try { q("ALTER TABLE lunch_orders ADD COLUMN IF NOT EXISTS attendance VARCHAR(10) NOT NULL DEFAULT 'present'"); } catch (Exception $e) {}
   try { q("ALTER TABLE lunch_orders ADD COLUMN IF NOT EXISTS lunch_ordered TINYINT(1) NOT NULL DEFAULT 1"); } catch (Exception $e) {}
+  /* Lunch Management reads/writes salary_entries itself, so it must not depend on
+     the Staff Salary page having been opened first to create the table (opening
+     Lunch Management first on a fresh install used to crash with "table not found",
+     and the source column below was silently never added) */
+  try { q("CREATE TABLE IF NOT EXISTS salary_entries(
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    employee_id INT NOT NULL,
+    ym CHAR(7) NOT NULL,
+    type VARCHAR(12) NOT NULL,
+    amount DECIMAL(12,2) NOT NULL,
+    entry_date DATE NOT NULL,
+    note VARCHAR(160) DEFAULT '',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    INDEX(employee_id), INDEX(ym))"); } catch (Exception $e) {}
   try { q("ALTER TABLE salary_entries ADD COLUMN IF NOT EXISTS source VARCHAR(20) NULL"); } catch (Exception $e) {}
+  try { q("ALTER TABLE employees ADD COLUMN IF NOT EXISTS is_company TINYINT(1) NOT NULL DEFAULT 0"); } catch (Exception $e) {}
   /* seed defaults once so the settings table (not scattered PHP fallbacks) stays the one source of truth */
   foreach (['lunch_leave_days'=>'4','lunch_month_days'=>'30','lunch_pay_unused'=>'yes','lunch_over_allowance'=>'review'] as $k=>$v) {
     try { q("INSERT IGNORE INTO settings(skey,svalue) VALUES(?,?)", [$k,$v]); } catch (Exception $e) {}

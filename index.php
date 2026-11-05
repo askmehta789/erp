@@ -256,6 +256,46 @@ body.dark .db-pill{background:rgba(2,6,23,.4)}
 .db .info-row a{color:inherit;text-decoration:none}
 /* attention inside the row */
 .db .att-card{position:static;height:100%}
+/* ---------- phones ---------- */
+@media(max-width:640px){
+  .page-head{gap:10px}
+  .page-head p{font-size:12.5px}
+  .ncmv3.db{padding:0;margin:0;background:none;box-shadow:none;border:0;gap:12px}
+  .db-row{gap:12px}
+  .db .panel-head{padding:12px 14px}
+  .db .panel-head h2{font-size:13px}
+  .db .panel-body{padding:12px 14px}
+  /* search: input takes the row, small button */
+  .db > form.panel{padding:8px 10px;gap:8px}
+  .db > form.panel .btn{padding:8px 12px}
+  /* date bar: one swipeable row of periods, dates + Apply on their own row */
+  .db-range{padding:12px;gap:10px}
+  .db-range .lbl{width:100%}
+  .db-pills{flex-wrap:nowrap;overflow-x:auto;width:100%;margin:0 -2px;padding:2px;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+  .db-pills::-webkit-scrollbar{display:none}
+  .db-pill{flex:none}
+  .db-range form{margin-left:0;width:100%;display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);gap:6px}
+  .db-range form input{width:100%;min-width:0;padding:7px 8px;font-size:12px}
+  .db-range form .btn{grid-column:1/-1;width:100%}
+  /* KPI tiles: two per row, smaller type, quieter icon */
+  .db .mgrid{gap:10px}
+  .db .metric{padding:12px 13px;min-width:0}
+  .db .metric .mv{font-size:17px;word-break:break-word}
+  .db .metric .ml{font-size:10px;letter-spacing:.03em;line-height:1.45}
+  .db .metric .g{font-size:34px;right:-6px;top:-8px;opacity:.08}
+  /* P&L: hide the Previous column, keep Change */
+  .db-pl td{font-size:12.5px;padding:7px 2px}
+  .db-pl .pv{display:none}
+  .db-split{height:22px;margin-top:10px}
+  .db .chart-box{height:220px!important}
+  /* boxes stay two per row instead of one long column */
+  .db .vsplit{grid-template-columns:1fr 1fr}
+  .db .vsplit .vcell{padding:11px 12px}
+  .db .vcell .vl{font-size:10.5px}
+  .db .vcell .vv{font-size:17px}
+  .db .info-row{font-size:12.5px}
+  .db .grid.cols-2{grid-template-columns:1fr}
+}
 </style>
 
 <div class="page-head">
@@ -299,7 +339,7 @@ body.dark .db-pill{background:rgba(2,6,23,.4)}
     <div class="panel-head"><h2>🧾 Profit &amp; Loss</h2><span class="muted" style="font-size:12px"><?= $isLifetime ? 'all time' : 'this period vs previous' ?></span></div>
     <div class="panel-body">
       <table class="db-pl">
-        <tr class="h"><td></td><td class="r">This period</td><?php if(!$isLifetime): ?><td class="r">Previous</td><td class="r">Change</td><?php endif; ?></tr>
+        <tr class="h"><td></td><td class="r">This period</td><?php if(!$isLifetime): ?><td class="r pv">Previous</td><td class="r">Change</td><?php endif; ?></tr>
         <?php
           $plRows = [
             ['Revenue (delivered)', $revenue, $cmp('revenue'), true, ''],
@@ -315,19 +355,19 @@ body.dark .db-pill{background:rgba(2,6,23,.4)}
           <tr class="<?= $cls==='sub'?'sub':'' ?>"<?= $cls==='exp' && $expenseByCat ? ' style="cursor:pointer" onclick="toggleExpBreakdown()"' : '' ?>>
             <td><?= e($l) ?><?php if($cls==='exp' && $expenseByCat): ?> <span id="expChevron" class="muted" style="font-size:10px">▸ by category</span><?php endif; ?></td>
             <td class="r"<?= $cls==='sub'?' style="color:var(--green)"':'' ?>><?= money($a) ?></td>
-            <?php if(!$isLifetime): ?><td class="r muted"><?= money($b) ?></td><td class="r"><span class="<?= $d[1] ?>"><?= e($d[0]) ?></span></td><?php endif; ?>
+            <?php if(!$isLifetime): ?><td class="r muted pv"><?= money($b) ?></td><td class="r"><span class="<?= $d[1] ?>"><?= e($d[0]) ?></span></td><?php endif; ?>
           </tr>
           <?php if($cls==='exp' && $expenseByCat): ?>
           <tbody id="expBreakdown" style="display:none">
             <?php foreach($expenseByCat as $ec): $pct = $expenses>0? round($ec['total']/$expenses*100,1):0; ?>
-            <tr><td class="muted" style="padding-left:16px;font-size:12px">↳ <?= e($ec['category']) ?></td><td class="r muted" style="font-size:12px"><?= money($ec['total']) ?> (<?= $pct ?>%)</td><?php if(!$isLifetime): ?><td></td><td></td><?php endif; ?></tr>
+            <tr><td class="muted" style="padding-left:16px;font-size:12px">↳ <?= e($ec['category']) ?></td><td class="r muted" style="font-size:12px"><?= money($ec['total']) ?> (<?= $pct ?>%)</td><?php if(!$isLifetime): ?><td class="pv"></td><td></td><?php endif; ?></tr>
             <?php endforeach; ?>
           </tbody>
           <?php endif; ?>
         <?php endforeach; $d = dash_delta($net, $cmp('net')); ?>
         <tr class="tot"><td>Net profit · <?= $netMargin ?>% margin</td>
           <td class="r" style="color:<?= $net>=0?'var(--green)':'var(--red)' ?>"><?= money($net) ?></td>
-          <?php if(!$isLifetime): ?><td class="r muted"><?= money($P['net']) ?></td><td class="r"><span class="<?= $d[1] ?>"><?= e($d[0]) ?></span></td><?php endif; ?></tr>
+          <?php if(!$isLifetime): ?><td class="r muted pv"><?= money($P['net']) ?></td><td class="r"><span class="<?= $d[1] ?>"><?= e($d[0]) ?></span></td><?php endif; ?></tr>
       </table>
       <?php if ($revenue > 0):
         $segs = [['Product cost', $cogs, '#f59e0b'], ['Delivery', $delivery, '#fb923c'], ['Returns', $returnLoss + $exchangeLoss, '#f43f5e'], ['Expenses', $expenses, '#ef4444'], ['Net', max(0, $net), '#14b8a6']];

@@ -10,12 +10,10 @@ $orders = rows("SELECT o.*, p.name AS product_name, c.name AS courier_name
                 LEFT JOIN couriers c ON c.id=o.courier_id
                 ORDER BY o.order_date DESC, o.id DESC");
 
-/* ---- period selector: today / 30d / this month / 90d / this year / lifetime ---- */
+/* ---- period selector: 30d / 90d / this year / lifetime ---- */
 $range = (string)($_GET['range'] ?? 'all');
 $rangeDefs = [
-  'today'=> ['Today',         date('Y-m-d')],
   '30'   => ['Last 30 days',  date('Y-m-d', strtotime('-29 days'))],
-  'month'=> ['This month',    date('Y-m-01')],
   '90'   => ['Last 90 days',  date('Y-m-d', strtotime('-89 days'))],
   'year' => ['This year',     date('Y-01-01')],
   'all'  => ['Lifetime',      null],
@@ -162,107 +160,40 @@ if ($returned>0)     $todo[] = ['↩️','var(--red)',   "$returned returned/can
 ?>
 <!-- ===== metrics + compact attention side card ===== -->
 <div class="dash-top<?= $todo?' has-att':'' ?>">
-<?php
-/* the dashboard's period, handed to Sales links so a click opens exactly these orders */
-$salesQs = $rangeCut!==null ? '&from='.urlencode($rangeCut).'&to='.urlencode($today) : '';
-$sLink = fn($st) => 'sales.php?status='.$st.$salesQs;
-/* where revenue went: product cost + delivery (= revenue − gross profit), expenses, net */
-$dCost = max(0, $revenue - $profit); $dExp = max(0, $expenses); $dNet = max(0, $net);
-$dBase = max(1, $dCost + $dExp + $dNet, $revenue);
-$pc = fn($v) => round($v / $dBase * 100, 1);
-?>
-<style>
-.db-box{padding:16px 18px;margin-bottom:14px}
-.db-h{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px}
-.db-h h2{font-size:13px;margin:0;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
-.db-h a,.db-h span{font-size:12px;color:var(--muted);text-decoration:none}
-.db-h a:hover{color:var(--ink)}
-.db-money{display:grid;grid-template-columns:auto minmax(0,1fr);gap:22px;align-items:center}
-@media(max-width:760px){.db-money{grid-template-columns:1fr}}
-.db-net .v{font-size:30px;font-weight:900;line-height:1.1}
-.db-net .l{font-size:12px;color:var(--muted);font-weight:700}
-.db-bar{display:flex;height:28px;border-radius:10px;overflow:hidden;background:rgba(148,163,184,.15)}
-.db-bar i{display:flex;align-items:center;justify-content:center;color:#fff;font-style:normal;font-size:11px;font-weight:800;white-space:nowrap;overflow:hidden;min-width:0}
-.db-sub{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:10px}
-.db-sub div{font-size:11.5px;color:var(--muted);font-weight:700}
-.db-sub b{display:block;font-size:15px;color:var(--ink);font-weight:800;margin-top:1px}
-.db-flow{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
-@media(max-width:760px){.db-flow{grid-template-columns:repeat(2,minmax(0,1fr))}}
-.db-step{position:relative;display:block;text-decoration:none;color:inherit;border-radius:14px;padding:12px 14px;background:var(--bg);border:1px solid var(--bd);transition:transform .12s,box-shadow .12s}
-.db-step:hover{transform:translateY(-2px);box-shadow:0 10px 24px rgba(30,41,59,.10)}
-.db-step .l{font-size:12px;font-weight:800;color:var(--fg)}
-.db-step .v{font-size:24px;font-weight:900;color:var(--fg);line-height:1.15;margin-top:2px}
-.db-step .s{font-size:11px;color:var(--muted);font-weight:600}
-.db-step:not(:last-child)::after{content:'→';position:absolute;right:-10px;top:50%;transform:translateY(-50%);font-size:13px;color:var(--muted);z-index:1}
-@media(max-width:760px){.db-step::after{display:none}}
-.db-s1{--bg:rgba(100,116,139,.10);--bd:rgba(100,116,139,.25);--fg:#475569}
-.db-s2{--bg:rgba(245,158,11,.12);--bd:rgba(245,158,11,.30);--fg:#b45309}
-.db-s3{--bg:rgba(59,130,246,.10);--bd:rgba(59,130,246,.28);--fg:#1d4ed8}
-.db-s4{--bg:rgba(15,157,99,.10);--bd:rgba(15,157,99,.28);--fg:#047857}
-body.dark .db-s1{--fg:#cbd5e1}body.dark .db-s2{--fg:#fcd34d}body.dark .db-s3{--fg:#93c5fd}body.dark .db-s4{--fg:#6ee7b7}
-.db-side{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
-.db-chip{font-size:12px;font-weight:700;padding:6px 12px;border-radius:999px;text-decoration:none;background:rgba(239,68,68,.10);color:#b91c1c;border:1px solid rgba(239,68,68,.22)}
-.db-chip.g{background:rgba(100,116,139,.10);color:#475569;border-color:rgba(100,116,139,.22)}
-body.dark .db-chip{color:#fca5a5}body.dark .db-chip.g{color:#cbd5e1}
-.db-cash{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
-.db-cash .db-step::after{display:none}
-</style>
 <div class="dash-main">
-
-  <!-- 1) MONEY — am I making money? -->
-  <div class="panel db-box">
-    <div class="db-h"><h2>💰 Money · <?= e($rangeLabel) ?></h2><a href="expenses.php">expenses →</a></div>
-    <div class="db-money">
-      <div class="db-net">
-        <div class="l">Net profit</div>
-        <div class="v" style="color:<?= $net>=0?'var(--green)':'var(--red)' ?>"><?= money($net) ?></div>
-        <div class="l"><?= $netMargin ?>% of revenue, after expenses</div>
-      </div>
-      <div>
-        <div class="db-bar" title="Where delivered revenue went">
-          <?php foreach ([['Product cost & delivery',$dCost,'#f59e0b'],['Expenses',$dExp,'#ef4444'],['Net profit',$dNet,'#14b8a6']] as [$l,$v,$c]): if ($v<=0) continue; $p=$pc($v); ?>
-            <i style="flex:<?= $p ?>;background:<?= $c ?>" title="<?= e($l.': '.money($v).' ('.round($p).'%)') ?>"><?= $p>=12 ? e($l).' '.round($p).'%' : '' ?></i>
-          <?php endforeach; ?>
-        </div>
-        <div class="db-sub">
-          <div>Revenue (delivered)<b><?= money($revenue) ?></b></div>
-          <div>Gross profit · <?= $margin ?>%<b><?= money($profit) ?></b></div>
-          <div>Expenses<b style="color:var(--red)"><?= money($expenses) ?></b></div>
-        </div>
-      </div>
+<div class="mgrid">
+  <div class="metric blue"><div><div class="mv"><?= number_format($total) ?></div><div class="ml">Total Orders</div></div><div class="mi">📦</div></div>
+  <div class="metric green"><div><div class="mv"><?= number_format($delivered) ?></div><div class="ml">Delivered</div></div><div class="mi">✅</div></div>
+  <div class="metric purple"><div><div class="mv"><?= number_format($unitsDelivered) ?> <span style="font-size:13px">pcs</span></div><div class="ml">Units Delivered</div><div class="ms">total quantity sold</div></div><div class="mi">🔢</div></div>
+  <div class="metric amber"><div><div class="mv"><?= number_format($returned) ?></div><div class="ml">Returns / RTV</div></div><div class="mi">↩️</div></div>
+  <div class="metric red">
+    <div>
+      <div class="mv"><span class="rr-view rr-return"><?= $returnRate ?>%</span><span class="rr-view rr-cancel" style="display:none"><?= $cancelRate ?>%</span></div>
+      <div class="ml"><span class="rr-view rr-return">Return Rate</span><span class="rr-view rr-cancel" style="display:none">Cancel Rate</span></div>
+      <div class="ms">Combined <?= $combinedRate ?>% · <?= $returnRate ?>% return + <?= $cancelRate ?>% cancel</div>
     </div>
+    <div class="mi">％</div>
   </div>
+  <div class="metric orange"><div><div class="mv"><?= number_format($inDelivery) ?></div><div class="ml">In Delivery</div></div><div class="mi">🚚</div></div>
+  <div class="metric indigo"><div><div class="mv"><?= number_format($pending) ?></div><div class="ml">Pending Orders</div></div><div class="mi">⏳</div></div>
+  <div class="metric purple"><div><div class="mv"><?= number_format($cancelled) ?></div><div class="ml">Cancelled</div></div><div class="mi">✖️</div></div>
+  <?php if($exchanged>0): ?><div class="metric indigo"><div><div class="mv"><?= number_format($exchanged) ?></div><div class="ml">Exchanged</div><div class="ms">cost: <?= money($exchangeLoss) ?></div></div><div class="mi">🔁</div></div><?php endif; ?>
+  <div class="metric teal mlink" onclick="location='cod.php'"><div><div class="mv" style="font-size:22px"><?= money($codPending) ?></div><div class="ml">COD In Transit</div><div class="ms">orders not yet delivered</div></div><div class="mi">💰</div></div>
+  <div class="metric amber mlink" onclick="location='cod.php'"><div><div class="mv" style="font-size:22px"><?= money($codHeld) ?></div><div class="ml">COD With Couriers</div><div class="ms">delivered, release pending</div></div><div class="mi">🚚</div></div>
+</div>
 
-  <!-- 2) ORDERS — where are my orders? -->
-  <div class="panel db-box">
-    <div class="db-h"><h2>🚚 Orders · <?= number_format($total) ?> total</h2><span>click a step to open those orders</span></div>
-    <div class="db-flow">
-      <a class="db-step db-s1" href="<?= e($sLink('pending')) ?>"><div class="l">⏳ Pending</div><div class="v"><?= number_format($pending) ?></div><div class="s">not confirmed yet</div></a>
-      <a class="db-step db-s2" href="<?= e($sLink('processing')) ?>"><div class="l">📦 To dispatch</div><div class="v"><?= number_format($processing) ?></div><div class="s">ready, not shipped</div></a>
-      <a class="db-step db-s3" href="<?= e($sLink('shipped')) ?>"><div class="l">🚚 In transit</div><div class="v"><?= number_format($shipped) ?></div><div class="s">with couriers</div></a>
-      <a class="db-step db-s4" href="<?= e($sLink('delivered')) ?>"><div class="l">✅ Delivered</div><div class="v"><?= number_format($delivered) ?></div><div class="s"><?= number_format($unitsDelivered) ?> pcs sold</div></a>
-    </div>
-    <div class="db-side">
-      <a class="db-chip" href="<?= e($sLink('returned')) ?>">↩️ Returns <?= number_format($returned) ?> · <?= $returnRate ?>%</a>
-      <a class="db-chip" href="<?= e($sLink('cancelled')) ?>">✖️ Cancelled <?= number_format($cancelled) ?> · <?= $cancelRate ?>%</a>
-      <?php if ($exchanged>0): ?><a class="db-chip g" href="<?= e($sLink('exchanged')) ?>">🔁 Exchanged <?= number_format($exchanged) ?> · cost <?= money($exchangeLoss) ?></a><?php endif; ?>
-      <span class="db-chip g" title="returns + cancellations as a share of all orders">Combined <?= $combinedRate ?>%</span>
-    </div>
-  </div>
-
-  <!-- 3) CASH — who still owes me money? -->
-  <div class="panel db-box">
-    <div class="db-h"><h2>💵 Cash still out (COD)</h2><a href="cod.php">COD ledger →</a></div>
-    <div class="db-cash">
-      <a class="db-step db-s3" href="cod.php"><div class="l">On parcels still on the way</div><div class="v" style="font-size:21px"><?= money($codPending) ?></div><div class="s">collected when delivered</div></a>
-      <a class="db-step db-s2" href="cod.php"><div class="l">Delivered — couriers holding</div><div class="v" style="font-size:21px"><?= money($codHeld) ?></div><div class="s">waiting to be released to you</div></a>
-    </div>
-  </div>
+<!-- ===== money row ===== -->
+<div class="mgrid" style="margin-top:16px">
+  <div class="metric green"><div><div class="mv" style="font-size:22px"><?= money($revenue) ?></div><div class="ml">Revenue (delivered)</div><div class="ms"><?= $margin ?>% margin</div></div><div class="mi">📈</div></div>
+  <div class="metric blue"><div><div class="mv" style="font-size:22px"><?= money($profit) ?></div><div class="ml">Gross Profit</div></div><div class="mi">💵</div></div>
+  <div class="metric red"><div><div class="mv" style="font-size:22px"><?= money($expenses) ?></div><div class="ml">Expenses</div></div><div class="mi">💸</div></div>
+  <div class="metric <?= $net>=0?'teal':'red' ?>"><div><div class="mv" style="font-size:22px"><?= money($net) ?></div><div class="ml">Net Profit</div><div class="ms">after expenses · <?= $netMargin ?>% margin</div></div><div class="mi">🧾</div></div>
+</div>
 </div><!-- /dash-main -->
 
 <?php if($todo): ?>
 <aside class="att-card panel noglow">
-  <div class="att-head">⚡ Needs attention <span class="att-n"><?= count($todo) ?></span></div>
+  <div class="att-head">⚡ Attention <span class="att-n"><?= count($todo) ?></span></div>
   <div class="att-list">
     <?php foreach($todo as $t): ?>
       <a class="att-item" href="<?= e($t[3]) ?>">

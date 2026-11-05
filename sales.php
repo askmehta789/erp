@@ -1286,7 +1286,7 @@ function clearDashFilter(){
     if(fromParam && toParam) parts.push('<b>'+esc(fromParam)+' → '+esc(toParam)+'</b>');
     var banner=document.getElementById('dashFilterBanner');
     if(banner && parts.length){
-      banner.innerHTML='📍 Filtered from Sales Team dashboard: '+parts.join(' · ')+
+      banner.innerHTML='📍 Filtered: '+parts.join(' · ')+
         '<button class="btn btn-sm" style="margin-left:auto" onclick="clearDashFilter()">✕ Clear filter</button>';
       banner.style.display='flex';
     }

@@ -286,17 +286,30 @@ foreach(rows("SELECT expense_date, amount, category, COALESCE(product,'') produc
 }
 $GT=['q'=>0,'rev'=>0,'del'=>0,'gross'=>0,'ads'=>0,'net'=>0];
 ?>
+<style>
+.mon-row{cursor:pointer;transition:background .12s}
+.mon-row:hover td{background:rgba(59,130,246,.08)}
+.mon-row.mon-on td{background:rgba(59,130,246,.12)}
+.mon-link{color:inherit;text-decoration:none}
+.mon-go::after{content:"↗";font-size:11px;color:var(--muted);opacity:0;transition:opacity .12s}
+.mon-row:hover .mon-go::after,.mon-row.mon-on .mon-go::after{opacity:1}
+</style>
 <div class="panel" style="margin-top:20px"><div class="panel-head" style="flex-wrap:wrap;gap:10px">
   <h2>🗓 Monthly Report — <?= $y ?><?= $pName?' · '.e($pName):'' ?></h2>
+  <span class="muted" style="font-size:12px">click a month to open it in a new tab</span>
   <button class="btn btn-sm" onclick="tblCsvX('monTbl','monthly-report')">⬇ CSV</button></div>
 <div class="table-wrap"><table class="tbl num-tbl" id="monTbl"><thead><tr>
   <th>Month</th><th class="right">Quantity</th><th class="right">Revenue</th><th class="right">Revenue ($)</th><th class="right">Delivery Charges</th><th class="right">Profit without Ads</th><th class="right">Ads Spent</th><th class="right">Ads ($)</th><th class="right">Net Profit</th><th class="right">Net ($)</th>
 </tr></thead><tbody>
 <?php for($m=1;$m<=12;$m++): if(!isset($mon[$m]) && !isset($adsMon[$m])) continue;
   $v=$mon[$m]??['q'=>0,'rev'=>0,'del'=>0,'gross'=>0]; $ads=$adsMon[$m]??0; $net=$v['gross']-$ads;
-  $GT['q']+=$v['q'];$GT['rev']+=$v['rev'];$GT['del']+=$v['del'];$GT['gross']+=$v['gross'];$GT['ads']+=$ads;$GT['net']+=$net; ?>
-  <tr>
-    <td><b><?= date('M', mktime(0,0,0,$m,1)) ?></b></td>
+  $GT['q']+=$v['q'];$GT['rev']+=$v['rev'];$GT['del']+=$v['del'];$GT['gross']+=$v['gross'];$GT['ads']+=$ads;$GT['net']+=$net;
+  /* click a month → this same Analytics page for just that month (day by day), in a new tab */
+  $mFrom=sprintf('%04d-%02d-01',$y,$m); $mTo=date('Y-m-t',strtotime($mFrom));
+  $mUrl='analytics.php?'.http_build_query(array_filter(['from'=>$mFrom,'to'=>$mTo,'g'=>'day','pid'=>$pid?:null]));
+  $mOn=($from===$mFrom && $to===$mTo); ?>
+  <tr class="mon-row<?= $mOn?' mon-on':'' ?>" onclick="if(!event.target.closest('a'))window.open('<?= e($mUrl) ?>','_blank')" title="Open <?= e(date('F Y',strtotime($mFrom))) ?> in a new tab">
+    <td><a href="<?= e($mUrl) ?>" target="_blank" rel="noopener" class="mon-link"><b><?= date('M', mktime(0,0,0,$m,1)) ?></b> <span class="mon-go"></span></a></td>
     <td class="num right" style="font-weight:700"><?= number_format($v['q']) ?></td>
     <td class="num right"><?= money($v['rev']) ?></td>
     <td class="num right muted"><?= usd($v['rev']) ?></td>

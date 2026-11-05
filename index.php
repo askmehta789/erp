@@ -10,7 +10,7 @@ $allOrders = rows("SELECT o.*, p.name AS product_name, c.name AS courier_name
                 LEFT JOIN couriers c ON c.id=o.courier_id
                 ORDER BY o.order_date DESC, o.id DESC");
 
-/* ---- period: quick presets or a custom from–to range (default: this month) ---- */
+/* ---- period: quick presets or a custom from–to range (default: lifetime) ---- */
 $today = date('Y-m-d');
 $isDate = fn($d) => is_string($d) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $d) && strtotime($d);
 $firstOrder = $allOrders ? min(array_map(fn($o) => substr((string)$o['order_date'], 0, 10), $allOrders)) : $today;
@@ -32,7 +32,7 @@ if (isset($rangeDefs[$range])) {
   if ($start > $end) [$start, $end] = [$end, $start];
   $rangeLabel = date('j M', strtotime($start)).' – '.date('j M Y', strtotime($end));
 } else {
-  $range = 'month'; [$rangeLabel, $start, $end] = $rangeDefs['month'];
+  $range = 'all'; [$rangeLabel, $start, $end] = $rangeDefs['all'];   /* opening the ERP shows Lifetime */
 }
 $isLifetime = $range === 'all';
 $inRange = fn($o, $a, $b) => ($d = substr((string)$o['order_date'], 0, 10)) >= $a && $d <= $b;

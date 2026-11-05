@@ -185,6 +185,38 @@ class Daraz {
     $data = $this->authedCall('/orders/items/get', ['order_ids' => '[' . implode(',', array_map('intval', $orderIds)) . ']']);
     return $data['data'] ?? [];
   }
+
+  /* GetOrder (/order/get) — ONE order header, by its Daraz order number */
+  public function getOrder(string $orderId): array {
+    $data = $this->authedCall('/order/get', ['order_id' => preg_replace('/\D+/', '', $orderId)]);
+    return $data['data'] ?? [];
+  }
+
+  /* GetOrderItems (/order/items/get) — line items of ONE order (multi-qty = repeated rows) */
+  public function getOrderItemsOne(string $orderId): array {
+    $data = $this->authedCall('/order/items/get', ['order_id' => preg_replace('/\D+/', '', $orderId)]);
+    return $data['data'] ?? [];
+  }
+
+  /* QueryTransactionDetails (/finance/transaction/details/get) — the real money Daraz
+     credited/charged (item price credit, commission, payment fee, shipping fee, vouchers,
+     penalties). Needs the app's Finance permission; callers must treat failure as
+     "fees not available" rather than an error. Dates are Y-m-d. */
+  public function getTransactions(string $start, string $end, string $orderId = '', int $offset = 0, int $limit = 500): array {
+    $p = ['start_time' => $start, 'end_time' => $end, 'offset' => (string)$offset, 'limit' => (string)$limit];
+    if ($orderId !== '') $p['trade_order_id'] = preg_replace('/\D+/', '', $orderId);
+    $data = $this->authedCall('/finance/transaction/details/get', $p);
+    $d = $data['data'] ?? [];
+    return isset($d[0]) || $d === [] ? $d : ($d['list'] ?? $d['transactions'] ?? []);
+  }
+}
+
+/* Daraz sometimes sends money as text ("1,450.00") — a plain (float) cast reads that as 1.
+   Strip everything but digits, dot and minus before converting. */
+function dz_num($v): float {
+  if (is_int($v) || is_float($v)) return (float)$v;
+  $s = preg_replace('/[^0-9.\-]/', '', (string)$v);
+  return ($s === '' || $s === '-' || $s === '.') ? 0.0 : (float)$s;
 }
 
 /* Daraz order/item status -> this ERP's internal order status */
@@ -208,6 +240,19 @@ function daraz_ensure_cols(): void {
   try { q("ALTER TABLE orders ADD COLUMN IF NOT EXISTS daraz_sku VARCHAR(80) NULL"); } catch (Exception $e) {}
   try { q("ALTER TABLE orders ADD COLUMN IF NOT EXISTS daraz_item_name VARCHAR(160) NULL"); } catch (Exception $e) {}
   try { q("ALTER TABLE products ADD COLUMN IF NOT EXISTS daraz_sku VARCHAR(80) NULL"); } catch (Exception $e) {}
+  /* money breakdown straight from Daraz, per order line, so the ERP never has to squeeze
+     several different amounts into sell_price / delivery_charge again:
+       list = Daraz item price (per unit) · seller_discount = YOUR voucher/discount (line total)
+       platform_voucher = Daraz-funded voucher (not your cost) · paid = what the customer paid
+       ship_customer = shipping the CUSTOMER paid (not your cost) · payout = finance net
+     delivery_charge keeps meaning "Daraz fees you pay" (that's what order_profit subtracts). */
+  foreach ([
+    "daraz_list_price DECIMAL(12,2) NULL", "daraz_seller_discount DECIMAL(12,2) NULL",
+    "daraz_platform_voucher DECIMAL(12,2) NULL", "daraz_paid DECIMAL(12,2) NULL",
+    "daraz_ship_customer DECIMAL(12,2) NULL", "daraz_payout DECIMAL(12,2) NULL",
+    "daraz_fee_source VARCHAR(12) NULL", "daraz_status_raw VARCHAR(40) NULL",
+    "daraz_checked_at DATETIME NULL",
+  ] as $col) { try { q("ALTER TABLE orders ADD COLUMN IF NOT EXISTS $col"); } catch (Exception $e) {} }
   $done = true;
 }
 
@@ -361,7 +406,9 @@ function daraz_sync_orders(int $days = 14): array {
       $status = daraz_map_status((string)($it['status'] ?? 'pending'));
       if ($status === 'cancelled') { $cancelledSkipped++; continue; }
       $sku    = trim((string)($it['sku'] ?? '')) ?: trim((string)($it['shop_sku'] ?? ''));
-      $price  = (float)($it['item_price'] ?? $it['paid_price'] ?? 0);
+      /* your real per-unit revenue: Daraz item price minus YOUR (seller-funded) voucher —
+         Daraz-funded vouchers don't reduce what you earn */
+      $price  = round(max(0, dz_num($it['item_price'] ?? $it['paid_price'] ?? 0) - dz_num($it['voucher_seller'] ?? 0)), 2);
       $name   = trim((string)($it['name'] ?? ''));
       $key = $sku.'|'.$price.'|'.$status;
       if (!isset($groups[$key])) $groups[$key] = ['sku'=>$sku,'name'=>$name,'price'=>$price,'status'=>$status,'qty'=>0];
@@ -375,7 +422,10 @@ function daraz_sync_orders(int $days = 14): array {
     $address  = trim(implode(', ', array_filter([$addr['address1'] ?? '', $addr['address2'] ?? '', $addr['city'] ?? ''])));
     $orderDate = date('Y-m-d', strtotime($o['created_at'] ?? 'now'));
     $payType   = stripos((string)($o['payment_method'] ?? ''), 'cod') !== false ? 'cod' : 'prepaid';
-    $delivery  = (float)($o['shipping_fee'] ?? 0);
+    /* shipping_fee is what the CUSTOMER paid for delivery — it is not a cost to you, so it
+       must never land in delivery_charge (which order_profit subtracts as your cost). Daraz
+       fees are filled in later from the finance API or by hand. */
+    $delivery  = 0.0;
     $group     = count($groups) > 1 ? ('DZ'.$orderId) : null;
 
     $first = true;

@@ -68,14 +68,26 @@ function delivery_disabled_banner($page) {
 function nav_items_raw() {
   $deliveryKids = [];
   foreach (delivery_partner_pages() as $page=>[$icon,$label]) {
+    if ($page === 'daraz.php') continue;   /* Daraz has its own sidebar group below */
     if (delivery_page_enabled($page)) $deliveryKids[] = [$page,$icon,$label];
   }
   $deliveryKids[] = ['couriers.php','🚚','All Couriers'];
-  return [
+  /* Daraz is a sales channel with its own dashboard, sheet and analytics — still switched
+     on/off from Settings → Delivery Partners like before */
+  $dzIcon = '<img src="assets/daraz-icon.ico" alt="Daraz" style="height:16px;vertical-align:-3px">';
+  $darazGrp = delivery_page_enabled('daraz.php')
+    ? [['grp','daraz',$dzIcon,'Daraz', [
+        ['daraz.php','📊','Daraz Dashboard'],
+        ['daraz_sales.php','🧾','Daraz Sales'],
+        ['daraz_analytics.php','📈','Daraz Analytics'],
+      ]]]
+    : [];
+  return array_merge([
     ['index.php','🏠','Dashboard'],
     ['sales.php','🛒','Sales'],
     ['sales_dashboard.php','🏆','Sales Team'],
     ['assistant.php','🤖','AI Assistant'],
+  ], $darazGrp, [
     ['grp','delivery','🚚','Delivery', $deliveryKids],
     ['grp','money','💰','Money', [
       ['money_dashboard.php','💰','Money Dashboard'],
@@ -105,7 +117,7 @@ function nav_items_raw() {
       ['settings.php','⚙️','Settings'],
       ['activity.php','📜','Activity Logs'],
     ]],
-  ];
+  ]);
 }
 
 /* Settings → Sidebar Menu lets an admin reorder and show/hide sidebar entries for
@@ -422,7 +434,7 @@ function role_rank($role) {
 function page_min_rank($page) {
   $map = [
     'users.php'=>3, 'settings.php'=>3, 'activity.php'=>3,
-    'accounting.php'=>2, 'salary.php'=>2, 'salary_report.php'=>2, 'lunch_management.php'=>2, 'cod.php'=>2, 'banks.php'=>2, 'daraz.php'=>2, 'pickndrop.php'=>2, 'expenses.php'=>2, 'reports.php'=>2, 'analytics.php'=>2, 'analytics_returns.php'=>2, 'analytics_exchanges.php'=>2, 'analytics_salesperson.php'=>2, 'analytics_customers.php'=>2, 'analytics_branches.php'=>2, 'analytics_report.php'=>2, 'suppliers.php'=>2, 'hrm.php'=>2, 'vendor_purchases.php'=>2, 'inventory.php'=>2, 'money_dashboard.php'=>2, 'assistant.php'=>2, 'ai.php'=>2,
+    'accounting.php'=>2, 'salary.php'=>2, 'salary_report.php'=>2, 'lunch_management.php'=>2, 'cod.php'=>2, 'banks.php'=>2, 'daraz.php'=>2, 'daraz_sales.php'=>2, 'daraz_analytics.php'=>2, 'pickndrop.php'=>2, 'expenses.php'=>2, 'reports.php'=>2, 'analytics.php'=>2, 'analytics_returns.php'=>2, 'analytics_exchanges.php'=>2, 'analytics_salesperson.php'=>2, 'analytics_customers.php'=>2, 'analytics_branches.php'=>2, 'analytics_report.php'=>2, 'suppliers.php'=>2, 'hrm.php'=>2, 'vendor_purchases.php'=>2, 'inventory.php'=>2, 'money_dashboard.php'=>2, 'assistant.php'=>2, 'ai.php'=>2,
     'ncm_debug.php'=>3,
     'ncm.php'=>1, 'ncm_comments.php'=>1, 'sales.php'=>1, 'couriers.php'=>1, 'sales_dashboard.php'=>1,   /* staff can use the courier & sales pages */
   ];

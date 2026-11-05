@@ -116,7 +116,7 @@ $tile = function($label, $val, $d, $icon, $cls) {
 
 <?php if ($C['missing_fees'] > 0): ?>
 <div class="flash" style="background:rgba(245,158,11,.14);color:#92400e;margin-top:14px">⚠ <?= $C['missing_fees'] ?> delivered order(s) in this period have no Daraz fees yet, so profit here is higher than real.
-  <a href="daraz_sales.php?<?= e($R['qs']) ?>&f=nofee" style="font-weight:800">Add fees or re-check with Daraz →</a></div>
+  <a href="daraz_sales.php?<?= e($R['qs']) ?>&f=nofee" style="font-weight:800">Add charges or sync with Daraz →</a></div>
 <?php endif; ?>
 
 <div class="mgrid" style="margin-top:16px">

@@ -143,7 +143,7 @@ function daraz_normalize_order(string $orderId, array $h, array $items, ?array $
 function daraz_erp_rows(string $orderId): array {
   daraz_ensure_cols();
   $orderId = preg_replace('/\D+/', '', $orderId);
-  return rows("SELECT o.*, p.name AS product_name FROM orders o LEFT JOIN products p ON p.id=o.product_id
+  return rows("SELECT o.*, p.name AS product_name, p.sku AS product_sku, p.daraz_sku AS product_daraz_sku FROM orders o LEFT JOIN products p ON p.id=o.product_id
                WHERE o.daraz_order_id=?
                   OR (o.daraz_order_id IS NULL AND o.courier_id=? AND (TRIM(o.remarks)=? OR TRIM(o.remarks)=? OR o.remarks LIKE ?))
                ORDER BY o.id", [$orderId, daraz_courier_id(), $orderId, 'Daraz #'.$orderId, 'Daraz #'.$orderId.' %']);
@@ -152,13 +152,16 @@ function daraz_erp_rows(string $orderId): array {
 /* pair each Daraz line with an ERP row: same SKU first, then whatever is left in order */
 function daraz_pair_lines(array $lines, array $erp): array {
   $used = []; $pairs = [];
-  foreach ($lines as $i => $L) {
+  /* live items claim ERP lines before items cancelled on Daraz do */
+  $order = array_keys($lines);
+  usort($order, fn($a, $b) => (($lines[$a]['status'] ?? '') === 'cancelled') <=> (($lines[$b]['status'] ?? '') === 'cancelled') ?: $a <=> $b);
+  foreach ($order as $i) { $L = $lines[$i];
     foreach ($erp as $j => $r) {
       if (isset($used[$j])) continue;
-      if ($L['sku'] !== '' && strcasecmp((string)($r['daraz_sku'] ?? ''), $L['sku']) === 0) { $pairs[$i] = $j; $used[$j] = 1; break; }
+      if ($L['sku'] !== '' && (strcasecmp((string)($r['daraz_sku'] ?? ''), $L['sku']) === 0 || strcasecmp((string)($r['product_daraz_sku'] ?? ''), $L['sku']) === 0 || strcasecmp((string)($r['product_sku'] ?? ''), $L['sku']) === 0)) { $pairs[$i] = $j; $used[$j] = 1; break; }
     }
   }
-  foreach ($lines as $i => $L) {
+  foreach ($order as $i) {
     if (isset($pairs[$i])) continue;
     foreach ($erp as $j => $r) { if (!isset($used[$j])) { $pairs[$i] = $j; $used[$j] = 1; break; } }
   }
@@ -166,135 +169,176 @@ function daraz_pair_lines(array $lines, array $erp): array {
   return [$pairs, $extraErp];
 }
 
-/* ---------- 3) side-by-side comparison ---------- */
+/* ---------- 3) status rules ----------
+   Orders are booked by hand in the ERP; Daraz only moves the STATUS forward and fills
+   the Daraz CHARGES. A Daraz status is applied when it is further along than the ERP's
+   (pending → processing → shipped → delivered), or when it is final (delivered,
+   returned, cancelled). It never drags an order backwards, e.g. ERP "shipped" stays
+   shipped while Daraz still says "ready to ship". */
+function daraz_status_rank(string $s): int {
+  return ['pending'=>0,'processing'=>1,'shipped'=>2,'delivered'=>3,'exchanged'=>3,'returned'=>4,'cancelled'=>4][$s] ?? 0;
+}
+function daraz_status_to_apply(string $erp, string $dz): ?string {
+  if ($erp === $dz) return null;
+  if (in_array($dz, ['delivered','returned','cancelled'], true)) return $dz;
+  return daraz_status_rank($dz) > daraz_status_rank($erp) ? $dz : null;
+}
+/* the Daraz charge the ERP should hold for the order (its first line), or null = leave it */
+function daraz_fee_target(array $dz, array $firstRow): ?float {
+  if ($dz['finance']['ok']) return round($dz['finance']['fees'], 2);
+  /* the old bulk import stored the CUSTOMER's shipping as your cost — undo exactly that */
+  if (($firstRow['daraz_fee_source'] ?? null) === null && !empty($firstRow['daraz_sku']) && $dz['ship_header'] > 0
+      && abs((float)$firstRow['delivery_charge'] - $dz['ship_header']) < 0.01) return 0.0;
+  return null;
+}
+
+/* ---------- 4) side-by-side comparison (status + charges are what get synced) ---------- */
 function daraz_compare(array $dz): array {
   $erp = daraz_erp_rows($dz['order_id']);
   [$pairs, $extraErp] = daraz_pair_lines($dz['lines'], $erp);
-  $out = ['order_id'=>$dz['order_id'], 'linked'=>(bool)$erp, 'lines'=>[], 'extra_erp'=>[], 'diffs'=>0, 'totals'=>[]];
+  $out = ['order_id'=>$dz['order_id'], 'linked'=>(bool)$erp, 'lines'=>[], 'extra_erp'=>[], 'diffs'=>0, 'notes'=>[], 'totals'=>[]];
   $erpRev = 0; $dzRev = 0; $erpFee = 0;
   foreach ($erp as $r) { if ($r['status'] !== 'cancelled') $erpRev += (float)$r['sell_price'] * (int)$r['qty']; $erpFee += (float)$r['delivery_charge']; }
   foreach ($dz['lines'] as $i => $L) {
     if ($L['status'] !== 'cancelled') $dzRev += $L['unit_revenue'] * $L['qty'];
     $r = isset($pairs[$i]) ? $erp[$pairs[$i]] : null;
-    /* an item cancelled on Daraz that the ERP never had is correct as-is — cancelled
-       Daraz items are deliberately not imported, so it isn't a difference */
-    if (!$r && $L['status'] === 'cancelled') {
-      $out['lines'][] = ['sku'=>$L['sku'], 'name'=>$L['name'].' (cancelled on Daraz — not imported)', 'erp_id'=>null, 'erp_code'=>null,
-        'erp_product'=>null, 'fields'=>[['label'=>'Status','erp'=>'—','daraz'=>'cancelled','money'=>false,'diff'=>false]],
-        'info'=>['list_unit'=>$L['list_unit'], 'seller_discount'=>$L['seller_discount'], 'platform_voucher'=>$L['platform_voucher'],
-                 'paid'=>$L['paid'], 'ship_customer'=>$L['ship_customer'], 'status_raw'=>$L['status_raw']]];
+    $info = ['list_unit'=>$L['list_unit'], 'seller_discount'=>$L['seller_discount'], 'platform_voucher'=>$L['platform_voucher'],
+             'paid'=>$L['paid'], 'ship_customer'=>$L['ship_customer'], 'status_raw'=>$L['status_raw']];
+    if (!$r) {
+      if ($L['status'] !== 'cancelled' && $erp)
+        $out['notes'][] = 'Daraz has "'.($L['name'] ?: $L['sku']).'" ×'.$L['qty'].' that isn\'t in the ERP order — add it in Sales if it should be there.';
+      $out['lines'][] = ['sku'=>$L['sku'], 'name'=>$L['name'].($L['status']==='cancelled' ? ' (cancelled on Daraz)' : ' (not in ERP)'), 'erp_id'=>null, 'erp_code'=>null,
+        'fields'=>[['label'=>'Status','erp'=>'—','daraz'=>$L['status'],'money'=>false,'diff'=>false,'sync'=>false]], 'info'=>$info];
       continue;
     }
+    $to = daraz_status_to_apply($r['status'], $L['status']);
     $f = [];
-    $add = function($label, $erpV, $dzV, $isMoney = false) use (&$f, &$out) {
-      $differs = $isMoney ? abs((float)$erpV - (float)$dzV) > 0.009 : (string)$erpV !== (string)$dzV;
-      if ($differs) $out['diffs']++;
-      $f[] = ['label'=>$label, 'erp'=>$erpV, 'daraz'=>$dzV, 'money'=>$isMoney, 'diff'=>$differs];
-    };
-    $add('Qty', $r ? (int)$r['qty'] : '—', $L['qty']);
-    $add('Your price per unit', $r ? (float)$r['sell_price'] : '—', $L['unit_revenue'], true);
-    $add('Status', $r ? $r['status'] : '—', $L['status']);
-    $out['lines'][] = [
-      'sku'=>$L['sku'], 'name'=>$L['name'], 'erp_id'=>$r ? (int)$r['id'] : null, 'erp_code'=>$r['code'] ?? null,
-      'erp_product'=>$r['product_name'] ?? null, 'fields'=>$f,
-      'info'=>['list_unit'=>$L['list_unit'], 'seller_discount'=>$L['seller_discount'], 'platform_voucher'=>$L['platform_voucher'],
-               'paid'=>$L['paid'], 'ship_customer'=>$L['ship_customer'], 'status_raw'=>$L['status_raw']],
-    ];
+    $f[] = ['label'=>'Status', 'erp'=>$r['status'], 'daraz'=>$L['status'].($r['status'] !== $L['status'] && !$to ? ' (kept — ERP is further along)' : ''),
+            'money'=>false, 'diff'=>(bool)$to, 'sync'=>true];
+    if ($to) $out['diffs']++;
+    /* price & qty are the ERP's own (booked by hand) — shown for information only */
+    $f[] = ['label'=>'Price per unit (info only)', 'erp'=>(float)$r['sell_price'], 'daraz'=>$L['unit_revenue'], 'money'=>true, 'diff'=>false, 'sync'=>false,
+            'warn'=>abs((float)$r['sell_price'] - $L['unit_revenue']) > 0.009];
+    $f[] = ['label'=>'Qty (info only)', 'erp'=>(int)$r['qty'], 'daraz'=>$L['qty'], 'money'=>false, 'diff'=>false, 'sync'=>false, 'warn'=>(int)$r['qty'] !== $L['qty']];
+    $out['lines'][] = ['sku'=>$L['sku'], 'name'=>$L['name'], 'erp_id'=>(int)$r['id'], 'erp_code'=>$r['code'], 'erp_product'=>$r['product_name'] ?? null, 'fields'=>$f, 'info'=>$info];
   }
   foreach ($extraErp as $j) $out['extra_erp'][] = ['id'=>(int)$erp[$j]['id'], 'code'=>$erp[$j]['code'], 'product'=>$erp[$j]['product_name'] ?: $erp[$j]['daraz_item_name'], 'qty'=>(int)$erp[$j]['qty'], 'status'=>$erp[$j]['status']];
-  if ($out['extra_erp']) $out['diffs'] += count($out['extra_erp']);
-  if (!$erp) $out['diffs'] = max(1, $out['diffs']);
-  $shipAsCost = $erp && !$dz['finance']['ok'] && $dz['ship_header'] > 0 && abs($erpFee - $dz['ship_header']) < 0.01;
+  $feeTarget = $erp ? daraz_fee_target($dz, $erp[0]) : null;
+  if ($feeTarget !== null && abs($erpFee - $feeTarget) > 0.009) $out['diffs']++;
   $out['totals'] = [
     'erp_revenue'=>round($erpRev,2), 'daraz_revenue'=>round($dzRev,2),
     'erp_fees'=>round($erpFee,2), 'daraz_fees'=>$dz['finance']['ok'] ? round($dz['finance']['fees'],2) : null,
-    'payout'=>$dz['finance']['ok'] ? $dz['finance']['payout'] : null,
+    'fee_target'=>$feeTarget, 'payout'=>$dz['finance']['ok'] ? $dz['finance']['payout'] : null,
     'ship_customer'=>round(array_sum(array_column($dz['lines'],'ship_customer')),2),
-    'ship_as_cost'=>$shipAsCost,
+    'ship_as_cost'=>$erp && !$dz['finance']['ok'] && $feeTarget === 0.0 && $erpFee > 0,
   ];
-  if (abs($erpRev - $dzRev) > 0.009 && $erp) $out['diffs']++;
-  if ($dz['finance']['ok'] && abs($erpFee - $dz['finance']['fees']) > 0.009) $out['diffs']++;
-  if ($shipAsCost) $out['diffs']++;
   return $out;
 }
 
-/* ---------- 4) apply Daraz's values to the ERP ---------- */
+/* ---------- 5) apply: ONLY status (with stock) and Daraz charges ----------
+   Never creates orders, never changes price / qty / product / customer. */
 function daraz_apply(array $dz): array {
   daraz_ensure_cols();
-  $dzCid = daraz_courier_id();
-  if (!$dzCid) throw new Exception('Daraz courier not found.');
   $erp = daraz_erp_rows($dz['order_id']);
-  [$pairs, $extraErp] = daraz_pair_lines($dz['lines'], $erp);
-  $bySku = daraz_products_by_sku();
-  $fin = $dz['finance'];
-  $group = count($dz['lines']) > 1 ? ('DZ'.$dz['order_id']) : null;
-  $res = ['updated'=>0, 'created'=>0, 'skipped_cancelled'=>0, 'unmatched'=>0, 'stale'=>count($extraErp)];
+  if (!$erp) throw new Exception('This Daraz order isn\'t linked to an ERP order yet — book it in Sales, then link it.');
+  [$pairs] = daraz_pair_lines($dz['lines'], $erp);
+  $res = ['status_changed'=>0, 'fees_set'=>false, 'lines'=>0];
   $now = date('Y-m-d H:i:s');
-  $first = true;
-
   foreach ($dz['lines'] as $i => $L) {
-    $prod = $L['sku'] !== '' ? ($bySku[strtolower($L['sku'])] ?? null) : null;
-    $common = [
-      'daraz_order_id'=>$dz['order_id'], 'daraz_sku'=>$L['sku'] ?: null, 'daraz_item_name'=>$L['name'] ?: null,
-      'daraz_list_price'=>$L['list_unit'], 'daraz_seller_discount'=>round($L['seller_discount'],2),
-      'daraz_platform_voucher'=>round($L['platform_voucher'],2), 'daraz_paid'=>round($L['paid'],2),
-      'daraz_ship_customer'=>round($L['ship_customer'],2), 'daraz_status_raw'=>$L['status_raw'], 'daraz_checked_at'=>$now,
-      'sell_price'=>$L['unit_revenue'], 'qty'=>max(1,$L['qty']), 'order_group'=>$group,
-    ];
-
-    if (isset($pairs[$i])) {
-      $r = $erp[$pairs[$i]];
-      $set = $common;
-      $set['status'] = $L['status'];
-      if ($L['status'] === 'delivered') $set['payment_status'] = 'paid';
-      /* fees: real finance figure when we have it (on the order's first line only) */
-      if ($fin['ok']) {
-        $set['delivery_charge'] = $first ? round($fin['fees'],2) : 0;
-        $set['daraz_payout']    = $first ? $fin['payout'] : null;
-        $set['daraz_fee_source']= 'finance';
-      } elseif (($r['daraz_fee_source'] ?? null) === null) {
-        /* legacy import stored the CUSTOMER's shipping as your cost — undo exactly that case,
-           keep anything else (that was typed by hand) */
-        $wasShip = $dz['ship_header'] > 0 && abs((float)$r['delivery_charge'] - $dz['ship_header']) < 0.01;
-        if ($wasShip) $set['delivery_charge'] = 0;
-        $set['daraz_fee_source'] = ((float)($set['delivery_charge'] ?? $r['delivery_charge']) > 0) ? 'manual' : 'none';
+    if (!isset($pairs[$i])) continue;
+    $r = $erp[$pairs[$i]];
+    $set = ['daraz_order_id'=>$dz['order_id'], 'daraz_status_raw'=>$L['status_raw'], 'daraz_checked_at'=>$now,
+            'daraz_list_price'=>$L['list_unit'], 'daraz_seller_discount'=>round($L['seller_discount'],2),
+            'daraz_platform_voucher'=>round($L['platform_voucher'],2), 'daraz_paid'=>round($L['paid'],2),
+            'daraz_ship_customer'=>round($L['ship_customer'],2)];
+    if (empty($r['daraz_sku']) && $L['sku'] !== '') $set['daraz_sku'] = $L['sku'];
+    $to = daraz_status_to_apply($r['status'], $L['status']);
+    if ($to) {
+      $set['status'] = $to;
+      if ($to === 'delivered') $set['payment_status'] = 'paid';
+      if (in_array($to, ['returned','cancelled'], true) && (float)$r['cancel_charge'] <= 0) {
+        try { $set['cancel_charge'] = (float)val("SELECT COALESCE(cancel_charge,0) FROM couriers WHERE id=?", [(int)$r['courier_id']]); } catch (Exception $e) {}
       }
-      foreach (['customer','phone','address'] as $k) if (trim((string)$r[$k]) === '' && $dz[$k] !== '') $set[$k] = $dz[$k];
-      if (!$r['product_id'] && $prod) { $set['product_id'] = (int)$prod['id']; $set['cost_price'] = (float)$prod['cost']; }
-      $pid = (int)($set['product_id'] ?? $r['product_id']);
-      $cols = implode(', ', array_map(fn($k) => "`$k`=?", array_keys($set)));
-      q("UPDATE orders SET $cols WHERE id=?", array_merge(array_values($set), [(int)$r['id']]));
-      /* stock follows the status / qty change (handles delivered→delivered qty edits too) */
-      if ($pid) {
-        $oldStatus = (!$r['product_id'] && $prod) ? '' : $r['status'];
-        fifo_status_change((int)$r['id'], $pid, (int)$set['qty'], $oldStatus, $set['status']);
-      }
-      $res['updated']++;
-    } else {
-      if ($L['status'] === 'cancelled') { $res['skipped_cancelled']++; continue; }
-      $remarks = 'Daraz #'.$dz['order_id'];
-      if (!$prod) { $res['unmatched']++; $remarks .= ' ⚠ '.($L['name'] ?: 'item').' — SKU "'.$L['sku'].'" not mapped yet'; }
-      $f = $common + [
-        'code'=>daraz_next_code(), 'order_date'=>$dz['created'],
-        'customer'=>$dz['customer'], 'phone'=>$dz['phone'], 'address'=>$dz['address'],
-        'product_id'=>$prod['id'] ?? null, 'cost_price'=>$prod['cost'] ?? 0,
-        'delivery_charge'=>($first && $fin['ok']) ? round($fin['fees'],2) : 0,
-        'daraz_payout'=>($first && $fin['ok']) ? $fin['payout'] : null,
-        'daraz_fee_source'=>$fin['ok'] ? 'finance' : 'none',
-        'cancel_charge'=>0, 'exchange_charge'=>0, 'zone'=>'inside',
-        'payment_type'=>$dz['payment'], 'payment_status'=>$L['status']==='delivered' ? 'paid' : 'unpaid',
-        'status'=>$L['status'], 'courier_id'=>$dzCid, 'remarks'=>$remarks,
-      ];
-      $cols = implode('`,`', array_keys($f));
-      q("INSERT INTO orders(`$cols`) VALUES(".implode(',', array_fill(0, count($f), '?')).")", array_values($f));
-      $newId = (int)db()->lastInsertId();
-      if ($prod) fifo_status_change($newId, (int)$prod['id'], (int)$f['qty'], '', $f['status']);
-      $res['created']++;
     }
-    $first = false;
+    $cols = implode(', ', array_map(fn($k) => "`$k`=?", array_keys($set)));
+    q("UPDATE orders SET $cols WHERE id=?", array_merge(array_values($set), [(int)$r['id']]));
+    if ($to) {
+      if ($r['product_id']) fifo_status_change((int)$r['id'], (int)$r['product_id'], (int)$r['qty'], $r['status'], $to);
+      $res['status_changed']++;
+    }
+    $res['lines']++;
   }
-  log_activity("Daraz #{$dz['order_id']}: updated {$res['updated']}, added {$res['created']} line(s) from Daraz".($fin['ok'] ? ' (real fees)' : ''), 'Daraz');
+  /* any ERP line of this order Daraz didn't list still gets the link + checked stamp */
+  foreach ($erp as $r) q("UPDATE orders SET daraz_order_id=?, daraz_checked_at=? WHERE id=?", [$dz['order_id'], $now, (int)$r['id']]);
+  /* charges live on the order's first line (same convention as everywhere else) */
+  $feeTarget = daraz_fee_target($dz, $erp[0]);
+  if ($feeTarget !== null) {
+    q("UPDATE orders SET delivery_charge=?, daraz_fee_source=?, daraz_payout=? WHERE id=?",
+      [$feeTarget, $dz['finance']['ok'] ? 'finance' : 'none', $dz['finance']['ok'] ? $dz['finance']['payout'] : null, (int)$erp[0]['id']]);
+    if (count($erp) > 1 && $dz['finance']['ok'])
+      q("UPDATE orders SET delivery_charge=0, daraz_fee_source='finance' WHERE id IN (".implode(',', array_map(fn($r) => (int)$r['id'], array_slice($erp, 1))).")");
+    $res['fees_set'] = true;
+  }
+  log_activity("Daraz #{$dz['order_id']}: synced status ({$res['status_changed']} line(s) changed)".($res['fees_set'] ? ', charges '.money($feeTarget) : ''), 'Daraz');
   return $res;
+}
+
+/* ---------- 6) link / unlink a hand-booked ERP order to a Daraz order number ---------- */
+/* all ERP lines of one order: same order_group if it has one, else just that row */
+function daraz_order_rows_of(int $erpId): array {
+  $r = row("SELECT * FROM orders WHERE id=?", [$erpId]);
+  if (!$r) return [];
+  if (!empty($r['order_group'])) return rows("SELECT * FROM orders WHERE order_group=? ORDER BY id", [$r['order_group']]);
+  return [$r];
+}
+function daraz_link_order(int $erpId, string $darazId): array {
+  daraz_ensure_cols();
+  $darazId = preg_replace('/\D+/', '', $darazId);
+  if ($darazId === '' || strlen($darazId) < 6) throw new Exception('Enter a valid Daraz order number.');
+  $mine = daraz_order_rows_of($erpId);
+  if (!$mine) throw new Exception('ERP order not found.');
+  $ids = array_map(fn($r) => (int)$r['id'], $mine);
+  $taken = row("SELECT code FROM orders WHERE daraz_order_id=? AND id NOT IN (".implode(',', $ids).") LIMIT 1", [$darazId]);
+  if ($taken) throw new Exception("Daraz #$darazId is already linked to ERP order {$taken['code']}. Unlink it there first.");
+  $dzCid = daraz_courier_id();
+  foreach ($mine as $r) q("UPDATE orders SET daraz_order_id=?, courier_id=COALESCE(NULLIF(courier_id,0),?) WHERE id=?", [$darazId, $dzCid, (int)$r['id']]);
+  log_activity("Linked ERP order {$mine[0]['code']} to Daraz #$darazId", 'Daraz');
+  return ['code'=>$mine[0]['code'], 'lines'=>count($mine)];
+}
+function daraz_unlink_order(int $erpId): string {
+  $mine = daraz_order_rows_of($erpId);
+  if (!$mine) throw new Exception('ERP order not found.');
+  $old = $mine[0]['daraz_order_id'];
+  foreach ($mine as $r) {
+    q("UPDATE orders SET daraz_order_id=NULL, daraz_checked_at=NULL, daraz_status_raw=NULL WHERE id=?", [(int)$r['id']]);
+    /* drop a "Daraz #id" remark too, otherwise the old remarks convention would re-link it */
+    if ($old) q("UPDATE orders SET remarks=TRIM(REPLACE(REPLACE(remarks, ?, ''), ?, '')) WHERE id=?", ['Daraz #'.$old, $old, (int)$r['id']]);
+  }
+  log_activity("Unlinked ERP order {$mine[0]['code']} from Daraz #$old", 'Daraz');
+  return (string)$mine[0]['code'];
+}
+/* hand-booked Daraz orders that aren't linked yet and look like this Daraz order (same phone first) */
+function daraz_link_candidates(array $dz, int $limit = 8): array {
+  $ph = substr(preg_replace('/\D+/', '', (string)$dz['phone']), -10);
+  $from = date('Y-m-d', strtotime($dz['created'].' -15 days'));
+  $to   = date('Y-m-d', strtotime($dz['created'].' +15 days'));
+  $out = [];
+  foreach (rows("SELECT o.id,o.code,o.order_date,o.customer,o.phone,o.qty,o.sell_price,o.status,o.order_group,o.remarks,p.name AS product_name
+                 FROM orders o LEFT JOIN products p ON p.id=o.product_id
+                 WHERE o.courier_id=? AND (o.daraz_order_id IS NULL OR o.daraz_order_id='') AND o.order_date BETWEEN ? AND ?
+                 ORDER BY o.order_date DESC, o.id DESC LIMIT 300", [daraz_courier_id(), $from, $to]) as $r) {
+    $key = $r['order_group'] ?: ('id'.$r['id']);
+    if (isset($out[$key])) continue;
+    $rph = substr(preg_replace('/\D+/', '', (string)$r['phone']), -10);
+    $score = ($ph !== '' && $rph === $ph ? 100 : 0) + max(0, 15 - abs((strtotime($r['order_date']) - strtotime($dz['created'])) / 86400));
+    if ($ph !== '' && $rph === $ph) $r['why'] = 'same phone';
+    $r['score'] = $score;
+    $out[$key] = $r;
+  }
+  uasort($out, fn($a, $b) => $b['score'] <=> $a['score']);
+  return array_values(array_map(fn($r) => ['id'=>(int)$r['id'], 'code'=>$r['code'], 'date'=>$r['order_date'], 'customer'=>$r['customer'],
+    'phone'=>$r['phone'], 'product'=>$r['product_name'], 'qty'=>(int)$r['qty'], 'status'=>$r['status'], 'why'=>$r['why'] ?? ''],
+    array_slice($out, 0, $limit)));
 }
 
 /* ---------- shared date-range picker ---------- */

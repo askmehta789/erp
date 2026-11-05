@@ -45,7 +45,8 @@ $toPack   = $cnt("SELECT COUNT(*) FROM orders WHERE courier_id=? AND status IN (
 $inTransit= $cnt("SELECT COUNT(*) FROM orders WHERE courier_id=? AND status='shipped'");
 $stuck    = $cnt("SELECT COUNT(*) FROM orders WHERE courier_id=? AND status IN ('pending','processing') AND order_date < ?", [date('Y-m-d', strtotime('-3 days'))]);
 $noFees   = $cnt("SELECT COUNT(*) FROM orders WHERE courier_id=? AND status='delivered' AND delivery_charge<=0 AND COALESCE(daraz_fee_source,'')<>'finance' AND order_date>=?", [date('Y-m-d', strtotime('-60 days'))]);
-$unchecked= $cnt("SELECT COUNT(*) FROM orders WHERE courier_id=? AND daraz_checked_at IS NULL AND order_date>=?", [date('Y-m-d', strtotime('-60 days'))]);
+/* booked in the ERP but no Daraz order number linked (neither the field nor the old "Daraz #id" remark) */
+$unlinked = $cnt("SELECT COUNT(*) FROM orders WHERE courier_id=? AND (daraz_order_id IS NULL OR daraz_order_id='') AND COALESCE(remarks,'') NOT REGEXP '^(Daraz #)?[0-9]{6,}' AND status NOT IN ('cancelled') AND order_date>=?", [date('Y-m-d', strtotime('-60 days'))]);
 $darazUnmatched = daraz_unmatched_skus();
 $allProducts = $darazUnmatched ? rows("SELECT id,name,sku FROM products ORDER BY name") : [];
 
@@ -116,14 +117,14 @@ body.dark .dz-map-head h2{color:#fbbf24}
 <div class="ncm-hero">
   <div class="nh-left">
     <h1><img src="assets/daraz-icon.ico" alt="Daraz" style="height:28px;vertical-align:-6px;margin-right:6px"><span class="grad">Daraz Dashboard</span></h1>
-    <p>Today at a glance · orders are linked by Daraz order number, so every value comes straight from Daraz</p>
+    <p>Today at a glance · orders are booked in Sales, then linked to their Daraz order number so status and Daraz charges sync from Daraz</p>
     <div class="nh-status">
       <?php if ($darazConnected): ?><span class="live"><span class="d"></span> LIVE · Connected as <?= e($darazAccount) ?></span>
       <?php else: ?><span class="live off"><span class="d"></span> Not connected — <a href="settings.php">authorize in Settings → Channel / Daraz API</a></span><?php endif; ?>
     </div>
   </div>
   <div class="nh-actions">
-    <button type="button" class="btn nh-cta" onclick="dzlOpen('')">🔗 Link / check order by ID</button>
+    <button type="button" class="btn nh-cta" onclick="dzlOpen('')">🔗 Check a Daraz order by ID</button>
   </div>
 </div>
 <?= daraz_tabs('daraz.php') ?>
@@ -173,7 +174,7 @@ body.dark .dz-map-head h2{color:#fbbf24}
     <?php if ($darazUnmatched): $any = true; ?><a class="dzd-att a1" href="#mapSku"><span>🔗 <?= count($darazUnmatched) ?> Daraz SKU(s) not matched to a product</span><span>Map →</span></a><?php endif; ?>
     <?php if ($noFees): $any = true; ?><a class="dzd-att a2" href="daraz_sales.php?from=<?= date('Y-m-d', strtotime('-60 days')) ?>&to=<?= $today ?>&f=nofee"><span>💸 <?= $noFees ?> delivered order(s) with no Daraz fees — profit looks too high</span><span>Fix →</span></a><?php endif; ?>
     <?php if ($stuck): $any = true; ?><a class="dzd-att a3" href="daraz_sales.php?from=2000-01-01&to=<?= $today ?>&st=pack"><span>⏳ <?= $stuck ?> order(s) waiting to pack for over 3 days</span><span>View →</span></a><?php endif; ?>
-    <?php if ($unchecked): $any = true; ?><a class="dzd-att a4" href="daraz_sales.php?from=<?= date('Y-m-d', strtotime('-60 days')) ?>&to=<?= $today ?>&f=unchk"><span>❔ <?= $unchecked ?> order line(s) never compared with Daraz (last 60 days)</span><span>Re-check →</span></a><?php endif; ?>
+    <?php if ($unlinked): $any = true; ?><a class="dzd-att a4" href="daraz_sales.php?from=<?= date('Y-m-d', strtotime('-60 days')) ?>&to=<?= $today ?>&f=unlinked"><span>🔗 <?= $unlinked ?> booked order line(s) not linked to a Daraz order number yet (last 60 days)</span><span>Link →</span></a><?php endif; ?>
     <?php if (!$any): ?><div class="dzd-ok">✓ All clear — nothing needs fixing right now.</div><?php endif; ?>
   </div>
 

@@ -89,10 +89,10 @@ body.dark .dzs-fee{background:rgba(2,6,23,.5);color:var(--ink);border-color:rgba
 <div class="ncm-hero">
   <div class="nh-left">
     <h1><img src="assets/daraz-icon.ico" alt="Daraz" style="height:28px;vertical-align:-6px;margin-right:6px"><span class="grad">Daraz Sales</span></h1>
-    <p>Only Daraz orders · link or re-check any order against Daraz by its order number</p>
+    <p>Only Daraz orders · book them in Sales, link each to its Daraz order number, and status &amp; Daraz charges sync from Daraz</p>
   </div>
   <div class="nh-actions">
-    <button type="button" class="btn nh-ghost" onclick="dzlOpen('')">🔗 Link / check order by ID</button>
+    <button type="button" class="btn nh-ghost" onclick="dzlOpen('')">🔗 Check a Daraz order by ID</button>
     <?php if ($perm['add']): ?><a class="btn nh-cta" href="sales.php?new=daraz">＋ New Daraz Order</a><?php endif; ?>
   </div>
 </div>
@@ -104,7 +104,7 @@ body.dark .dzs-fee{background:rgba(2,6,23,.5);color:var(--ink);border-color:rgba
   <div class="panel-head" style="flex-wrap:wrap;gap:10px">
     <h2>🧾 Daraz orders <span id="dzsShowing" class="muted" style="font-size:12px;font-weight:600"></span></h2>
     <div style="display:flex;gap:6px;flex-wrap:wrap">
-      <button type="button" class="btn btn-sm" onclick="dzsRecheckShown()" title="Compare every order shown below with Daraz">🔄 Re-check shown with Daraz</button>
+      <button type="button" class="btn btn-sm" onclick="dzsRecheckShown()" title="Get the latest status and Daraz charges for every linked order shown below">🔄 Sync shown with Daraz</button>
       <button type="button" class="btn btn-sm" onclick="dzsExport()">⬇ Export CSV</button>
     </div>
   </div>
@@ -125,7 +125,8 @@ body.dark .dzs-fee{background:rgba(2,6,23,.5);color:var(--ink);border-color:rgba
     <button type="button" class="dz-tog" data-k="loss" onclick="dzsTog(this)">🔻 Loss only</button>
     <button type="button" class="dz-tog" data-k="nofee" onclick="dzsTog(this)" title="Delivered orders with no Daraz fees yet">💸 Delivered, no fees</button>
     <button type="button" class="dz-tog" data-k="warn" onclick="dzsTog(this)">⚠ Unmapped SKU</button>
-    <button type="button" class="dz-tog" data-k="unchk" onclick="dzsTog(this)" title="Never compared with Daraz">❔ Not checked with Daraz</button>
+    <button type="button" class="dz-tog" data-k="unlinked" onclick="dzsTog(this)" title="Booked in the ERP but no Daraz order number linked yet">🔗 Not linked</button>
+    <button type="button" class="dz-tog" data-k="unchk" onclick="dzsTog(this)" title="Linked but never synced with Daraz">❔ Not synced yet</button>
     <a href="#" class="muted" style="font-size:12px;text-decoration:none" onclick="dzsClear();return false">✕ Clear filters</a>
     <span class="dzs-sum" id="dzsSum"></span>
   </div>
@@ -165,13 +166,14 @@ body.dark .dzs-fee{background:rgba(2,6,23,.5);color:var(--ink);border-color:rgba
     <tr id="o<?= (int)$o['id'] ?>" data-s="<?= e(strtolower($dzOid.' '.$o['code'].' '.($o['customer']??'').' '.($o['phone']??'').' '.$pl.' '.($o['daraz_sku']??''))) ?>"
         data-st="<?= e($o['status']) ?>" data-g="<?= e($grp) ?>" data-prod="<?= e($pl) ?>" data-pay="<?= e($o['payment_type'] ?? '') ?>"
         data-profit="<?= round($rowProfit,2) ?>" data-val="<?= round($val,2) ?>" data-nofee="<?= ($isDel && (float)$o['delivery_charge']<=0 && $src!=='finance')?1:0 ?>"
-        data-warn="<?= $warn?1:0 ?>" data-chk="<?= $o['daraz_checked_at']?1:0 ?>" data-date="<?= e($o['order_date']) ?>" data-id="<?= (int)$o['id'] ?>" data-oid="<?= e($dzOid) ?>">
+        data-warn="<?= $warn?1:0 ?>" data-chk="<?= $o['daraz_checked_at']?1:0 ?>" data-linked="<?= $dzOid!==''?1:0 ?>" data-date="<?= e($o['order_date']) ?>" data-id="<?= (int)$o['id'] ?>" data-oid="<?= e($dzOid) ?>">
       <td><input type="checkbox" class="dzs-sel" onclick="dzsSelChanged()" aria-label="Select order"></td>
       <td>
         <div class="dz-oid"><span class="dz-dot"></span><?= e($dzOid ?: '—') ?></div>
         <div class="dz-sub"><?= e($o['code']) ?> · <?= e(date('j M', strtotime($o['order_date']))) ?></div>
-        <?php if ($o['daraz_checked_at']): ?><span class="dz-badge dz-b-ok" title="Last compared with Daraz <?= e($o['daraz_checked_at']) ?>">✓ checked</span>
-        <?php else: ?><span class="dz-badge dz-b-warn" title="Never compared with Daraz">not checked</span><?php endif; ?>
+        <?php if ($dzOid===''): ?><span class="dz-badge dz-b-warn" title="No Daraz order number linked yet">not linked</span>
+        <?php elseif ($o['daraz_checked_at']): ?><span class="dz-badge dz-b-ok" title="Last synced with Daraz <?= e($o['daraz_checked_at']) ?>">✓ synced<?= $o['daraz_status_raw'] ? ' · '.e($o['daraz_status_raw']) : '' ?></span>
+        <?php else: ?><span class="dz-badge dz-b-fin" title="Linked, not synced yet">linked</span><?php endif; ?>
       </td>
       <td><b><?= e($o['customer'] ?: '—') ?></b>
         <?php if ($ph !== ''): ?><div class="dz-sub"><?= e($o['phone']) ?><?php if (strlen($ph)===10 && $ph[0]==='9'): ?> · <a href="https://wa.me/977<?= e($ph) ?>" target="_blank" rel="noopener">WhatsApp</a><?php endif; ?></div><?php endif; ?>
@@ -200,10 +202,11 @@ body.dark .dzs-fee{background:rgba(2,6,23,.5);color:var(--ink);border-color:rgba
         </form>
         <?php else: ?><span class="dz-status st-<?= e($o['status']) ?>"><?= ucfirst(e($o['status'])) ?></span><?php endif; ?>
       </td>
-      <td><?php if ($dzOid): ?><button type="button" class="btn btn-sm" title="Compare with Daraz" onclick="dzlOpen('<?= e($dzOid) ?>')">🔄</button><?php endif; ?></td>
+      <td style="white-space:nowrap"><?php if ($dzOid): ?><button type="button" class="btn btn-sm" title="Sync status and charges from Daraz" onclick="dzlOpen('<?= e($dzOid) ?>')">🔄</button><?php if ($perm['edit'] && $o['daraz_order_id']): ?> <a href="#" class="muted" style="font-size:11px" title="Remove the Daraz link" onclick="dzlUnlink(<?= (int)$o['id'] ?>,'<?= e($o['code']) ?>');return false">unlink</a><?php endif; ?>
+        <?php elseif ($perm['edit']): ?><button type="button" class="btn btn-sm btn-primary" title="Link this order to its Daraz order number" onclick="dzlOpenFor(<?= (int)$o['id'] ?>,'<?= e($o['code']) ?>',<?= e(json_encode(($o['customer'] ?: '').' · '.($o['phone'] ?: ''))) ?>)">🔗 Link</button><?php endif; ?></td>
     </tr>
   <?php endforeach; if (!$orders): ?>
-    <tr><td colspan="9"><div class="empty" style="padding:30px">No Daraz orders in this period. Use <b>🔗 Link / check order by ID</b> to add one from Daraz.</div></td></tr>
+    <tr><td colspan="9"><div class="empty" style="padding:30px">No Daraz orders in this period. Book Daraz orders in <a href="sales.php">Sales</a> (courier Daraz), then link each one to its Daraz order number here.</div></td></tr>
   <?php endif; ?>
   </tbody></table></div>
   <div class="dzs-more" id="dzsMore" style="display:none"><button type="button" class="btn btn-sm" onclick="dzsPage+=1;dzsFilter(true)">Show 50 more</button></div>
@@ -223,7 +226,7 @@ function dzsMatch(tr){
   return (!q||a('s').indexOf(q)>-1)&&(!st||(st==='pack'?a('g')==='pack':a('st')===st))
     &&(!document.getElementById('dzsProd').value||a('prod')===document.getElementById('dzsProd').value)
     &&(!document.getElementById('dzsPay').value||a('pay')===document.getElementById('dzsPay').value)
-    &&(!dzsT.loss||p<0)&&(!dzsT.nofee||a('nofee')==='1')&&(!dzsT.warn||a('warn')==='1')&&(!dzsT.unchk||a('chk')==='0');
+    &&(!dzsT.loss||p<0)&&(!dzsT.nofee||a('nofee')==='1')&&(!dzsT.warn||a('warn')==='1')&&(!dzsT.unchk||(a('chk')==='0'&&a('linked')==='1'))&&(!dzsT.unlinked||a('linked')==='0');
 }
 function dzsFilter(keepPage){
   if(!keepPage)dzsPage=1;

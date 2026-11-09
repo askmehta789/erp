@@ -150,27 +150,73 @@ body.dark .pod-card{background:rgba(17,25,44,.55);border-color:rgba(148,163,184,
 .range-chips a.btn.on{background:var(--brand);border-color:var(--brand);color:#fff}
 a.cb{display:block;text-decoration:none;color:inherit;cursor:pointer;transition:transform .12s,filter .12s}
 a.cb:hover{transform:translateY(-1px);filter:brightness(0.96)}
+/* ---- layout: one column, one 16px rhythm ---- */
+.st-actions{display:flex;gap:10px;flex-wrap:wrap}
+.st-page{display:flex;flex-direction:column;gap:16px}
+.st-page>.flash,.st-page>.panel,.st-page>.mgrid,.st-page>.podium,.st-page>.cour-cards{margin:0}
+.st-page>.flash{padding:12px 16px}
+.st-sec{margin:6px 0 -6px!important}
+.st-page>.mgrid{grid-template-columns:repeat(5,minmax(0,1fr));gap:16px}
+.st-page>.mgrid .metric{min-width:0}
+.st-page>.mgrid .mv{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.st-page>.mgrid:has(> :nth-child(6)){grid-template-columns:repeat(6,minmax(0,1fr))}
+/* date bar */
+.st-range{display:flex;align-items:center;gap:10px 14px;flex-wrap:wrap;padding:12px 16px}
+.st-range-lbl{font-size:13px}
+.st-pills{display:flex;gap:6px;flex-wrap:wrap}
+.st-pill{padding:6px 13px;border-radius:999px;font-size:12px;font-weight:700;text-decoration:none;color:var(--ink);border:1px solid rgba(148,163,184,.35);background:rgba(255,255,255,.6)}
+body.dark .st-pill{background:rgba(2,6,23,.4)}
+.st-pill:hover{border-color:var(--brand)}
+.st-pill.on{background:var(--brand);border-color:var(--brand);color:#fff}
+.st-dates{display:flex;align-items:center;gap:6px;margin-left:auto}
+.st-dates input{border-radius:999px;padding:6px 12px;font-size:12.5px;border:1px solid rgba(148,163,184,.35)}
+@media(max-width:1180px){.st-page>.mgrid,.st-page>.mgrid:has(> :nth-child(6)){grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:640px){
+  .st-actions{width:100%}.st-actions .btn{flex:1;text-align:center}
+  .st-page{gap:12px}
+  .st-page>.mgrid,.st-page>.mgrid:has(> :nth-child(6)){grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+  .st-page>.mgrid .metric{padding:12px 13px}
+  .st-page>.mgrid>.metric:last-child:nth-child(odd){grid-column:1/-1}
+  .st-page>.mgrid .mv{font-size:17px!important}
+  .st-range{padding:12px;gap:10px}
+  .st-range-lbl{width:100%}
+  .st-pills{flex-wrap:nowrap;overflow-x:auto;width:100%;scrollbar-width:none}
+  .st-pills::-webkit-scrollbar{display:none}
+  .st-pill{flex:none}
+  .st-dates{margin-left:0;width:100%;display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr)}
+  .st-dates input{width:100%;min-width:0;padding:7px 8px;font-size:12px}
+  .st-dates .btn{grid-column:1/-1;width:100%}
+  .podium{grid-template-columns:1fr}
+  .st-page>.flash .btn{margin-left:0!important;width:100%}
+}
 </style>
 
 <div class="page-head">
   <div><h1>🏆 Sales Team</h1><p>Leaderboard for each salesperson — quantity sold, revenue, orders &amp; returns/cancellations · <b><?= $rangeLabel ?></b></p></div>
-  <a class="btn" href="analytics_salesperson.php">📈 Trend Analytics</a>
-  <a class="btn" href="salary.php">👥 Manage Sales Staff</a>
+  <div class="st-actions">
+    <a class="btn" href="analytics_salesperson.php">📈 Trend Analytics</a>
+    <a class="btn" href="salary.php">👥 Manage Sales Staff</a>
+  </div>
 </div>
 
-<div class="card" style="margin-bottom:18px;padding:14px 16px">
-  <form method="get" class="toolbar range-chips">
-    <a class="btn btn-sm<?= $range==='month'?' on':'' ?>" href="?range=month">This Month</a>
-    <a class="btn btn-sm<?= $range==='last_month'?' on':'' ?>" href="?range=last_month">Last Month</a>
-    <a class="btn btn-sm<?= $range==='year'?' on':'' ?>" href="?range=year">This Year</a>
-    <a class="btn btn-sm<?= $range==='all'?' on':'' ?>" href="?range=all">All Time</a>
-    <span style="width:1px;height:26px;background:var(--border);margin:0 2px"></span>
+<div class="st-page">
+<!-- one compact date bar: presets + custom range on the same line -->
+<form method="get" class="panel st-range">
+  <span class="st-range-lbl">📅 Showing <b><?= $rangeLabel ?></b></span>
+  <div class="st-pills">
+    <a class="st-pill<?= $range==='month'?' on':'' ?>" href="?range=month">This Month</a>
+    <a class="st-pill<?= $range==='last_month'?' on':'' ?>" href="?range=last_month">Last Month</a>
+    <a class="st-pill<?= $range==='year'?' on':'' ?>" href="?range=year">This Year</a>
+    <a class="st-pill<?= $range==='all'?' on':'' ?>" href="?range=all">All Time</a>
+  </div>
+  <div class="st-dates">
     <input type="hidden" name="range" value="custom">
-    <div><label style="font-size:12px;color:var(--muted);font-weight:700">From</label><br><input type="date" name="from" value="<?= e($from ?: '') ?>"></div>
-    <div><label style="font-size:12px;color:var(--muted);font-weight:700">To</label><br><input type="date" name="to" value="<?= e($to ?: '') ?>"></div>
+    <input type="date" name="from" value="<?= e($from ?: '') ?>" aria-label="From date" required>
+    <span class="muted">to</span>
+    <input type="date" name="to" value="<?= e($to ?: '') ?>" aria-label="To date" required>
     <button class="btn btn-sm btn-primary">Apply</button>
-  </form>
-</div>
+  </div>
+</form>
 
 <?php if ((int)($unassigned['n'] ?? 0) > 0): ?>
 <div class="flash" style="background:var(--amber-bg,#fef3c7);color:#8a5a00;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
@@ -197,7 +243,7 @@ a.cb:hover{transform:translateY(-1px);filter:brightness(0.96)}
 </div>
 
 <?php if ($podium): ?>
-<div class="dash-sec" style="margin:20px 0 10px">Top Performers</div>
+<div class="dash-sec st-sec">Top Performers</div>
 <div class="podium">
   <?php foreach ($podium as $i=>$r): ?>
   <div class="pod-card r<?= $i+1 ?>">
@@ -216,11 +262,11 @@ a.cb:hover{transform:translateY(-1px);filter:brightness(0.96)}
 <?php endif; ?>
 
 <?php if ($chartLabels): ?>
-<div class="dash-sec" style="margin:20px 0 10px">Delivered vs Cancelled vs Returned — by Salesperson</div>
+<div class="dash-sec st-sec">Delivered vs Cancelled vs Returned — by Salesperson</div>
 <div class="panel"><div class="panel-body" style="height:320px"><canvas id="chSpRev"></canvas></div></div>
 <?php endif; ?>
 
-<div class="dash-sec" style="margin:20px 0 10px">Full Leaderboard <span style="text-transform:none;font-weight:600;color:var(--muted-2)">— ranked by combined performance score (revenue, order volume &amp; return rate)</span></div>
+<div class="dash-sec st-sec">Full Leaderboard <span style="text-transform:none;font-weight:600;color:var(--muted-2)">— ranked by combined performance score (revenue, order volume &amp; return rate)</span></div>
 <?php if (!$people): ?>
 <div class="panel"><div class="panel-body">
   No sales staff found yet. Add an employee with department <b>Sales</b> in
@@ -266,6 +312,7 @@ a.cb:hover{transform:translateY(-1px);filter:brightness(0.96)}
 <?php endforeach; ?>
 </div>
 <?php endif; ?>
+</div><!-- /st-page -->
 
 <?php if ($chartLabels): ?>
 <script>

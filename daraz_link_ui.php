@@ -110,8 +110,8 @@ function dzlRender(j,out){
     out.replaceChildren(frag);return;
   }
 
-  if(c.diffs===0)frag.appendChild(dzlNote('ok','✓ Status and charges already match Daraz.'));
-  else frag.appendChild(dzlNote('warn','⚠ '+c.diffs+' thing(s) to sync — highlighted below. Only status and Daraz charges change; price, qty and product stay as booked.'));
+  if(c.diffs===0)frag.appendChild(dzlNote('ok','✓ Status, price and Daraz charges already match.'));
+  else frag.appendChild(dzlNote('warn','⚠ '+c.diffs+' thing(s) to sync — highlighted below. Sync sets the status, the price the customer paid, and the Daraz charges. Qty and product stay as booked.'));
   if(c.totals.ship_as_cost)frag.appendChild(dzlNote('bad','The ERP counts the customer’s shipping ('+dzlMoney(c.totals.ship_customer)+') as your Daraz charge. Sync resets it.'));
   if(o.finance.ok)frag.appendChild(dzlNote('ok','Real Daraz charges found: '+dzlMoney(o.finance.fees)+' · payout '+dzlMoney(o.finance.payout)));
   else if(o.finance.error)frag.appendChild(dzlNote('warn',o.finance.error));
@@ -132,12 +132,11 @@ function dzlRender(j,out){
   var tt=dzlEl('table',{'class':'dzl-tbl'}),h2=dzlEl('tr');
   ['Order','ERP now','After sync'].forEach(function(h,i){h2.appendChild(dzlEl('th',i?{'class':'r'}:null,h));});tt.appendChild(h2);
   var feeAfter=c.totals.fee_target===null?c.totals.erp_fees:c.totals.fee_target;
-  [['Daraz charges (your cost)',c.totals.erp_fees,feeAfter,true],['Payout from Daraz','—',c.totals.payout===null?'—':c.totals.payout,false],['Order value (info only)',c.totals.erp_revenue,c.totals.erp_revenue,false]].forEach(function(r){
+  [['Daraz charges (your cost)',c.totals.erp_fees,feeAfter,true],['Payout from Daraz','—',c.totals.payout===null?'—':c.totals.payout,false],['Order value (customer paid)',c.totals.erp_revenue,c.totals.daraz_revenue,true]].forEach(function(r){
     var d=r[3]&&Math.abs(parseFloat(r[1])-parseFloat(r[2]))>0.009,tr=dzlEl('tr',d?{'class':'dzl-diff'}:null);
     tr.appendChild(dzlEl('td',null,r[0]));tr.appendChild(dzlEl('td',{'class':'r'},dzlMoney(r[1])));tr.appendChild(dzlEl('td',{'class':'r'},dzlMoney(r[2])));tt.appendChild(tr);});
   frag.appendChild(tt);
   if(c.totals.fee_target===null&&!o.finance.ok)frag.appendChild(dzlEl('div',{'class':'muted',style:'font-size:11.5px;margin-top:6px'},'Daraz charges stay as typed in the ERP until Daraz’s finance data is available for this order.'));
-  if(Math.abs(c.totals.erp_revenue-c.totals.daraz_revenue)>0.009)frag.appendChild(dzlEl('div',{'class':'muted',style:'font-size:11.5px;margin-top:4px'},'Daraz’s price for this order is '+dzlMoney(c.totals.daraz_revenue)+' (after your voucher) vs '+dzlMoney(c.totals.erp_revenue)+' booked in the ERP — not changed; edit in Sales if the booking is wrong.'));
   out.replaceChildren(frag);
 }
 function dzlApply(){
@@ -147,7 +146,7 @@ function dzlApply(){
     btn.disabled=false;
     if(!j.ok){out.insertBefore(dzlNote('bad',j.error||'Sync failed.'),out.firstChild);return;}
     dzlChanged=true;var r=j.result;
-    out.insertBefore(dzlNote('ok','✓ Synced — '+r.status_changed+' status change(s)'+(r.fees_set?', Daraz charges updated':'')+'. The page refreshes when you close this window.'),out.firstChild);
+    out.insertBefore(dzlNote('ok','✓ Synced — '+r.status_changed+' status change(s)'+(r.price_changed?', price updated on '+r.price_changed+' line(s)':'')+(r.fees_set?', Daraz charges updated':'')+'. The page refreshes when you close this window.'),out.firstChild);
     btn.style.display='none';
   }).catch(function(){btn.disabled=false;out.insertBefore(dzlNote('bad','Network error.'),out.firstChild);});
 }

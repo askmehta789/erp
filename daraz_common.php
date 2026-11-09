@@ -105,6 +105,10 @@ function daraz_normalize_order(string $orderId, array $h, array $items, ?array $
     $lines[$key]['ship_customer']    += $ship;
   }
   $lines = array_values($lines);
+  /* the price the ERP keeps for a Daraz order = what the CUSTOMER paid per unit (after every
+     voucher); Daraz's charges are recorded separately as the delivery charge */
+  foreach ($lines as &$Lp) $Lp['unit_paid'] = $Lp['qty'] > 0 && $Lp['paid'] > 0 ? round($Lp['paid'] / $Lp['qty'], 2) : $Lp['unit_revenue'];
+  unset($Lp);
   /* some responses carry shipping only on the header — keep it for reference on line 1 */
   $shipHeader = dz_num($h['shipping_fee'] ?? 0);
   if ($lines && array_sum(array_column($lines, 'ship_customer')) <= 0 && $shipHeader > 0) $lines[0]['ship_customer'] = $shipHeader;
@@ -200,7 +204,7 @@ function daraz_compare(array $dz): array {
   $erpRev = 0; $dzRev = 0; $erpFee = 0;
   foreach ($erp as $r) { if ($r['status'] !== 'cancelled') $erpRev += (float)$r['sell_price'] * (int)$r['qty']; $erpFee += (float)$r['delivery_charge']; }
   foreach ($dz['lines'] as $i => $L) {
-    if ($L['status'] !== 'cancelled') $dzRev += $L['unit_revenue'] * $L['qty'];
+    if ($L['status'] !== 'cancelled') $dzRev += $L['unit_paid'] * $L['qty'];
     $r = isset($pairs[$i]) ? $erp[$pairs[$i]] : null;
     $info = ['list_unit'=>$L['list_unit'], 'seller_discount'=>$L['seller_discount'], 'platform_voucher'=>$L['platform_voucher'],
              'paid'=>$L['paid'], 'ship_customer'=>$L['ship_customer'], 'status_raw'=>$L['status_raw']];
@@ -216,9 +220,11 @@ function daraz_compare(array $dz): array {
     $f[] = ['label'=>'Status', 'erp'=>$r['status'], 'daraz'=>$L['status'].($r['status'] !== $L['status'] && !$to ? ' (kept — ERP is further along)' : ''),
             'money'=>false, 'diff'=>(bool)$to, 'sync'=>true];
     if ($to) $out['diffs']++;
-    /* price & qty are the ERP's own (booked by hand) — shown for information only */
-    $f[] = ['label'=>'Price per unit (info only)', 'erp'=>(float)$r['sell_price'], 'daraz'=>$L['unit_revenue'], 'money'=>true, 'diff'=>false, 'sync'=>false,
-            'warn'=>abs((float)$r['sell_price'] - $L['unit_revenue']) > 0.009];
+    /* price follows what the customer actually paid on Daraz */
+    $priceDiff = $L['unit_paid'] > 0 && abs((float)$r['sell_price'] - $L['unit_paid']) > 0.009;
+    $f[] = ['label'=>'Price per unit (customer paid)', 'erp'=>(float)$r['sell_price'], 'daraz'=>$L['unit_paid'], 'money'=>true, 'diff'=>$priceDiff, 'sync'=>true];
+    if ($priceDiff) $out['diffs']++;
+    /* qty is the ERP's own (booked by hand) — shown for information only */
     $f[] = ['label'=>'Qty (info only)', 'erp'=>(int)$r['qty'], 'daraz'=>$L['qty'], 'money'=>false, 'diff'=>false, 'sync'=>false, 'warn'=>(int)$r['qty'] !== $L['qty']];
     $out['lines'][] = ['sku'=>$L['sku'], 'name'=>$L['name'], 'erp_id'=>(int)$r['id'], 'erp_code'=>$r['code'], 'erp_product'=>$r['product_name'] ?? null, 'fields'=>$f, 'info'=>$info];
   }
@@ -235,14 +241,15 @@ function daraz_compare(array $dz): array {
   return $out;
 }
 
-/* ---------- 5) apply: ONLY status (with stock) and Daraz charges ----------
-   Never creates orders, never changes price / qty / product / customer. */
+/* ---------- 5) apply: status (with stock), customer-paid price and Daraz charges ----------
+   Price = what the customer paid per unit; delivery charge = Daraz's charges.
+   Never creates orders, never changes qty / product / customer. */
 function daraz_apply(array $dz): array {
   daraz_ensure_cols();
   $erp = daraz_erp_rows($dz['order_id']);
   if (!$erp) throw new Exception('This Daraz order isn\'t linked to an ERP order yet — book it in Sales, then link it.');
   [$pairs] = daraz_pair_lines($dz['lines'], $erp);
-  $res = ['status_changed'=>0, 'fees_set'=>false, 'lines'=>0];
+  $res = ['status_changed'=>0, 'price_changed'=>0, 'fees_set'=>false, 'lines'=>0];
   $now = date('Y-m-d H:i:s');
   foreach ($dz['lines'] as $i => $L) {
     if (!isset($pairs[$i])) continue;
@@ -252,6 +259,7 @@ function daraz_apply(array $dz): array {
             'daraz_platform_voucher'=>round($L['platform_voucher'],2), 'daraz_paid'=>round($L['paid'],2),
             'daraz_ship_customer'=>round($L['ship_customer'],2)];
     if (empty($r['daraz_sku']) && $L['sku'] !== '') $set['daraz_sku'] = $L['sku'];
+    if ($L['unit_paid'] > 0 && abs((float)$r['sell_price'] - $L['unit_paid']) > 0.009) { $set['sell_price'] = $L['unit_paid']; $res['price_changed']++; }
     $to = daraz_status_to_apply($r['status'], $L['status']);
     if ($to) {
       $set['status'] = $to;
@@ -279,7 +287,7 @@ function daraz_apply(array $dz): array {
       q("UPDATE orders SET delivery_charge=0, daraz_fee_source='finance' WHERE id IN (".implode(',', array_map(fn($r) => (int)$r['id'], array_slice($erp, 1))).")");
     $res['fees_set'] = true;
   }
-  log_activity("Daraz #{$dz['order_id']}: synced status ({$res['status_changed']} line(s) changed)".($res['fees_set'] ? ', charges '.money($feeTarget) : ''), 'Daraz');
+  log_activity("Daraz #{$dz['order_id']}: synced status ({$res['status_changed']} line(s) changed)".($res['price_changed'] ? ", price set to customer-paid on {$res['price_changed']} line(s)" : '').($res['fees_set'] ? ', charges '.money($feeTarget) : ''), 'Daraz');
   return $res;
 }
 

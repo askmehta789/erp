@@ -146,7 +146,7 @@ body.dark .dzs-fee{background:rgba(2,6,23,.5);color:var(--ink);border-color:rgba
 
   <div class="table-wrap"><table class="tbl led-tbl dzs-tbl" id="dzsTbl"><thead><tr>
     <th style="width:28px"><input type="checkbox" id="dzsAll" onclick="dzsSelAll(this.checked)" aria-label="Select all shown"></th>
-    <th>Daraz order</th><th>Customer</th><th>Product</th><th style="text-align:right">Your price</th>
+    <th>Daraz order</th><th>Customer</th><th>Product</th><th style="text-align:right">Customer paid</th>
     <th style="text-align:right">Daraz fees</th><th style="text-align:right">Profit</th><th>Status</th><th></th>
   </tr></thead><tbody>
   <?php foreach ($orders as $o):
@@ -184,7 +184,7 @@ body.dark .dzs-fee{background:rgba(2,6,23,.5);color:var(--ink);border-color:rgba
         <?php if ($warn): ?><span class="dz-warn">⚠ SKU not mapped — map it on the Dashboard</span><?php endif; ?>
       </td>
       <td style="text-align:right"><?= money((float)$o['sell_price']) ?>
-        <?php if ($o['daraz_list_price'] !== null && (float)$o['daraz_seller_discount'] > 0): ?><div class="dz-sub">list <?= money($o['daraz_list_price']) ?> − your disc. <?= money($o['daraz_seller_discount']) ?></div><?php endif; ?>
+        <?php if ($o['daraz_list_price'] !== null && ((float)$o['daraz_seller_discount'] > 0 || (float)$o['daraz_platform_voucher'] > 0)): ?><div class="dz-sub" title="Daraz list price and vouchers on this line">list <?= money($o['daraz_list_price']) ?><?= (float)$o['daraz_seller_discount'] > 0 ? ' · your voucher −'.money($o['daraz_seller_discount']) : '' ?><?= (float)$o['daraz_platform_voucher'] > 0 ? ' · Daraz voucher −'.money($o['daraz_platform_voucher']) : '' ?></div><?php endif; ?>
         <div class="dz-sub">cost <?= money((float)$o['cost_price']) ?></div></td>
       <td style="text-align:right">
         <?php if ($perm['edit']): ?><input form="f<?= (int)$o['id'] ?>" type="number" name="fees" class="dzs-fee" step="any" min="0" value="<?= (float)$o['delivery_charge']>0 ? e((float)$o['delivery_charge']) : '' ?>" placeholder="fees"><?php else: ?><?= money($o['delivery_charge']) ?><?php endif; ?>
@@ -264,7 +264,7 @@ function dzsBulkSubmit(f){var ids=dzsSelIds(false);if(!ids.length)return false;
   document.getElementById('dzsBulkIds').value=ids.join(',');return confirm('Apply to '+ids.length+' order line(s)?');}
 function dzsRecheckShown(){var ids=dzsRows().filter(function(tr){return dzsMatch(tr);}).map(function(tr){return tr.getAttribute('data-oid');}).filter(Boolean);dzlRecheck(ids);}
 function dzsExport(){
-  var lines=[['Daraz order','ERP code','Date','Customer','Phone','Payment','Product','SKU','Qty','Your price','Cost','Daraz fees','Fee source','Profit','Status','Checked with Daraz']];
+  var lines=[['Daraz order','ERP code','Date','Customer','Phone','Payment','Product','SKU','Qty','Customer paid (per unit)','Cost','Daraz fees','Fee source','Profit','Status','Checked with Daraz']];
   <?php $csv=[]; foreach ($orders as $o) { $csv[(int)$o['id']] = [
       $o['daraz_order_id'] ?: '', $o['code'], $o['order_date'], $o['customer'] ?: '', $o['phone'] ?: '', $o['payment_type'] ?: '',
       $o['product_name'] ?: ($o['daraz_item_name'] ?? ''), $o['daraz_sku'] ?? '', (int)$o['qty'], (float)$o['sell_price'], (float)$o['cost_price'],

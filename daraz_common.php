@@ -50,7 +50,8 @@ function daraz_next_code(): string {
   foreach (rows("SELECT code FROM orders") as $cr) {
     $c = (string)$cr['code'];
     if ($pref !== '' && strpos($c, $pref) === 0) $c = substr($c, strlen($pref));
-    if (ctype_digit($c)) $used[(int)$c] = 1;
+    $num = (int)preg_replace('/\D+/', '', $c);   /* same rule as sales.php, so the two never pick the same number */
+    if ($num > 0) $used[$num] = 1;
   }
   $n = 1; while (isset($used[$n])) $n++;
   return $pref.str_pad((string)$n, 4, '0', STR_PAD_LEFT);

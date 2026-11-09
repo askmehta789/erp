@@ -10,6 +10,18 @@ $allOrders = rows("SELECT o.*, p.name AS product_name, c.name AS courier_name
                 LEFT JOIN couriers c ON c.id=o.courier_id
                 ORDER BY o.order_date DESC, o.id DESC");
 
+/* ---- sales channel: All · Own sales (everything except Daraz) · Daraz ---- */
+$ch  = in_array($_GET['ch'] ?? '', ['own','daraz'], true) ? $_GET['ch'] : 'all';
+$dzC = (int)val("SELECT COALESCE((SELECT id FROM couriers WHERE LOWER(name)='daraz' ORDER BY id LIMIT 1),0)");
+if ($ch === 'own')   $allOrders = array_values(array_filter($allOrders, fn($o) => (int)$o['courier_id'] !== $dzC));
+if ($ch === 'daraz') $allOrders = array_values(array_filter($allOrders, fn($o) => (int)$o['courier_id'] === $dzC));
+$chQs = $ch !== 'all' ? '&ch='.$ch : '';
+$chLabel = ['all'=>'All sales', 'own'=>'Own sales', 'daraz'=>'Daraz'][$ch];
+/* costs to set against the channel: business expenses, or Daraz ad spend for the Daraz view */
+try { q("CREATE TABLE IF NOT EXISTS daraz_ads(id INT AUTO_INCREMENT PRIMARY KEY, spend_date DATE NOT NULL, amount DECIMAL(12,2) NOT NULL DEFAULT 0, note VARCHAR(160) DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"); } catch (Exception $e) {}
+$expTbl = $ch === 'daraz' ? "(SELECT spend_date AS expense_date, amount, 'Daraz ads' AS category FROM daraz_ads)" : "expenses";
+$expName = $ch === 'daraz' ? 'Daraz ads' : 'Expenses';
+
 /* ---- period: quick presets or a custom from–to range (default: lifetime) ---- */
 $today = date('Y-m-d');
 $isDate = fn($d) => is_string($d) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $d) && strtotime($d);
@@ -97,8 +109,8 @@ $cancelRate  = $total? round(($cancelled)/$total*100,1):0;
 $combinedRate = $total? round(($returned+$cancelled)/$total*100,1):0;
 $expWhere    = $isLifetime ? "" : "WHERE expense_date BETWEEN ? AND ?";
 $expParams   = $isLifetime ? [] : [$start, $end];
-$expenses    = (float)val("SELECT COALESCE(SUM(amount),0) FROM expenses $expWhere", $expParams);
-$expenseByCat = rows("SELECT category, COALESCE(SUM(amount),0) AS total FROM expenses $expWhere GROUP BY category ORDER BY total DESC", $expParams);
+$expenses    = (float)val("SELECT COALESCE(SUM(amount),0) FROM $expTbl x $expWhere", $expParams);
+$expenseByCat = rows("SELECT category, COALESCE(SUM(amount),0) AS total FROM $expTbl x $expWhere GROUP BY category ORDER BY total DESC", $expParams);
 $net         = $profit - $expenses;
 
 /* ---- previous period, same rules ---- */
@@ -111,7 +123,7 @@ if (!$isLifetime) {
     elseif (in_array($o['status'],['returned','cancelled'],true)) { $P['returnLoss'] += (float)$o['cancel_charge']; if ($o['status']==='returned') $P['returned']++; }
     elseif ($o['status']==='exchanged') $P['exchangeLoss'] += (float)$o['exchange_charge'];
   }
-  $P['expenses'] = (float)val("SELECT COALESCE(SUM(amount),0) FROM expenses WHERE expense_date BETWEEN ? AND ?", [$pStart, $pEnd]);
+  $P['expenses'] = (float)val("SELECT COALESCE(SUM(amount),0) FROM $expTbl x WHERE expense_date BETWEEN ? AND ?", [$pStart, $pEnd]);
   $P['net'] = $P['profit'] - $P['expenses'];
   $P['returnRate'] = $P['orders'] ? round($P['returned']/$P['orders']*100,1) : 0;
 }
@@ -134,7 +146,7 @@ $trend = [];
 if ($byMonth) { for ($t = strtotime(substr($start,0,7).'-01'); $t <= strtotime($end); $t = strtotime('+1 month', $t)) $trend[date('Y-m', $t)] = ['rev'=>0.0,'profit'=>0.0,'exp'=>0.0]; }
 else { for ($t = strtotime($start); $t <= strtotime($end); $t += 86400) $trend[date('Y-m-d', $t)] = ['rev'=>0.0,'profit'=>0.0,'exp'=>0.0]; }
 foreach ($orders as $o) { $k = $bk(substr((string)$o['order_date'],0,10)); if (!isset($trend[$k])) continue; $trend[$k]['rev'] += order_revenue($o); $trend[$k]['profit'] += order_profit($o); }
-foreach (rows("SELECT expense_date d, SUM(amount) a FROM expenses WHERE expense_date BETWEEN ? AND ? GROUP BY expense_date", [$start, $end]) as $x) {
+foreach (rows("SELECT expense_date d, SUM(amount) a FROM $expTbl x WHERE expense_date BETWEEN ? AND ? GROUP BY expense_date", [$start, $end]) as $x) {
   $k = $bk($x['d']); if (isset($trend[$k])) { $trend[$k]['exp'] += (float)$x['a']; $trend[$k]['profit'] -= (float)$x['a']; }
 }
 
@@ -203,6 +215,12 @@ if ($returned>0)     $todo[] = ['↩️','var(--red)',   "$returned returned/can
 
 /* Sales links carry the selected period, so a click shows exactly these orders */
 $sq = $isLifetime ? '' : '&from='.urlencode($start).'&to='.urlencode($end);
+/* where a click on an order number goes: the Daraz Sales sheet for the Daraz view */
+$oLink = function (string $statuses) use ($ch, $sq, $start, $end) {
+  if ($ch !== 'daraz') return 'sales.php?'.ltrim(($statuses !== '' ? 'status='.$statuses : '').$sq, '&');
+  $map = ['pending'=>'pending', 'processing,shipped'=>'shipped', 'delivered'=>'delivered', 'returned,cancelled'=>'returned', 'returned'=>'returned'];
+  return 'daraz_sales.php?from='.urlencode($start).'&to='.urlencode($end).(isset($map[$statuses]) ? '&st='.$map[$statuses] : '');
+};
 
 require __DIR__.'/includes/header.php';
 $tile = function($label, $value, $d, $icon, $cls, $href = null) {
@@ -237,6 +255,10 @@ $tile = function($label, $value, $d, $icon, $cls, $href = null) {
 body.dark .db-pill{background:rgba(2,6,23,.4)}
 .db-pill:hover{border-color:#3b82f6}
 .db-pill.on{background:#3b82f6;border-color:#3b82f6;color:#fff}
+.db-ch{padding:3px;border-radius:999px;background:rgba(148,163,184,.14);gap:2px}
+.db-ch .db-pill{border-color:transparent;background:none}
+.db-ch .db-pill.on{background:#0f172a;border-color:#0f172a;color:#fff}
+body.dark .db-ch .db-pill.on{background:#e2e8f0;color:#0f172a}
 .db-range form{display:inline-flex;gap:6px;align-items:center;margin-left:auto}
 .db-range input{border-radius:999px;padding:7px 12px;border:1px solid rgba(148,163,184,.35);font-size:12.5px}
 /* profit & loss */
@@ -299,7 +321,7 @@ body.dark .db-pill{background:rgba(2,6,23,.4)}
 </style>
 
 <div class="page-head">
-  <div><h1>📊 Dashboard</h1><p>Welcome back, <?= e(current_user()['name']) ?> — your store at a glance · <b><?= e($rangeLabel) ?></b><?= $isLifetime ? '' : ' <span class="muted">vs '.e($prevLabel).'</span>' ?></p></div>
+  <div><h1>📊 Dashboard</h1><p>Welcome back, <?= e(current_user()['name']) ?> — your store at a glance · <b><?= e($chLabel) ?></b> · <b><?= e($rangeLabel) ?></b><?= $isLifetime ? '' : ' <span class="muted">vs '.e($prevLabel).'</span>' ?></p></div>
   <a class="btn btn-primary" href="sales.php">+ New Order</a>
 </div>
 
@@ -313,24 +335,29 @@ body.dark .db-pill{background:rgba(2,6,23,.4)}
 <!-- 1) period -->
 <div class="panel db-range">
   <span class="lbl">📅 Showing <b><?= e($rangeLabel) ?></b></span>
+  <?php $rq = $range === 'custom' ? 'from='.urlencode($start).'&to='.urlencode($end) : 'range='.$range; ?>
+  <div class="db-pills db-ch" title="Which sales to count">
+    <?php foreach (['all'=>'All sales','own'=>'Own sales','daraz'=>'Daraz'] as $ck => $cl): ?><a class="db-pill<?= $ch===$ck?' on':'' ?>" href="index.php?<?= $rq ?><?= $ck!=='all' ? '&ch='.$ck : '' ?>"><?= e($cl) ?></a><?php endforeach; ?>
+  </div>
   <div class="db-pills">
-    <?php foreach ($rangeDefs as $rk => $rd): ?><a class="db-pill<?= $range===$rk?' on':'' ?>" href="index.php?range=<?= $rk ?>"><?= e($rd[0]) ?></a><?php endforeach; ?>
+    <?php foreach ($rangeDefs as $rk => $rd): ?><a class="db-pill<?= $range===$rk?' on':'' ?>" href="index.php?range=<?= $rk ?><?= $chQs ?>"><?= e($rd[0]) ?></a><?php endforeach; ?>
   </div>
   <form method="get" action="index.php">
     <input type="date" name="from" value="<?= e($start) ?>" aria-label="From date"><span class="muted">to</span>
     <input type="date" name="to" value="<?= e($end) ?>" aria-label="To date">
+    <?php if ($ch !== 'all'): ?><input type="hidden" name="ch" value="<?= e($ch) ?>"><?php endif; ?>
     <button class="btn nh-ghost">Apply</button>
   </form>
 </div>
 
 <!-- 2) key numbers with change vs previous period -->
 <div class="mgrid">
-  <?= $tile('Orders', number_format($total), dash_delta($total, $cmp('orders')), '🛍', 'blue', 'sales.php?'.ltrim($sq,'&')) ?>
+  <?= $tile('Orders', number_format($total), dash_delta($total, $cmp('orders')), '🛍', 'blue', $oLink('')) ?>
   <?= $tile('Delivered revenue', money($revenue), dash_delta($revenue, $cmp('revenue')), '💰', 'green') ?>
   <?= $tile('Gross profit', money($profit), dash_delta($profit, $cmp('profit')), '💵', 'indigo') ?>
-  <?= $tile('Expenses', money($expenses), dash_delta($expenses, $cmp('expenses'), false), '💸', 'orange', 'expenses.php') ?>
+  <?= $tile($expName, money($expenses), dash_delta($expenses, $cmp('expenses'), false), '💸', 'orange', $ch === 'daraz' ? 'daraz.php' : 'expenses.php') ?>
   <?= $tile('Net profit', '<span style="color:'.($net>=0?'var(--green)':'var(--red)').'">'.money($net).'</span>', dash_delta($net, $cmp('net')), '🧾', $net>=0?'teal':'red') ?>
-  <?= $tile('Return rate', $returnRate.'%', dash_delta($returnRate, $cmp('returnRate'), false, true), '↩️', 'red', 'sales.php?status=returned'.$sq) ?>
+  <?= $tile('Return rate', $returnRate.'%', dash_delta($returnRate, $cmp('returnRate'), false, true), '↩️', 'red', $oLink('returned')) ?>
 </div>
 
 <!-- 3) profit & loss + trend -->
@@ -391,10 +418,10 @@ body.dark .db-pill{background:rgba(2,6,23,.4)}
     <div class="panel-head"><h2>📦 Orders <small>· <?= number_format($total) ?> in <?= e(strtolower($rangeLabel)) ?></small></h2><a class="btn btn-sm" href="sales.php">Open Sales →</a></div>
     <div class="panel-body">
       <div class="vsplit">
-        <a class="vcell tint-a" href="sales.php?status=pending<?= $sq ?>"><div class="vl">Pending</div><div class="vv" style="color:var(--amber)"><?= number_format($pending) ?></div></a>
-        <a class="vcell tint-b" href="sales.php?status=processing,shipped<?= $sq ?>"><div class="vl">In Delivery</div><div class="vv" style="color:var(--blue)"><?= number_format($inDelivery) ?></div></a>
-        <a class="vcell tint-g" href="sales.php?status=delivered<?= $sq ?>"><div class="vl">Delivered</div><div class="vv" style="color:var(--green)"><?= number_format($delivered) ?></div><div class="vs"><?= number_format($unitsDelivered) ?> pcs sold</div></a>
-        <a class="vcell tint-r" href="sales.php?status=returned,cancelled<?= $sq ?>"><div class="vl">Returned · Cancelled</div><div class="vv" style="color:var(--red)"><?= number_format($returned) ?> · <?= number_format($cancelled) ?></div><div class="vs"><?= $returnRate ?>% · <?= $cancelRate ?>%</div></a>
+        <a class="vcell tint-a" href="<?= e($oLink('pending')) ?>"><div class="vl">Pending</div><div class="vv" style="color:var(--amber)"><?= number_format($pending) ?></div></a>
+        <a class="vcell tint-b" href="<?= e($oLink('processing,shipped')) ?>"><div class="vl">In Delivery</div><div class="vv" style="color:var(--blue)"><?= number_format($inDelivery) ?></div></a>
+        <a class="vcell tint-g" href="<?= e($oLink('delivered')) ?>"><div class="vl">Delivered</div><div class="vv" style="color:var(--green)"><?= number_format($delivered) ?></div><div class="vs"><?= number_format($unitsDelivered) ?> pcs sold</div></a>
+        <a class="vcell tint-r" href="<?= e($oLink('returned,cancelled')) ?>"><div class="vl">Returned · Cancelled</div><div class="vv" style="color:var(--red)"><?= number_format($returned) ?> · <?= number_format($cancelled) ?></div><div class="vs"><?= $returnRate ?>% · <?= $cancelRate ?>%</div></a>
       </div>
       <?php if($exchanged>0): ?><div class="info-row" style="margin-top:6px"><span class="ii p">🔁</span><span class="it">Exchanged</span><span class="iv"><?= number_format($exchanged) ?> · cost <?= money($exchangeLoss) ?></span></div><?php endif; ?>
     </div>

@@ -35,6 +35,72 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   check_csrf();
   $act = $_POST['_action'] ?? '';
   $back = 'daraz_sales.php?'.$R['qs'];
+
+  /* ---- book / edit a Daraz order (Daraz orders live only on this page) ---- */
+  if ($act === 'save_order') {
+    $id  = (int)($_POST['id'] ?? 0);
+    if (!$perm[$id ? 'edit' : 'add']) { flash('You do not have permission to '.($id ? 'edit' : 'add').' orders.'); header('Location: '.$back); exit; }
+    $old = $id ? row("SELECT * FROM orders WHERE id=? AND courier_id=?", [$id, $dzId]) : null;
+    if ($id && !$old) { flash('That Daraz order no longer exists.'); header('Location: '.$back); exit; }
+    $pid    = (int)($_POST['product_id'] ?? 0) ?: null;
+    $qty    = max(1, (int)($_POST['qty'] ?? 1));
+    $price  = max(0, (float)($_POST['sell_price'] ?? 0));
+    $fees   = max(0, (float)($_POST['fees'] ?? 0));
+    $status = in_array($_POST['status'] ?? '', $STATUSES, true) ? $_POST['status'] : 'pending';
+    $date   = preg_match('/^\d{4}-\d{2}-\d{2}$/', $_POST['order_date'] ?? '') ? $_POST['order_date'] : date('Y-m-d');
+    $dzNum  = preg_replace('/\D+/', '', (string)($_POST['daraz_order_id'] ?? ''));
+    $item   = trim((string)($_POST['item_name'] ?? ''));
+    if (!$pid && $item === '') { flash('Pick a product (or type the item name).'); header('Location: '.$back); exit; }
+    $f = [
+      'order_date'=>$date, 'customer'=>trim((string)($_POST['customer'] ?? '')), 'phone'=>daraz_clean_phone((string)($_POST['phone'] ?? '')),
+      'address'=>trim((string)($_POST['address'] ?? '')), 'product_id'=>$pid, 'qty'=>$qty, 'sell_price'=>$price,
+      'delivery_charge'=>$fees, 'payment_type'=>($_POST['payment_type'] ?? 'cod') === 'prepaid' ? 'prepaid' : 'cod',
+      'status'=>$status, 'remarks'=>trim((string)($_POST['remarks'] ?? '')), 'daraz_order_id'=>$dzNum !== '' ? $dzNum : null,
+      'daraz_item_name'=>$item !== '' ? $item : null, 'courier_id'=>$dzId,
+    ];
+    if ($fees > 0 && (!$old || abs((float)$old['delivery_charge'] - $fees) > 0.009)) $f['daraz_fee_source'] = 'manual';
+    $f['payment_status'] = $status === 'delivered' ? 'paid' : ($old['payment_status'] ?? 'unpaid');
+    if (in_array($status, ['returned','cancelled'], true)) {
+      $f['cancel_charge'] = (float)($old['cancel_charge'] ?? 0) > 0 ? (float)$old['cancel_charge']
+        : (float)val("SELECT COALESCE(cancel_charge,0) FROM couriers WHERE id=?", [$dzId]);
+    }
+    /* cost: current FIFO cost for a new line or a changed product (delivery recalculates it from batches) */
+    if (!$old || (int)$old['product_id'] !== (int)$pid) $f['cost_price'] = $pid ? fifo_current_cost($pid) : 0;
+    if ($old) {
+      $productChanged = (int)$old['product_id'] !== (int)$pid;
+      /* product swapped on a delivered order: put the OLD product's units back first
+         (before the row changes, so the right qty is restored) */
+      if ($productChanged && $old['status'] === 'delivered' && (int)$old['product_id']) fifo_restore($id, (int)$old['product_id']);
+      $cols = implode(', ', array_map(fn($k) => "`$k`=?", array_keys($f)));
+      q("UPDATE orders SET $cols WHERE id=?", array_merge(array_values($f), [$id]));
+      /* then the new product / qty / status moves stock with the same rules as the main Sales sheet */
+      if ($pid) fifo_status_change($id, (int)$pid, $qty, $productChanged ? '' : $old['status'], $status);
+      log_activity("Daraz order {$old['code']} edited", 'Daraz');
+      flash("Order {$old['code']} saved.");
+    } else {
+      $f += ['code'=>daraz_next_code(), 'zone'=>'inside', 'cancel_charge'=>$f['cancel_charge'] ?? 0, 'exchange_charge'=>0];
+      $cols = implode('`,`', array_keys($f));
+      q("INSERT INTO orders(`$cols`) VALUES(".implode(',', array_fill(0, count($f), '?')).")", array_values($f));
+      $id = (int)db()->lastInsertId();
+      if ($pid) fifo_status_change($id, (int)$pid, $qty, '', $status);
+      log_activity("Daraz order {$f['code']} booked".($dzNum ? " (Daraz #$dzNum)" : ''), 'Daraz');
+      flash("Order {$f['code']} booked.".($dzNum ? '' : ' Add its Daraz order number later to sync status and charges.'));
+    }
+    header('Location: '.$back.'#o'.$id); exit;
+  }
+  if ($act === 'delete_order') {
+    if (!$perm['delete']) { flash('You do not have permission to delete orders.'); header('Location: '.$back); exit; }
+    $id = (int)($_POST['id'] ?? 0);
+    $o = row("SELECT * FROM orders WHERE id=? AND courier_id=?", [$id, $dzId]);
+    if ($o) {
+      if ($o['status'] === 'delivered' && $o['product_id']) fifo_restore($id, (int)$o['product_id']);   /* units go back to their batches */
+      q("DELETE FROM orders WHERE id=?", [$id]);
+      log_activity("Daraz order {$o['code']} deleted", 'Daraz');
+      flash("Order {$o['code']} deleted.");
+    }
+    header('Location: '.$back); exit;
+  }
+
   if (!$perm['edit']) { flash('You do not have permission to edit orders.'); header('Location: '.$back); exit; }
   if ($act === 'set_row') {
     $st = in_array($_POST['status'] ?? '', $STATUSES, true) ? $_POST['status'] : null;
@@ -60,6 +126,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 $orders = daraz_orders_between($R['start'], $R['end']);
+$allProducts = rows("SELECT id,name,sku,price FROM products ORDER BY name");
 $prodOpts = [];
 foreach ($orders as $o) { $pl = $o['product_name'] ?: ($o['daraz_item_name'] ?? '') ?: '—'; $prodOpts[$pl] = ($prodOpts[$pl] ?? 0) + 1; }
 ksort($prodOpts, SORT_NATURAL | SORT_FLAG_CASE);
@@ -93,7 +160,7 @@ body.dark .dzs-fee{background:rgba(2,6,23,.5);color:var(--ink);border-color:rgba
   </div>
   <div class="nh-actions">
     <button type="button" class="btn nh-ghost" onclick="dzlOpen('')">🔗 Check a Daraz order by ID</button>
-    <?php if ($perm['add']): ?><a class="btn nh-cta" href="sales.php?new=daraz">＋ New Daraz Order</a><?php endif; ?>
+    <?php if ($perm['add']): ?><button type="button" class="btn nh-cta" onclick="dzoOpen(null)">＋ New Daraz Order</button><?php endif; ?>
   </div>
 </div>
 <?= daraz_tabs('daraz_sales.php') ?>
@@ -202,7 +269,9 @@ body.dark .dzs-fee{background:rgba(2,6,23,.5);color:var(--ink);border-color:rgba
         </form>
         <?php else: ?><span class="dz-status st-<?= e($o['status']) ?>"><?= ucfirst(e($o['status'])) ?></span><?php endif; ?>
       </td>
-      <td style="white-space:nowrap"><?php if ($dzOid): ?><button type="button" class="btn btn-sm" title="Sync status and charges from Daraz" onclick="dzlOpen('<?= e($dzOid) ?>')">🔄</button><?php if ($perm['edit'] && $o['daraz_order_id']): ?> <a href="#" class="muted" style="font-size:11px" title="Remove the Daraz link" onclick="dzlUnlink(<?= (int)$o['id'] ?>,'<?= e($o['code']) ?>');return false">unlink</a><?php endif; ?>
+      <td style="white-space:nowrap"><?php if ($perm['edit']): ?><button type="button" class="btn btn-sm" title="Edit this order" onclick="dzoOpen(this)" data-rec="<?= e(json_encode(['id'=>(int)$o['id'],'code'=>$o['code'],'order_date'=>$o['order_date'],'daraz_order_id'=>$o['daraz_order_id'],'customer'=>$o['customer'],'phone'=>$o['phone'],'address'=>$o['address'],'product_id'=>$o['product_id'],'item_name'=>$o['daraz_item_name'] ?? '','qty'=>(int)$o['qty'],'sell_price'=>(float)$o['sell_price'],'fees'=>(float)$o['delivery_charge'],'payment_type'=>$o['payment_type'],'status'=>$o['status'],'remarks'=>$o['remarks']])) ?>">✏</button><?php endif; ?>
+        <?php if ($perm['delete']): ?><form method="post" style="display:inline" onsubmit="return confirm('Delete order <?= e($o['code']) ?>? Stock is returned if it was delivered.')"><input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="delete_order"><?= $R['keep'] ?><input type="hidden" name="id" value="<?= (int)$o['id'] ?>"><button class="btn btn-sm" title="Delete this order">🗑</button></form><?php endif; ?>
+        <?php if ($dzOid): ?><button type="button" class="btn btn-sm" title="Sync status and charges from Daraz" onclick="dzlOpen('<?= e($dzOid) ?>')">🔄</button><?php if ($perm['edit'] && $o['daraz_order_id']): ?> <a href="#" class="muted" style="font-size:11px" title="Remove the Daraz link" onclick="dzlUnlink(<?= (int)$o['id'] ?>,'<?= e($o['code']) ?>');return false">unlink</a><?php endif; ?>
         <?php elseif ($perm['edit']): ?><button type="button" class="btn btn-sm btn-primary" title="Link this order to its Daraz order number" onclick="dzlOpenFor(<?= (int)$o['id'] ?>,'<?= e($o['code']) ?>',<?= e(json_encode(($o['customer'] ?: '').' · '.($o['phone'] ?: ''))) ?>)">🔗 Link</button><?php endif; ?></td>
     </tr>
   <?php endforeach; if (!$orders): ?>
@@ -213,6 +282,51 @@ body.dark .dzs-fee{background:rgba(2,6,23,.5);color:var(--ink);border-color:rgba
 </div>
 </div><!-- /ncmv3 -->
 <?= daraz_link_ui() ?>
+<!-- book / edit a Daraz order -->
+<div class="modal-bg" id="dzoModal" style="z-index:99980"><form class="modal" method="post" style="width:640px;max-width:96vw">
+  <div class="modal-head"><span id="dzoTitle">＋ New Daraz order</span><span class="mx" onclick="dzoClose()">✕</span></div>
+  <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="save_order"><?= $R['keep'] ?>
+  <input type="hidden" name="id" id="dzo_id" value="">
+  <div class="modal-body">
+    <div><label>Daraz order number</label><input name="daraz_order_id" id="dzo_dz" inputmode="numeric" placeholder="e.g. 204188712345678"></div>
+    <div><label>Order date *</label><input type="date" name="order_date" id="dzo_date" required></div>
+    <div><label>Customer</label><input name="customer" id="dzo_cust"></div>
+    <div><label>Phone</label><input name="phone" id="dzo_phone" inputmode="tel" placeholder="98XXXXXXXX"></div>
+    <div class="full"><label>Address</label><input name="address" id="dzo_addr"></div>
+    <div class="full"><label>Product *</label>
+      <select name="product_id" id="dzo_prod" onchange="dzoProd()"><option value="">— pick a product —</option>
+        <?php foreach ($allProducts as $p): ?><option value="<?= (int)$p['id'] ?>" data-price="<?= (float)$p['price'] ?>"><?= e($p['name']) ?><?= $p['sku'] ? ' ('.e($p['sku']).')' : '' ?></option><?php endforeach; ?>
+      </select>
+      <input name="item_name" id="dzo_item" placeholder="…or type the Daraz item name if it isn't a product yet" style="margin-top:6px"></div>
+    <div><label>Qty *</label><input type="number" name="qty" id="dzo_qty" min="1" value="1" required></div>
+    <div><label>Customer paid (per unit) *</label><input type="number" step="any" min="0" name="sell_price" id="dzo_price" required></div>
+    <div><label>Daraz charges (Rs.)</label><input type="number" step="any" min="0" name="fees" id="dzo_fees" placeholder="0"></div>
+    <div><label>Payment</label><select name="payment_type" id="dzo_pay"><option value="cod">COD</option><option value="prepaid">Prepaid</option></select></div>
+    <div><label>Status</label><select name="status" id="dzo_status"><?php foreach ($STATUSES as $st): ?><option value="<?= $st ?>"><?= ucfirst($st) ?></option><?php endforeach; ?></select></div>
+    <div><label>Remarks</label><input name="remarks" id="dzo_rem"></div>
+  </div>
+  <div class="modal-foot"><button type="button" class="btn" onclick="dzoClose()">Cancel</button><button class="btn btn-primary">💾 Save order</button></div>
+</form></div>
+<script>
+function dzoSet(id,v){var e=document.getElementById(id);if(e)e.value=(v===null||v===undefined)?'':v;}
+function dzoOpen(btn){
+  var r=btn?JSON.parse(btn.getAttribute('data-rec')):null;
+  document.getElementById('dzoTitle').textContent=r?('✏ Edit Daraz order '+r.code):'＋ New Daraz order';
+  dzoSet('dzo_id',r?r.id:''); dzoSet('dzo_dz',r?r.daraz_order_id:''); dzoSet('dzo_date',r?r.order_date:new Date().toISOString().slice(0,10));
+  dzoSet('dzo_cust',r?r.customer:''); dzoSet('dzo_phone',r?r.phone:''); dzoSet('dzo_addr',r?r.address:'');
+  dzoSet('dzo_prod',r?r.product_id:''); dzoSet('dzo_item',r?r.item_name:''); dzoSet('dzo_qty',r?r.qty:1);
+  dzoSet('dzo_price',r?r.sell_price:''); dzoSet('dzo_fees',r&&r.fees?r.fees:''); dzoSet('dzo_pay',r?r.payment_type:'cod');
+  dzoSet('dzo_status',r?r.status:'pending'); dzoSet('dzo_rem',r?r.remarks:'');
+  document.getElementById('dzoModal').classList.add('open');document.body.classList.add('modal-open');
+  setTimeout(function(){document.getElementById(r?'dzo_price':'dzo_dz').focus();},60);
+}
+function dzoClose(){document.getElementById('dzoModal').classList.remove('open');document.body.classList.remove('modal-open');}
+/* picking a product pre-fills its usual price when no price is entered yet */
+function dzoProd(){var s=document.getElementById('dzo_prod'),o=s.options[s.selectedIndex],p=document.getElementById('dzo_price');
+  if(o&&o.value&&!(parseFloat(p.value)>0))p.value=o.getAttribute('data-price')||'';}
+(function(){var m=document.getElementById('dzoModal');m.addEventListener('click',function(e){if(e.target===m)dzoClose();});
+  if(new URLSearchParams(location.search).get('new')==='1'&&<?= $perm['add'] ? 'true' : 'false' ?>)dzoOpen(null);})();
+</script>
 <script>
 var dzsT={}, dzsPage=1, DZS_PER=50;
 function dzsRows(){return [].slice.call(document.querySelectorAll('#dzsTbl tr[data-id]'));}

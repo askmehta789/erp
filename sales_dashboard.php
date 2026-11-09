@@ -30,6 +30,8 @@ if ($range === 'custom' && !empty($_GET['from']) && !empty($_GET['to'])) {
 }
 if ($from && $to && $from > $to) { [$from,$to] = [$to,$from]; }
 $dateWhere  = ($from && $to) ? "AND o.order_date BETWEEN ? AND ?" : "";
+/* Daraz orders have their own Daraz pages — the sales team leaderboard counts own sales only */
+$dateWhere  = "AND COALESCE(o.courier_id,0) <> ".(int)val("SELECT COALESCE((SELECT id FROM couriers WHERE LOWER(name)='daraz' ORDER BY id LIMIT 1),0)")." ".$dateWhere;
 $dateParams = ($from && $to) ? [$from,$to] : [];
 $rangeLabel = [
     'month'=>'This Month ('.date('F Y').')', 'last_month'=>'Last Month ('.date('F Y', strtotime('first day of last month')).')',

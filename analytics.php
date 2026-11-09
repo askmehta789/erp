@@ -17,6 +17,17 @@ $adKw=['advert','ad spend','ads','marketing','facebook','fb','insta','google','t
 
 $pid = (int)($_GET['pid'] ?? 0);
 $pw  = $pid ? " AND o.product_id = ".$pid : "";
+/* sales channel: all · own (everything except Daraz) · daraz */
+$ch  = in_array($_GET['ch'] ?? '', ['own','daraz'], true) ? $_GET['ch'] : 'all';
+$dzC = (int)val("SELECT COALESCE((SELECT id FROM couriers WHERE LOWER(name)='daraz' ORDER BY id LIMIT 1),0)");
+if ($ch === 'own')   $pw .= " AND COALESCE(o.courier_id,0) <> ".$dzC;
+if ($ch === 'daraz') $pw .= " AND o.courier_id = ".$dzC;
+$chQs = $ch !== 'all' ? '&ch='.$ch : '';
+/* Daraz ad spend is kept in its own table (Daraz → Dashboard); own ads come from Expenses */
+$darazAds = function($a, $b) {
+  try { q("CREATE TABLE IF NOT EXISTS daraz_ads(id INT AUTO_INCREMENT PRIMARY KEY, spend_date DATE NOT NULL, amount DECIMAL(12,2) NOT NULL DEFAULT 0, note VARCHAR(160) DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"); } catch (Exception $e) {}
+  return rows("SELECT spend_date AS expense_date, amount, 'ads' AS category, 0 AS usd_amount, '' AS product FROM daraz_ads WHERE spend_date BETWEEN ? AND ?", [$a, $b]);
+};
 $orders = rows("SELECT o.*, p.name AS product_name, c.name AS courier_name
                 FROM orders o LEFT JOIN products p ON p.id=o.product_id LEFT JOIN couriers c ON c.id=o.courier_id
                 WHERE o.order_date BETWEEN ? AND ? $pw ORDER BY o.order_date", [$from,$to]);
@@ -68,7 +79,7 @@ foreach($orders as $o){
   }
 }
 /* ad spend per period */
-$adRows=rows("SELECT expense_date, amount, category, COALESCE(usd_amount,0) usd_amount, COALESCE(product,'') product FROM expenses WHERE expense_date BETWEEN ? AND ?",[$from,$to]);
+$adRows = $ch === 'daraz' ? $darazAds($from,$to) : rows("SELECT expense_date, amount, category, COALESCE(usd_amount,0) usd_amount, COALESCE(product,'') product FROM expenses WHERE expense_date BETWEEN ? AND ?",[$from,$to]);
 /* when a product filter is on, count only ads TAGGED to that product */
 $adFits=function($e) use($pid,$pName){
   if(!$pid) return true;
@@ -86,7 +97,7 @@ ksort($periods);
 
 /* ---- range totals ---- */
 $T=['orders'=>0,'oqty'=>0,'ordval'=>0,'delivered'=>0,'units'=>0,'revenue'=>0,'cogs'=>0,'delivery'=>0,'profit'=>0,'ads'=>0,'returned'=>0,'runits'=>0,'rloss'=>0,'exchanged'=>0,'exloss'=>0];
-$todaySnap=row("SELECT COUNT(*) n, COALESCE(SUM(qty),0) q, COALESCE(SUM(sell_price*qty),0) v FROM orders WHERE order_date=CURDATE()");
+$todaySnap=row("SELECT COUNT(*) n, COALESCE(SUM(o.qty),0) q, COALESCE(SUM(o.sell_price*o.qty),0) v FROM orders o WHERE o.order_date=CURDATE() $pw");
 foreach($periods as $p) foreach($T as $k=>$v) $T[$k]+=$p[$k];
 $aov       = $T['delivered']? $T['revenue']/$T['delivered'] : 0;
 $roas      = $T['ads']>0? $T['revenue']/$T['ads'] : 0;
@@ -100,7 +111,7 @@ $span=(strtotime($to)-strtotime($from))/86400+1;
 $prevTo=date('Y-m-d',strtotime("$from -1 day"));
 $prevFrom=date('Y-m-d',strtotime("$prevTo -".($span-1)." day"));
 $prevRev=0;$prevOrders=0;$prevProfit=0;
-foreach(rows("SELECT sell_price,qty,cost_price,delivery_charge,cancel_charge,exchange_charge,status FROM orders WHERE order_date BETWEEN ? AND ?",[$prevFrom,$prevTo]) as $o){
+foreach(rows("SELECT o.sell_price,o.qty,o.cost_price,o.delivery_charge,o.cancel_charge,o.exchange_charge,o.status FROM orders o WHERE o.order_date BETWEEN ? AND ? $pw",[$prevFrom,$prevTo]) as $o){
   $prevOrders++;
   if($o['status']==='delivered'){ $prevRev+=(float)$o['sell_price']*(int)$o['qty']; $prevProfit+=((float)$o['sell_price']-(float)$o['cost_price'])*(int)$o['qty']-(float)$o['delivery_charge']; }
   elseif(in_array($o['status'],['returned','cancelled'],true)){ $prevProfit-=(float)$o['cancel_charge']; }
@@ -163,6 +174,12 @@ require __DIR__.'/includes/header.php';
       <option value="week"<?= $g==='week'?' selected':'' ?>>Weekly</option>
       <option value="month"<?= $g==='month'?' selected':'' ?>>Monthly</option>
     </select></div>
+  <div><label style="font-size:12px;color:var(--muted);font-weight:700">Channel</label><br>
+    <select name="ch" onchange="this.form.submit()">
+      <option value="all"<?= $ch==='all'?' selected':'' ?>>All sales</option>
+      <option value="own"<?= $ch==='own'?' selected':'' ?>>Own sales</option>
+      <option value="daraz"<?= $ch==='daraz'?' selected':'' ?>>Daraz</option>
+    </select></div>
   <div><label style="font-size:12px;color:var(--muted);font-weight:700">Product</label><br>
     <select name="pid"><option value="0">All products</option>
     <?php foreach($allProducts as $ap): ?><option value="<?= (int)$ap['id'] ?>"<?= $pid===(int)$ap['id']?' selected':'' ?>><?= e($ap['name']) ?></option><?php endforeach; ?></select></div>
@@ -170,10 +187,10 @@ require __DIR__.'/includes/header.php';
   <div><label style="font-size:12px;color:var(--muted);font-weight:700">To</label><br><input type="date" name="to" value="<?= e($to) ?>"></div>
   <button class="btn btn-primary">Apply</button>
   <div style="display:flex;gap:6px">
-    <a class="btn btn-sm" href="?g=day&from=<?= date('Y-m-d',strtotime('-6 days')) ?>&to=<?= date('Y-m-d') ?>">7 days</a>
-    <a class="btn btn-sm" href="?g=day&from=<?= date('Y-m-d',strtotime('-29 days')) ?>&to=<?= date('Y-m-d') ?>">30 days</a>
-    <a class="btn btn-sm" href="?g=week&from=<?= date('Y-m-d',strtotime('-11 weeks')) ?>&to=<?= date('Y-m-d') ?>">12 weeks</a>
-    <a class="btn btn-sm" href="?g=month&from=<?= date('Y-m-01',strtotime('-11 months')) ?>&to=<?= date('Y-m-d') ?>">12 months</a>
+    <a class="btn btn-sm" href="?g=day&from=<?= date('Y-m-d',strtotime('-6 days')) ?>&to=<?= date('Y-m-d') ?><?= $chQs ?>">7 days</a>
+    <a class="btn btn-sm" href="?g=day&from=<?= date('Y-m-d',strtotime('-29 days')) ?>&to=<?= date('Y-m-d') ?><?= $chQs ?>">30 days</a>
+    <a class="btn btn-sm" href="?g=week&from=<?= date('Y-m-d',strtotime('-11 weeks')) ?>&to=<?= date('Y-m-d') ?><?= $chQs ?>">12 weeks</a>
+    <a class="btn btn-sm" href="?g=month&from=<?= date('Y-m-01',strtotime('-11 months')) ?>&to=<?= date('Y-m-d') ?><?= $chQs ?>">12 months</a>
   </div>
 </form></div>
 
@@ -280,7 +297,7 @@ foreach(rows("SELECT o.order_date d, o.status, o.qty, o.sell_price, o.cost_price
   } elseif(in_array($o['status'],['returned','cancelled'],true)) $mon[$m]['gross']-=(float)$o['cancel_charge'];
 }
 $adsMon=[];
-foreach(rows("SELECT expense_date, amount, category, COALESCE(product,'') product FROM expenses WHERE YEAR(expense_date)=?",[$y]) as $e){
+foreach(($ch === 'daraz' ? $darazAds($y.'-01-01',$y.'-12-31') : rows("SELECT expense_date, amount, category, COALESCE(product,'') product FROM expenses WHERE YEAR(expense_date)=?",[$y])) as $e){
   $cat=strtolower((string)$e['category']); $isAd=false; foreach($adKw as $kw){ if(strpos($cat,$kw)!==false){$isAd=true;break;} }
   if($isAd && $adFits($e)){ $m=(int)substr($e['expense_date'],5,2); $adsMon[$m]=($adsMon[$m]??0)+(float)$e['amount']; }
 }
@@ -295,7 +312,7 @@ $GT=['q'=>0,'rev'=>0,'del'=>0,'gross'=>0,'ads'=>0,'net'=>0];
 .mon-row:hover .mon-go::after,.mon-row.mon-on .mon-go::after{opacity:1}
 </style>
 <div class="panel" style="margin-top:20px"><div class="panel-head" style="flex-wrap:wrap;gap:10px">
-  <h2>🗓 Monthly Report — <?= $y ?><?= $pName?' · '.e($pName):'' ?></h2>
+  <h2>🗓 Monthly Report — <?= $y ?><?= $pName?' · '.e($pName):'' ?><?= $ch!=='all'?' · '.($ch==='daraz'?'Daraz':'Own sales'):'' ?></h2>
   <span class="muted" style="font-size:12px">click a month to open it in a new tab</span>
   <button class="btn btn-sm" onclick="tblCsvX('monTbl','monthly-report')">⬇ CSV</button></div>
 <div class="table-wrap"><table class="tbl num-tbl" id="monTbl"><thead><tr>
@@ -306,7 +323,7 @@ $GT=['q'=>0,'rev'=>0,'del'=>0,'gross'=>0,'ads'=>0,'net'=>0];
   $GT['q']+=$v['q'];$GT['rev']+=$v['rev'];$GT['del']+=$v['del'];$GT['gross']+=$v['gross'];$GT['ads']+=$ads;$GT['net']+=$net;
   /* click a month → this same Analytics page for just that month (day by day), in a new tab */
   $mFrom=sprintf('%04d-%02d-01',$y,$m); $mTo=date('Y-m-t',strtotime($mFrom));
-  $mUrl='analytics.php?'.http_build_query(array_filter(['from'=>$mFrom,'to'=>$mTo,'g'=>'day','pid'=>$pid?:null]));
+  $mUrl='analytics.php?'.http_build_query(array_filter(['from'=>$mFrom,'to'=>$mTo,'g'=>'day','pid'=>$pid?:null,'ch'=>$ch!=='all'?$ch:null]));
   $mOn=($from===$mFrom && $to===$mTo); ?>
   <tr class="mon-row<?= $mOn?' mon-on':'' ?>" onclick="if(!event.target.closest('a'))window.open('<?= e($mUrl) ?>','_blank')" title="Open <?= e(date('F Y',strtotime($mFrom))) ?> in a new tab">
     <td><a href="<?= e($mUrl) ?>" target="_blank" rel="noopener" class="mon-link"><b><?= date('M', mktime(0,0,0,$m,1)) ?></b> <span class="mon-go"></span></a></td>

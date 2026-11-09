@@ -37,6 +37,16 @@ if (isset($_GET['ajax'])) {
         echo json_encode(['ok'=>false,'error'=>'You do not have permission to delete orders.']); exit;
     }
 
+    /* Daraz orders live in Daraz Sales only — this sheet never creates, edits or deletes them */
+    $DZ_CID = (int)val("SELECT id FROM couriers WHERE LOWER(name)='daraz' ORDER BY id LIMIT 1");
+    if ($DZ_CID) {
+        $toDaraz = (int)($_POST['courier_id'] ?? 0) === $DZ_CID;
+        $isDaraz = in_array($op, ['update','delete'], true) && (int)val("SELECT COALESCE(courier_id,0) FROM orders WHERE id=?", [(int)($_POST['id'] ?? 0)]) === $DZ_CID;
+        if ((in_array($op, ['add','create','create_multi','update'], true) && $toDaraz) || $isDaraz) {
+            echo json_encode(['ok'=>false,'error'=>'Daraz orders are managed in Daraz → Daraz Sales.']); exit;
+        }
+    }
+
     /* build a clean field set from POST, looking up cost + defaults */
     $build = function() {
         $pid  = (int)($_POST['product_id'] ?? 0) ?: null;
@@ -290,7 +300,10 @@ try {
 } catch (Exception $e) {}
 foreach ($products as &$pp) { $pp['cost'] = $fifoCosts[(int)$pp['id']] ?? (float)$pp['cost']; } unset($pp);
 try { q("ALTER TABLE couriers ADD COLUMN IF NOT EXISTS default_delivery DECIMAL(10,2) DEFAULT 0"); q("ALTER TABLE couriers ADD COLUMN IF NOT EXISTS cancel_charge DECIMAL(10,2) DEFAULT 100"); } catch (Exception $e) {}
-$couriers = rows("SELECT id,name,COALESCE(default_delivery,0) AS default_delivery,COALESCE(cancel_charge,100) AS cancel_charge FROM couriers WHERE status='active' ORDER BY name");
+/* Daraz has its own Sales sheet (Daraz → Daraz Sales): its orders and the Daraz courier
+   are left out of this sheet entirely */
+$dzCidMain = (int)val("SELECT id FROM couriers WHERE LOWER(name)='daraz' ORDER BY id LIMIT 1");
+$couriers = rows("SELECT id,name,COALESCE(default_delivery,0) AS default_delivery,COALESCE(cancel_charge,100) AS cancel_charge FROM couriers WHERE status='active' AND LOWER(name)<>'daraz' ORDER BY name");
 $salespersons = rows("SELECT id,name FROM employees WHERE department='Sales' AND status='active' ORDER BY name");
 $orders   = rows("
     SELECT o.*, p.name AS product_name, c.name AS courier_name, sp.name AS sales_person_name
@@ -298,6 +311,7 @@ $orders   = rows("
     LEFT JOIN products p ON p.id = o.product_id
     LEFT JOIN couriers c ON c.id = o.courier_id
     LEFT JOIN employees sp ON sp.id = o.sales_person_id
+    WHERE  COALESCE(o.courier_id,0) <> ".$dzCidMain."
     ORDER  BY o.order_date ASC,
              COALESCE((SELECT MIN(g.id) FROM orders g WHERE g.order_group=o.order_group AND o.order_group IS NOT NULL AND o.order_group<>''), o.id) ASC,
              o.id ASC");
@@ -1512,17 +1526,7 @@ window.addEventListener('keydown',function(e){
         document.getElementById('f_pay').value='COD';
       },150);
     }
-    if(qs.get('new')==='daraz'){
-      setTimeout(function(){
-        openOrderForm();
-        var dz=COURIERS.find(function(c){return String(c.name).toLowerCase()==='daraz';});
-        if(dz) document.getElementById('f_courier').value=dz.id;
-        var rm=document.getElementById('f_remarks');
-        rm.placeholder='Daraz Order ID — e.g. 240712-9917742';
-        document.getElementById('f_pay').value='Prepaid';   /* Daraz pays you, not customer-COD */
-        setTimeout(function(){rm.focus();},80);
-      },150);
-    }
+    if(qs.get('new')==='daraz'){ location.replace('daraz_sales.php?new=1'); return; }   /* Daraz orders are booked in Daraz Sales */
     if(qs.get('new')==='pickndrop'){
       setTimeout(function(){
         openOrderForm();

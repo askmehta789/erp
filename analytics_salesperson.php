@@ -125,10 +125,9 @@ require __DIR__.'/includes/header.php';
 @media(max-width:640px){ .spx-controls{width:100%} .spx-controls select,.spx-controls input,.spx-controls label{width:100%} .spx-title{font-size:16.5px!important} }
 </style>
 
-<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px">
-  <a class="btn btn-sm" href="analytics.php">← Analytics</a>
-  <h1 class="spx-title">🧑‍💼 Sales Person Analytics<?= $selPerson ? ' — '.e($selPerson['name']) : '' ?></h1>
-  <a class="btn btn-sm" style="margin-left:auto" href="sales_dashboard.php">🏆 Leaderboard view</a>
+<div class="page-head">
+  <div><h1>🧑‍💼 Sales Person Analytics<?= $selPerson ? ' — '.e($selPerson['name']) : '' ?></h1><p>Trends for each salesperson over time</p></div>
+  <div class="ph-actions"><a class="btn" href="analytics.php">← Analytics</a><a class="btn" href="sales_dashboard.php">🏆 Leaderboard view</a></div>
 </div>
 
 <form method="get" class="spx-controls">

@@ -90,9 +90,9 @@ require __DIR__.'/includes/header.php';
 }
 </style>
 
-<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px">
-  <a class="btn btn-sm" href="analytics.php">← Analytics</a>
-  <h1 class="rc-title" style="font-size:19px;font-weight:900;margin:0">🔁 Exchanges — Deep Report</h1>
+<div class="page-head">
+  <div><h1>🔁 Exchanges — Deep Report</h1><p>Every replacement sent, why, and what it cost</p></div>
+  <div class="ph-actions"><a class="btn" href="analytics.php">← Analytics</a></div>
 </div>
 
 <form method="get" class="rc-controls">

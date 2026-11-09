@@ -449,6 +449,7 @@ require __DIR__.'/includes/header.php';
       <button class="pbtn pbtn-pay" onclick="payQuick(<?= (int)$p['id'] ?>,'paid')" title="Record a payment to this payee">💸 Pay</button>
       <button class="pbtn pbtn-due" onclick="payQuick(<?= (int)$p['id'] ?>,'due')" title="Record a new due/bill">🧾 Due</button>
       <a class="pbtn pbtn-ghost" href="payees.php?id=<?= (int)$p['id'] ?>">📜 Ledger</a>
+      <a class="pbtn pbtn-ghost" href="payee_statement.php?id=<?= (int)$p['id'] ?>" target="_blank" title="Statement to send this vendor — download as PDF">📄 Statement</a>
       <div style="margin-left:auto;display:flex;gap:6px">
         <?php if($isAdmin && (int)$p['id']!==$adsPid): ?><form method="post" style="display:inline"><input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="set_ads_payee"><input type="hidden" name="id" value="<?= (int)$p['id'] ?>"><button class="iact" title="Auto-bill new Ads expenses to this payee">⚡</button></form><?php endif; ?>
         <?php if($isAdmin): ?><form method="post" style="display:inline" onsubmit="return confirm('Delete this payee AND all their entries?')"><input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="del_payee"><input type="hidden" name="id" value="<?= (int)$p['id'] ?>"><button class="iact del">🗑</button></form><?php endif; ?>
@@ -470,7 +471,10 @@ require __DIR__.'/includes/header.php';
       <span class="pill p-green">Paid <?= money($vPaid) ?></span>
       <span class="pill <?= ($vDue-$vPaid)>0.5?'p-yellow':'p-green' ?>" style="font-weight:800">Remaining <?= money(max(0,$vDue-$vPaid)) ?></span>
     </div>
-    <a class="btn btn-sm" href="payees.php">← All Payees</a>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <a class="btn btn-sm btn-primary" target="_blank" href="payee_statement.php?<?= e(http_build_query(array_filter(['id'=>$view,'from'=>$fFrom,'to'=>$fTo]))) ?>" title="Statement for the dates / product filtered below — download as PDF">📄 Download Statement</a>
+      <a class="btn btn-sm" href="payees.php">← All Payees</a>
+    </div>
   </div>
 
   <form method="get" class="advpanel" style="margin:12px 14px;box-shadow:none;border-style:dashed">

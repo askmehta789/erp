@@ -88,6 +88,49 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     header('Location: '.$back.'#o'.$id); exit;
   }
+  /* ---- bulk paste import: rows were parsed + checked in the browser, re-validated here ---- */
+  if ($act === 'import_orders') {
+    if (!$perm['add']) { flash('You do not have permission to add orders.'); header('Location: '.$back); exit; }
+    $rows = json_decode((string)($_POST['rows'] ?? '[]'), true);
+    if (!is_array($rows) || !$rows) { flash('Nothing to import.'); header('Location: '.$back); exit; }
+    $skipDup = ($_POST['skip_dup'] ?? '1') === '1';
+    $prodIds = array_flip(array_map('intval', array_column(rows("SELECT id FROM products"), 'id')));
+    $existing = [];
+    foreach (rows("SELECT DISTINCT daraz_order_id FROM orders WHERE courier_id=? AND daraz_order_id IS NOT NULL", [$dzId]) as $r) $existing[$r['daraz_order_id']] = 1;
+    $made = 0; $dup = max(0, (int)($_POST['skipped'] ?? 0)); $unmatched = 0; $bad = 0; $seenInFile = [];
+    foreach (array_slice($rows, 0, 2000) as $r) {
+      $dzNum = preg_replace('/\D+/', '', (string)($r['daraz_order_id'] ?? ''));
+      /* an order already in the ERP is skipped (lines of the same order in THIS paste still go in) */
+      if ($skipDup && $dzNum !== '' && isset($existing[$dzNum]) && !isset($seenInFile[$dzNum])) { $dup++; continue; }
+      if ($dzNum !== '') $seenInFile[$dzNum] = 1;
+      $pid  = (int)($r['product_id'] ?? 0); $pid = isset($prodIds[$pid]) ? $pid : null;
+      $item = trim((string)($r['item'] ?? ''));
+      if (!$pid && $item === '') { $bad++; continue; }
+      if (!$pid) $unmatched++;
+      $status = in_array($r['status'] ?? '', $STATUSES, true) ? $r['status'] : 'pending';
+      $date = preg_match('/^\d{4}-\d{2}-\d{2}$/', (string)($r['date'] ?? '')) ? $r['date'] : date('Y-m-d');
+      $o = [
+        'code'=>daraz_next_code(), 'order_date'=>$date, 'customer'=>trim((string)($r['customer'] ?? '')),
+        'phone'=>daraz_clean_phone((string)($r['phone'] ?? '')), 'address'=>trim((string)($r['address'] ?? '')),
+        'product_id'=>$pid, 'qty'=>max(1, (int)($r['qty'] ?? 1)), 'sell_price'=>max(0, (float)($r['price'] ?? 0)),
+        'cost_price'=>$pid ? fifo_current_cost($pid) : 0, 'delivery_charge'=>max(0, (float)($r['fees'] ?? 0)),
+        'daraz_fee_source'=>(float)($r['fees'] ?? 0) > 0 ? 'manual' : null,
+        'payment_type'=>($r['payment'] ?? '') === 'prepaid' ? 'prepaid' : 'cod', 'payment_status'=>$status === 'delivered' ? 'paid' : 'unpaid',
+        'status'=>$status, 'courier_id'=>$dzId, 'zone'=>'inside', 'cancel_charge'=>0, 'exchange_charge'=>0,
+        'remarks'=>'imported'.($pid ? '' : ' ⚠ '.$item.' — not matched to a product yet'),
+        'daraz_order_id'=>$dzNum !== '' ? $dzNum : null, 'daraz_item_name'=>$item !== '' ? $item : null,
+        'daraz_sku'=>trim((string)($r['sku'] ?? '')) ?: null,
+      ];
+      $cols = implode('`,`', array_keys($o));
+      q("INSERT INTO orders(`$cols`) VALUES(".implode(',', array_fill(0, count($o), '?')).")", array_values($o));
+      $newId = (int)db()->lastInsertId();
+      if ($pid) fifo_status_change($newId, $pid, $o['qty'], '', $status);
+      $made++;
+    }
+    log_activity("Daraz paste import: $made line(s) added".($dup ? ", $dup already in the ERP (skipped)" : '').($unmatched ? ", $unmatched without a matched product" : ''), 'Daraz');
+    flash("Imported $made order line(s)".($dup ? " · $dup skipped (Daraz number already in the ERP)" : '').($unmatched ? " · $unmatched need a product — use ✏ Edit on those rows" : '').($bad ? " · $bad empty line(s) ignored" : '').'.');
+    header('Location: '.$back); exit;
+  }
   if ($act === 'delete_order') {
     if (!$perm['delete']) { flash('You do not have permission to delete orders.'); header('Location: '.$back); exit; }
     $id = (int)($_POST['id'] ?? 0);
@@ -126,7 +169,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 $orders = daraz_orders_between($R['start'], $R['end']);
-$allProducts = rows("SELECT id,name,sku,price FROM products ORDER BY name");
+$allProducts = rows("SELECT id,name,sku,price,COALESCE(daraz_sku,'') AS daraz_sku FROM products ORDER BY name");
 $prodOpts = [];
 foreach ($orders as $o) { $pl = $o['product_name'] ?: ($o['daraz_item_name'] ?? '') ?: '—'; $prodOpts[$pl] = ($prodOpts[$pl] ?? 0) + 1; }
 ksort($prodOpts, SORT_NATURAL | SORT_FLAG_CASE);
@@ -160,7 +203,7 @@ body.dark .dzs-fee{background:rgba(2,6,23,.5);color:var(--ink);border-color:rgba
   </div>
   <div class="nh-actions">
     <button type="button" class="btn nh-ghost" onclick="dzlOpen('')">🔗 Check a Daraz order by ID</button>
-    <?php if ($perm['add']): ?><button type="button" class="btn nh-cta" onclick="dzoOpen(null)">＋ New Daraz Order</button><?php endif; ?>
+    <?php if ($perm['add']): ?><button type="button" class="btn nh-ghost" onclick="dziOpen()">📋 Paste Import</button><button type="button" class="btn nh-cta" onclick="dzoOpen(null)">＋ New Daraz Order</button><?php endif; ?>
   </div>
 </div>
 <?= daraz_tabs('daraz_sales.php') ?>
@@ -282,6 +325,127 @@ body.dark .dzs-fee{background:rgba(2,6,23,.5);color:var(--ink);border-color:rgba
 </div>
 </div><!-- /ncmv3 -->
 <?= daraz_link_ui() ?>
+<!-- bulk paste import -->
+<style>
+.dzi-tbl{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px}
+.dzi-tbl th,.dzi-tbl td{padding:5px 6px;border-bottom:1px solid rgba(148,163,184,.2);text-align:left;white-space:nowrap;max-width:180px;overflow:hidden;text-overflow:ellipsis}
+.dzi-tbl tr.dup td{opacity:.45;text-decoration:line-through}
+.dzi-tag{font-size:10.5px;font-weight:800;padding:1px 7px;border-radius:999px}
+.dzi-ok{background:rgba(15,157,99,.14);color:#0f9d63}.dzi-warn{background:rgba(245,158,11,.16);color:#b45309}.dzi-skip{background:rgba(100,116,139,.16);color:#475569}
+.dzi-opts{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:8px;font-size:12.5px}
+.dzi-opts label{display:flex;gap:6px;align-items:center;margin:0;font-weight:600}
+.dzi-opts select,.dzi-opts input[type=date]{width:auto}
+</style>
+<div class="modal-bg" id="dziModal" style="z-index:99985"><form class="modal" method="post" style="width:860px;max-width:96vw" onsubmit="return dziSubmit()">
+  <div class="modal-head"><span>📋 Paste Daraz orders</span><span class="mx" onclick="dziClose()">✕</span></div>
+  <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="import_orders"><?= $R['keep'] ?>
+  <input type="hidden" name="rows" id="dzi_rows"><input type="hidden" name="skipped" id="dzi_skipped" value="0">
+  <div class="modal-body" style="display:block">
+    <p class="muted" style="font-size:12px;margin:0 0 8px">Copy rows from Excel / Google Sheets or the <b>Daraz Seller Center order export</b> and paste below — <b>first line = column names</b>, any order.<br>
+      Understood: <i>order number · date · customer / shipping name · phone · address · product / item name / seller SKU · qty · price / paid price · Daraz charges / fees · status · payment</i>.
+      No header? Default order: <code>Order number, Customer, Phone, Address, Product, Qty, Price</code>.</p>
+    <textarea id="dziText" rows="7" style="width:100%;font-family:monospace;font-size:12px" oninput="dziPreview()"
+      placeholder="Order Number&#9;Customer&#9;Phone&#9;Address&#9;Product&#9;Qty&#9;Paid Price&#9;Daraz Charges&#9;Status&#10;204188712345678&#9;Sita Rai&#9;9779812345678&#9;Kathmandu&#9;Smart Watch&#9;1&#9;2400&#9;210&#9;Delivered"></textarea>
+    <div class="dzi-opts">
+      <label>Status if not given <select name="def_status" id="dzi_defst" onchange="dziPreview()"><?php foreach ($STATUSES as $st): ?><option value="<?= $st ?>"><?= ucfirst($st) ?></option><?php endforeach; ?></select></label>
+      <label>Date if not given <input type="date" id="dzi_defdate" value="<?= date('Y-m-d') ?>" onchange="dziPreview()"></label>
+      <label><input type="checkbox" name="skip_dup" value="1" id="dzi_skip" checked onchange="dziPreview()" style="width:auto"> Skip orders already in the ERP</label>
+    </div>
+    <div id="dziOut" style="margin-top:6px;max-height:320px;overflow:auto"></div>
+  </div>
+  <div class="modal-foot"><span class="muted" id="dziSum" style="margin-right:auto;font-size:12.5px"></span>
+    <button type="button" class="btn" onclick="dziClose()">Cancel</button><button class="btn btn-primary" id="dziBtn" disabled>⬆ Import</button></div>
+</form></div>
+<script>
+var DZI_PRODUCTS=<?= json_encode(array_map(fn($p) => ['id'=>(int)$p['id'],'name'=>$p['name'],'sku'=>(string)$p['sku'],'dsku'=>(string)$p['daraz_sku'],'price'=>(float)$p['price']], $allProducts)) ?>;
+var DZI_EXISTING=<?= json_encode(array_values(array_unique(array_filter(array_map(fn($r) => (string)$r['daraz_order_id'], rows("SELECT DISTINCT daraz_order_id FROM orders WHERE courier_id=? AND daraz_order_id IS NOT NULL", [$dzId])))))) ?>;
+var DZI_SYN={
+  dz:['order number','order no','order id','daraz order','daraz order id','daraz order number','order','order #','ordernumber'],
+  date:['date','order date','created at','created','create time','order created at','order time'],
+  customer:['customer','customer name','name','shipping name','buyer','buyer name','recipient','billing name','customer first name'],
+  phone:['phone','mobile','contact','phone number','mobile number','shipping phone','shipping phone number','billing phone','customer phone'],
+  address:['address','shipping address','city','location','shipping city','delivery address','shipping address1'],
+  product:['product','product name','item','item name','name of product'],
+  sku:['seller sku','sku','shop sku','daraz sku','sellersku'],
+  qty:['qty','quantity','pcs','no of items','items'],
+  price:['price','paid price','customer paid','amount','unit price','item price','total','sale price','selling price'],
+  fees:['daraz charge','daraz charges','fees','fee','commission','charges','delivery','delivery charge','shipping fee paid by seller'],
+  status:['status','order status','item status'],
+  payment:['payment','payment method','payment type']
+};
+function dziNorm(t){return String(t==null?'':t).trim().toLowerCase().replace(/[_\-.:()\[\]*]/g,' ').replace(/\s+/g,' ').trim();}
+function dziSplit(l){return l.indexOf('\t')>-1?l.split('\t'):l.split(',');}
+function dziEsc(t){var d=document.createElement('div');d.textContent=t==null?'':String(t);return d.innerHTML;}
+function dziNum(v){var n=parseFloat(String(v==null?'':v).replace(/[^0-9.\-]/g,''));return isNaN(n)?0:n;}
+function dziStatus(v){var t=dziNorm(v);if(!t)return '';
+  if(/deliver/.test(t))return 'delivered';if(/return|rts|failed/.test(t))return 'returned';if(/cancel/.test(t))return 'cancelled';
+  /* "ready to ship" / "to ship" = packed, not shipped yet — check before plain "ship" */
+  if(/pack|ready|to ship|toship|process|confirm/.test(t))return 'processing';if(/ship|transit/.test(t))return 'shipped';if(/pend|unpaid|new/.test(t))return 'pending';return '';}
+function dziDate(v){var t=String(v||'').trim();if(!t)return '';var m=t.match(/(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})/);if(m)return m[1]+'-'+('0'+m[2]).slice(-2)+'-'+('0'+m[3]).slice(-2);
+  m=t.match(/(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{4})/);if(m)return m[3]+'-'+('0'+m[2]).slice(-2)+'-'+('0'+m[1]).slice(-2);
+  var d=new Date(t);return isNaN(d)?'':d.toISOString().slice(0,10);}
+function dziProduct(name,sku){var n=dziNorm(name),s=dziNorm(sku),i,p;
+  for(i=0;i<DZI_PRODUCTS.length;i++){p=DZI_PRODUCTS[i];if(s&&(dziNorm(p.dsku)===s||dziNorm(p.sku)===s))return p;}
+  for(i=0;i<DZI_PRODUCTS.length;i++){p=DZI_PRODUCTS[i];if(n&&dziNorm(p.name)===n)return p;}
+  for(i=0;i<DZI_PRODUCTS.length;i++){p=DZI_PRODUCTS[i];var pn=dziNorm(p.name);if(n&&pn.length>3&&(n.indexOf(pn)>-1||pn.indexOf(n)>-1))return p;}
+  return null;}
+function dziParse(){
+  var lines=document.getElementById('dziText').value.split(/\r?\n/).filter(function(l){return l.trim()!=='';});
+  if(!lines.length)return {rows:[],header:false};
+  var head=dziSplit(lines[0]).map(dziNorm),map={},hits=0;
+  head.forEach(function(h,i){for(var k in DZI_SYN){if(map[k]===undefined&&DZI_SYN[k].indexOf(h)>-1){map[k]=i;hits++;return;}}});
+  var header=hits>=2;
+  if(header)lines=lines.slice(1);else map={dz:0,customer:1,phone:2,address:3,product:4,qty:5,price:6};
+  var defSt=document.getElementById('dzi_defst').value,defDate=document.getElementById('dzi_defdate').value,grouped={},out=[];
+  lines.forEach(function(l){
+    var f=dziSplit(l).map(function(x){return String(x).trim().replace(/^"|"$/g,'');});
+    function g(k){var i=map[k];return i===undefined?'':(f[i]||'');}
+    var item=g('product')||g('sku'),p=dziProduct(g('product'),g('sku'));
+    var r={daraz_order_id:g('dz').replace(/\D+/g,''),date:dziDate(g('date'))||defDate,customer:g('customer'),phone:g('phone'),address:g('address'),
+      item:item,sku:g('sku'),product_id:p?p.id:0,product_name:p?p.name:'',qty:Math.max(1,parseInt(dziNum(g('qty')))||1),
+      price:dziNum(g('price'))||(p?p.price:0),fees:dziNum(g('fees')),status:dziStatus(g('status'))||defSt,
+      payment:/cod|cash/.test(dziNorm(g('payment')))||!g('payment')?'cod':'prepaid'};
+    if(!r.customer&&!item&&!r.daraz_order_id)return;
+    /* Daraz exports one row per piece: same order + same item + same price -> one line, qty added up */
+    var key=r.daraz_order_id?(r.daraz_order_id+'|'+(r.product_id||dziNorm(item))+'|'+r.price+'|'+r.status):null;
+    if(key&&grouped[key]){grouped[key].qty+=r.qty;grouped[key].fees+=r.fees;return;}
+    if(key)grouped[key]=r;out.push(r);
+  });
+  return {rows:out,header:header};
+}
+var dziData=null;
+function dziPreview(){
+  var res=dziParse(),rows=res.rows,box=document.getElementById('dziOut'),skip=document.getElementById('dzi_skip').checked;
+  var ex={};DZI_EXISTING.forEach(function(x){ex[x]=1;});
+  var nNew=0,nDup=0,nWarn=0,html='';
+  if(!rows.length){box.innerHTML='';document.getElementById('dziSum').textContent='';document.getElementById('dziBtn').disabled=true;dziData=null;return;}
+  html='<div class="muted" style="font-size:12px">'+(res.header?'✅ Column names recognised from the first line.':'ℹ️ No column names found — using the default order.')+'</div>';
+  html+='<table class="dzi-tbl"><tr><th></th><th>Daraz #</th><th>Date</th><th>Customer</th><th>Phone</th><th>Product</th><th>Qty</th><th>Price</th><th>Charges</th><th>Status</th></tr>';
+  rows.forEach(function(r){
+    var dup=skip&&r.daraz_order_id&&ex[r.daraz_order_id];r._skip=!!dup;
+    if(dup)nDup++;else{nNew++;if(!r.product_id)nWarn++;}
+    var tag=dup?'<span class="dzi-tag dzi-skip">already in ERP</span>':(r.product_id?'<span class="dzi-tag dzi-ok">✓</span>':'<span class="dzi-tag dzi-warn">no product</span>');
+    html+='<tr'+(dup?' class="dup"':'')+'><td>'+tag+'</td><td>'+dziEsc(r.daraz_order_id||'—')+'</td><td>'+dziEsc(r.date)+'</td><td>'+dziEsc(r.customer||'—')+'</td><td>'+dziEsc(r.phone)+'</td><td title="'+dziEsc(r.item)+'">'+dziEsc(r.product_name||r.item||'—')+'</td><td>'+r.qty+'</td><td>'+Math.round(r.price)+'</td><td>'+(r.fees?Math.round(r.fees):'')+'</td><td>'+dziEsc(r.status)+'</td></tr>';
+  });
+  box.innerHTML=html+'</table>';
+  document.getElementById('dziSum').innerHTML='<b>'+nNew+'</b> line(s) to import'+(nDup?' · '+nDup+' skipped':'')+(nWarn?' · <span style="color:#b45309">'+nWarn+' without a matched product (imported, fix later)</span>':'');
+  document.getElementById('dziBtn').disabled=!nNew;
+  dziData=rows;
+}
+function dziSubmit(){
+  if(!dziData)return false;
+  var send=dziData.filter(function(r){return !r._skip;}).map(function(r){return {daraz_order_id:r.daraz_order_id,date:r.date,customer:r.customer,phone:r.phone,address:r.address,
+    item:r.item,sku:r.sku,product_id:r.product_id,qty:r.qty,price:r.price,fees:r.fees,status:r.status,payment:r.payment};});
+  if(!send.length)return false;
+  document.getElementById('dzi_rows').value=JSON.stringify(send);
+  document.getElementById('dzi_skipped').value=dziData.length-send.length;
+  document.getElementById('dziBtn').disabled=true;document.getElementById('dziBtn').textContent='Importing…';
+  return true;
+}
+function dziOpen(){document.getElementById('dziText').value='';dziPreview();document.getElementById('dziModal').classList.add('open');document.body.classList.add('modal-open');setTimeout(function(){document.getElementById('dziText').focus();},60);}
+function dziClose(){document.getElementById('dziModal').classList.remove('open');document.body.classList.remove('modal-open');}
+(function(){var m=document.getElementById('dziModal');m.addEventListener('click',function(e){if(e.target===m)dziClose();});})();
+</script>
 <!-- book / edit a Daraz order -->
 <div class="modal-bg" id="dzoModal" style="z-index:99980"><form class="modal" method="post" style="width:640px;max-width:96vw">
   <div class="modal-head"><span id="dzoTitle">＋ New Daraz order</span><span class="mx" onclick="dzoClose()">✕</span></div>

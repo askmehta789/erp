@@ -63,35 +63,55 @@ $fileTitle = 'Statement - '.$payee['name'].' - '.date('Y-m-d');
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title><?= e($fileTitle) ?></title>
 <style>
+/* ERP palette: brand blue → indigo, slate text, soft grey surfaces, green = paid, amber = due */
+:root{--brand:#3b82f6;--brand-2:#6366f1;--brand-soft:#eff6ff;--ink:#0f172a;--muted:#64748b;--border:#e9edf3;--bg:#f3f4f8;
+  --green:#16a34a;--green-bg:#dcfce7;--amber:#d97706;--amber-bg:#fef3c7;--grad:linear-gradient(135deg,#3b82f6,#6366f1)}
 *{box-sizing:border-box}
-body{margin:0;padding:24px 14px;background:#eef1f6;font-family:Inter,Segoe UI,Roboto,Arial,sans-serif;color:#1f2937;font-size:13px}
-.sheet{max-width:900px;margin:0 auto;background:#fff;border-radius:14px;padding:32px 34px;border:1px solid #e5e7eb}
-.top{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;border-bottom:2px solid #1f2937;padding-bottom:14px;margin-bottom:18px}
+body{margin:0;padding:24px 14px;background:var(--bg);font-family:Inter,system-ui,'Segoe UI',Roboto,Arial,sans-serif;color:var(--ink);font-size:13px;-webkit-font-smoothing:antialiased}
+.sheet{max-width:900px;margin:0 auto;background:#fff;border-radius:18px;padding:0 0 28px;border:1px solid var(--border);box-shadow:0 8px 28px rgba(30,41,59,.07);overflow:hidden}
+.band{height:6px;background:var(--grad)}
+.inner{padding:26px 32px 0}
+.top{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;padding-bottom:16px;margin-bottom:18px;border-bottom:1px solid var(--border)}
 .logo{display:flex;gap:10px;align-items:center}.logo img{height:40px}
-.muted{color:#667085;font-size:12px}
-h1{font-size:24px;margin:0 0 4px;font-weight:700}
-.meta{display:flex;gap:28px;flex-wrap:wrap;margin:0 0 16px;font-size:13.5px}
-.meta b{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#667085;margin-bottom:2px}
-table{width:100%;border-collapse:collapse}
-th{background:#2b80c5;color:#fff;text-align:left;padding:10px 11px;font-size:13px;font-weight:600;white-space:nowrap}
-td{padding:9px 11px;border:1px solid #e5e7eb;vertical-align:top}
+.logo b{font-size:15px}
+.muted{color:var(--muted);font-size:12px}
+.gen{display:inline-block;font-size:11.5px;font-weight:700;color:var(--brand);background:var(--brand-soft);border-radius:999px;padding:4px 10px}
+h1{font-size:23px;margin:0 0 4px;font-weight:800;letter-spacing:-.01em}
+h1 .grad{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+.meta{display:flex;gap:28px;flex-wrap:wrap;margin:10px 0 18px;font-size:13.5px}
+.meta b{display:block;font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:2px}
+table{width:100%;border-collapse:separate;border-spacing:0;border:1px solid var(--border);border-radius:12px;overflow:hidden}
+thead tr{background:var(--grad)}
+th{background:transparent;color:#fff;text-align:left;padding:11px 12px;font-size:12px;font-weight:700;white-space:nowrap;letter-spacing:.02em}
+td{padding:10px 12px;border-top:1px solid var(--border);vertical-align:top}
+tbody tr:nth-child(even) td{background:#f8fafc}
 .r{text-align:right;white-space:nowrap}.c{text-align:center}
-tr.open td{background:#f8fafc;font-style:italic;color:#475569}
-tr.row-paid td.amt{color:#047857}
-.sum{margin-top:20px;font-size:15px;line-height:1.9}
-.sum .big{font-size:18px;font-weight:800}
-.due{color:#b45309}.adv{color:#047857}
-.foot{margin-top:30px;display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap}
-.sig{border-top:1px solid #999;width:200px;text-align:center;padding-top:6px;font-size:12px;color:#667085}
+tr.open td{background:var(--brand-soft)!important;font-style:italic;color:#475569}
+td.due-amt{color:var(--ink);font-weight:600}
+tr.row-paid td.amt{color:var(--green);font-weight:700}
+td.bal{font-weight:700}
+.sum{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-top:20px}
+.sum .k{border:1px solid var(--border);border-radius:12px;padding:12px 14px;background:#f8fafc}
+.sum .k span{display:block;font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+.sum .k b{display:block;font-size:17px;margin-top:3px}
+.sum .k.paid b{color:var(--green)}
+.sum .k.final{background:var(--grad);border:0;color:#fff}
+.sum .k.final span{color:rgba(255,255,255,.85)}
+.sum .k.final b{font-size:20px;color:#fff}
+.sum .k.final small{display:block;font-size:11.5px;font-weight:700;opacity:.9;margin-top:1px}
+.sum .k.final.settled{background:linear-gradient(135deg,#16a34a,#14b8a6)}
+.foot{margin-top:26px;display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap}
+.sig{border-top:1px solid #94a3b8;width:200px;text-align:center;padding-top:6px;font-size:12px;color:var(--muted)}
 .bar{max-width:900px;margin:0 auto 14px;display:flex;gap:8px;justify-content:space-between;flex-wrap:wrap;align-items:center}
 .bar form{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
-.bar input,.bar select{border:1px solid #cbd5e1;border-radius:8px;padding:8px 10px;font-size:13px;background:#fff}
-.btn{background:#3b82f6;color:#fff;border:0;border-radius:8px;padding:9px 14px;font-weight:700;cursor:pointer;text-decoration:none;font-size:13px;display:inline-block}
-.btn.gray{background:#64748b}.btn.light{background:#fff;color:#1f2937;border:1px solid #cbd5e1}
+.bar input,.bar select{border:1px solid #cbd5e1;border-radius:999px;padding:7px 12px;font-size:12.5px;background:#fff;color:var(--ink)}
+.btn{background:var(--grad);color:#fff;border:0;border-radius:999px;padding:9px 16px;font-weight:700;cursor:pointer;text-decoration:none;font-size:12.5px;display:inline-block;box-shadow:0 6px 18px rgba(59,130,246,.28)}
+.btn.gray{background:#64748b;box-shadow:none}.btn.light{background:#fff;color:var(--ink);border:1px solid #cbd5e1;box-shadow:none}
+.btn.light:hover{border-color:var(--brand);color:var(--brand)}
 .pills{display:flex;gap:6px;flex-wrap:wrap}
-@media(max-width:640px){.sheet{padding:18px 14px}h1{font-size:19px}th,td{padding:7px 6px;font-size:11.5px}.hide-sm{display:none}}
-@media print{body{background:#fff;padding:0}.bar{display:none}.sheet{border:0;border-radius:0;max-width:none;padding:0}
-  th{-webkit-print-color-adjust:exact;print-color-adjust:exact}tr.open td{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+@media(max-width:640px){.inner{padding:18px 14px 0}h1{font-size:19px}th,td{padding:7px 6px;font-size:11.5px}.hide-sm{display:none}}
+@media print{body{background:#fff;padding:0}.bar{display:none}.sheet{border:0;border-radius:0;max-width:none;box-shadow:none}
+  .band,thead tr,th,.sum .k.final,tr.open td,tbody tr:nth-child(even) td,.gen{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
 </style></head><body>
 
 <div class="bar">
@@ -113,14 +133,14 @@ tr.row-paid td.amt{color:#047857}
   </div>
 </div>
 
-<div class="sheet">
+<div class="sheet"><div class="band"></div><div class="inner">
   <div class="top">
     <div class="logo"><img src="assets/luprah-logo.png" alt=""><div><b><?= e($store) ?></b>
       <div class="muted"><?= e($sAddr) ?><?= $sAddr && $sPhone ? ' · ' : '' ?><?= e($sPhone) ?><?= $sPan ? ' · PAN: '.e($sPan) : '' ?></div></div></div>
-    <div class="muted" style="text-align:right">Generated: <?= date('d/m/Y H:i') ?></div>
+    <div style="text-align:right"><span class="gen">Generated <?= date('d/m/Y H:i') ?></span></div>
   </div>
 
-  <h1>Party Statement — <?= e($payee['name']) ?></h1>
+  <h1><span class="grad">Party Statement</span> — <?= e($payee['name']) ?></h1>
   <div class="meta">
     <div><b>Period</b><?= e($period) ?></div>
     <?php if ($product !== ''): ?><div><b>Product</b><?= e($product) ?></div><?php endif; ?>
@@ -136,9 +156,9 @@ tr.row-paid td.amt{color:#047857}
         <td><?= e($L['date']) ?></td>
         <td class="hide-sm"><?= e($L['ref']) ?></td>
         <td><?= e($L['what']) ?></td>
-        <td class="r"><?= $L['due'] !== null ? $rs($L['due']) : '-' ?></td>
+        <td class="r due-amt"><?= $L['due'] !== null ? $rs($L['due']) : '-' ?></td>
         <td class="r amt"><?= $L['paid'] !== null ? $rs($L['paid']) : '-' ?></td>
-        <td class="r"><?= $rs($L['bal']) ?></td>
+        <td class="r bal"><?= $rs($L['bal']) ?></td>
       </tr>
     <?php endforeach; ?>
     <?php if ($from): ?>
@@ -149,16 +169,16 @@ tr.row-paid td.amt{color:#047857}
   </table>
 
   <div class="sum">
-    <?php if ($from): ?><div>Opening Balance: <?= $rs($opening) ?></div><?php endif; ?>
-    <div>Total Bills (Due): <?= $rs($tDue) ?></div>
-    <div>Total Paid: <?= $rs($tPaid) ?></div>
-    <div class="big <?= $closing > 0.5 ? 'due' : 'adv' ?>">Balance: <?= $rs(abs($closing)) ?>
-      <?= $closing > 0.5 ? '(Left to pay)' : ($closing < -0.5 ? '(Advance paid)' : '(Settled)') ?></div>
+    <?php if ($from): ?><div class="k"><span>Opening balance</span><b><?= $rs($opening) ?></b></div><?php endif; ?>
+    <div class="k"><span>Total bills (due)</span><b><?= $rs($tDue) ?></b></div>
+    <div class="k paid"><span>Total paid</span><b><?= $rs($tPaid) ?></b></div>
+    <div class="k final<?= $closing > 0.5 ? '' : ' settled' ?>"><span>Balance</span><b><?= $rs(abs($closing)) ?></b>
+      <small><?= $closing > 0.5 ? 'Left to pay' : ($closing < -0.5 ? 'Advance paid' : 'Settled') ?></small></div>
   </div>
 
   <div class="foot">
     <div class="muted">Balance = bills − payments<?= $from ? ', including the opening balance' : '' ?>. Please contact us if anything doesn't match your records.</div>
     <div class="sig">Authorised signature</div>
   </div>
-</div>
+</div></div>
 </body></html>

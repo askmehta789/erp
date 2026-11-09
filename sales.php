@@ -361,30 +361,65 @@ require __DIR__.'/includes/header.php';
 .rowdel:hover{opacity:1;background:#fee2e2}
 #hotBox{width:100%}
 .ht_master .wtHolder{overflow:auto}
+/* ---- tidy header: 2 actions + More menu ---- */
+.sl-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.sl-more{position:relative}
+.sl-menu{position:absolute;right:0;top:calc(100% + 6px);z-index:9998;display:none;min-width:230px;padding:6px;border-radius:14px;
+  background:rgba(255,255,255,.97);backdrop-filter:blur(20px);border:1px solid rgba(148,163,184,.25);box-shadow:0 20px 50px rgba(15,23,42,.18)}
+body.dark .sl-menu{background:rgba(15,23,42,.97);border-color:rgba(148,163,184,.2)}
+.sl-menu.open{display:block}
+.sl-mi{display:flex;align-items:center;gap:8px;width:100%;text-align:left;padding:9px 12px;border:0;background:none;border-radius:9px;font:inherit;font-size:13px;font-weight:700;color:var(--ink);cursor:pointer;text-decoration:none}
+.sl-mi:hover{background:rgba(59,130,246,.1)}
+.sl-mi .muted{font-weight:500;font-size:11.5px;margin-left:auto}
+.sl-mi:disabled{opacity:.5;cursor:not-allowed}
+.sl-sep{height:1px;background:rgba(148,163,184,.25);margin:4px 6px}
+.sl-more .colpanel{right:0;top:calc(100% + 6px)}
+/* ---- number cards: always one even row, never cut off ---- */
+.stat-strip{grid-template-columns:repeat(5,minmax(0,1fr));gap:14px}
+.stat-strip .stat{min-width:0;padding:14px 16px}
+.stat-strip .stat .v{font-size:clamp(16px,1.5vw,21px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* ---- sheet toolbar + status chips: even padding, chips never clipped ---- */
+.sheet-toolbar{padding:12px 16px;gap:8px}
+.sl-undo{display:inline-flex;gap:4px}
+#chipBar{padding:10px 16px;margin:0;gap:8px;flex-wrap:wrap;border-bottom:1px solid var(--border)}
+@media(max-width:1100px){.stat-strip{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:640px){
+  .stat-strip{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+  .stat-strip .stat:last-child{grid-column:1/-1}
+  .stat-strip .stat .v{font-size:17px}
+  .sl-actions{width:100%}
+  .sl-actions>.btn{flex:1}
+  #chipBar{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+  #chipBar::-webkit-scrollbar{display:none}
+  .sheet-toolbar .search-in{max-width:none!important;flex:1 1 100%}
+}
 </style>
 
 <div class="page-head">
   <div><h1>Sales</h1><p>Works like Google Sheets — type in the empty bottom row to add orders, edit any cell, sort &amp; filter by clicking column headers</p></div>
-  <div style="display:flex;gap:10px">
-    <div class="colpick">
-      <button class="btn" id="colBtn">⚙ Columns</button>
-      <div class="colpanel" id="colPanel"></div>
-    </div>
-    <button class="btn" id="importBtn">📋 Paste Import</button>
-    <button class="btn" id="assignLuprahBtn" title="Bulk-tag every order with no sales person as Luprah (company sales)">🏢 Unassigned → Luprah</button>
-    <a class="btn" href="labels.php" target="_blank">🏷 Print Labels</a>
-    <button class="btn" id="csvBtn">⬇ Export CSV</button>
+  <!-- header keeps the two everyday actions; the rest live in one "More" menu -->
+  <div class="sl-actions">
     <button class="btn" id="addRowBtn">＋ Add Row</button>
     <button class="btn btn-primary" id="addFormBtn">📝 New Order</button>
-    <button class="btn" onclick="try{hot.undo()}catch(e){}" title="Undo (Ctrl+Z)">↩️ Undo</button>
-    <button class="btn" onclick="try{hot.redo()}catch(e){}" title="Redo (Ctrl+Y)">↪️ Redo</button>
+    <div class="sl-more">
+      <button class="btn" id="moreBtn" aria-haspopup="true" aria-expanded="false">⋯ More <span style="font-size:10px">▾</span></button>
+      <div class="sl-menu" id="moreMenu" role="menu">
+        <button type="button" class="sl-mi" id="colBtn">⚙ Columns <span class="muted">show / hide</span></button>
+        <button type="button" class="sl-mi" id="importBtn">📋 Paste Import</button>
+        <button type="button" class="sl-mi" id="csvBtn">⬇ Export CSV</button>
+        <a class="sl-mi" href="labels.php" target="_blank">🏷 Print Labels</a>
+        <div class="sl-sep"></div>
+        <button type="button" class="sl-mi" id="assignLuprahBtn" title="Bulk-tag every order with no sales person as Luprah (company sales)">🏢 Unassigned → Luprah</button>
+      </div>
+      <div class="colpanel" id="colPanel"></div>
+    </div>
   </div>
 </div>
 
 <div class="flash" id="dashFilterBanner" style="display:none;background:rgba(99,102,241,.1);color:#4338ca;align-items:center;gap:10px;flex-wrap:wrap"></div>
 
 <div class="stat-strip">
-  <div class="card stat"><div class="l">Total Orders</div><div class="v num" id="stTotal"><?= count($orders) ?></div></div>
+  <div class="card stat"><div class="l">Total Orders</div><div class="v num" id="stTotal"><?= number_format(count($orders)) ?></div></div>
   <div class="card stat"><div class="l">Units Delivered</div><div class="v num" id="stUnits" style="color:var(--green)"><?= number_format($sUnits) ?></div></div>
   <div class="card stat"><div class="l">Delivered Revenue</div><div class="v num" id="stRev" style="color:var(--green)"><?= money($sRev) ?></div></div>
   <div class="card stat"><div class="l">Delivery Charges</div><div class="v num muted" id="stDel"><?= money($sDel) ?></div></div>
@@ -399,6 +434,10 @@ require __DIR__.'/includes/header.php';
     <button class="btn btn-sm" id="sortDirBtn" onclick="toggleSortDir()" title="Flip between newest-on-top and oldest-on-top">⬇ Newest first</button>
     <button class="btn btn-sm" onclick="hot.scrollViewportTo(0,0)" title="Jump to top">⤒</button>
     <button class="btn btn-sm" onclick="hot.scrollViewportTo(Math.max(0,VIEW.length-1),0)" title="Jump to end">⤓</button>
+    <span class="sl-undo">
+      <button class="btn btn-sm" onclick="try{hot.undo()}catch(e){}" title="Undo (Ctrl+Z)" aria-label="Undo">↩️</button>
+      <button class="btn btn-sm" onclick="try{hot.redo()}catch(e){}" title="Redo (Ctrl+Y)" aria-label="Redo">↪️</button>
+    </span>
     <span id="saveStatus" class="save-ind idle">● All saved</span>
     <span class="muted" id="rowCount" style="margin-left:auto;font-size:13px"><?= count($orders) ?> rows</span>
   </div>
@@ -910,7 +949,7 @@ function updateStats(){ updateRowCount(); if(typeof updateChips==='function')upd
   var rev=0,del=0,prof=0,units=0;
   scope.forEach(function(o){rev+=parseFloat(o.revenue)||0;prof+=parseFloat(o.profit)||0;if(o.status==='delivered'){del+=parseFloat(o.delivery_charge)||0;units+=parseInt(o.qty)||0;}});
   var su=document.getElementById('stUnits'); if(su)su.textContent=units.toLocaleString();
-  document.getElementById('stTotal').textContent=scope.length;
+  document.getElementById('stTotal').textContent=scope.length.toLocaleString();
   document.getElementById('stRev').textContent=fmt(rev);
   document.getElementById('stDel').textContent=fmt(del);
   document.getElementById('stProfit').textContent=fmt(prof);
@@ -1637,6 +1676,18 @@ function labelsSel(){var ids=selRows().map(function(o){return o._id;});
   });
   btn.onclick=function(e){e.stopPropagation();panel.classList.toggle('open');};
   document.addEventListener('click',function(e){if(!panel.contains(e.target))panel.classList.remove('open');});
+})();
+
+/* ===== header "More" menu (Columns, Paste Import, Export CSV, Labels, Unassigned → Luprah) ===== */
+(function(){
+  var mb=document.getElementById('moreBtn'), mm=document.getElementById('moreMenu');
+  if(!mb||!mm) return;
+  function setOpen(on){mm.classList.toggle('open',on);mb.setAttribute('aria-expanded',on?'true':'false');}
+  mb.addEventListener('click',function(e){e.stopPropagation();setOpen(!mm.classList.contains('open'));});
+  /* any item closes the menu (its own click handler still runs) */
+  mm.querySelectorAll('.sl-mi').forEach(function(it){it.addEventListener('click',function(){setOpen(false);});});
+  document.addEventListener('click',function(e){if(!mm.contains(e.target)&&e.target!==mb)setOpen(false);});
+  document.addEventListener('keydown',function(e){if(e.key==='Escape')setOpen(false);});
 })();
 
 /* ===== paste import ===== */

@@ -90,11 +90,12 @@ function nav_items_raw() {
   ], $darazGrp, [
     ['grp','delivery','🚚','Delivery', $deliveryKids],
     ['grp','money','💰','Money', [
+      /* overview → where money sits → money owed to you → money going out → what you owe vendors */
       ['money_dashboard.php','💰','Money Dashboard'],
-      ['cod.php','💵','COD Ledger'],
-      ['payees.php','📣','Ads & Vendors'],
       ['banks.php','🏦','Bank Accounts'],
+      ['cod.php','💵','COD Ledger'],
       ['expenses.php','💸','Expenses'],
+      ['payees.php','📣','Ads & Vendors'],
     ]],
     ['grp','analytics','📈','Analytics', [
       ['analytics.php','📈','Overview'],

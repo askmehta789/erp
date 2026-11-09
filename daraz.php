@@ -134,8 +134,8 @@ body.dark .dz-map-head h2{color:#fbbf24}
 <div class="mgrid">
   <div class="metric blue"><span class="g">🛍</span><div class="mv"><?= $newToday ?></div><div class="ml">New orders today
     <?php if ($delta): ?><span class="<?= $delta>0?'dz-up':'dz-dn' ?>"><?= $delta>0?'▲':'▼' ?> <?= abs($delta) ?> vs yesterday</span><?php else: ?>· same as yesterday<?php endif; ?></div></div>
-  <a class="metric amber" style="text-decoration:none;color:inherit" href="daraz_sales.php?from=2000-01-01&to=<?= $today ?>&st=pack"><span class="g">📦</span><div class="mv"><?= $toPack ?></div><div class="ml">To pack now</div></a>
-  <a class="metric orange" style="text-decoration:none;color:inherit" href="daraz_sales.php?from=2000-01-01&to=<?= $today ?>&st=shipped"><span class="g">🚚</span><div class="mv"><?= $inTransit ?></div><div class="ml">In transit now</div></a>
+  <a class="metric amber" style="text-decoration:none;color:inherit" href="daraz_sales.php?view=list&from=2000-01-01&to=<?= $today ?>&st=pack"><span class="g">📦</span><div class="mv"><?= $toPack ?></div><div class="ml">To pack now</div></a>
+  <a class="metric orange" style="text-decoration:none;color:inherit" href="daraz_sales.php?view=list&from=2000-01-01&to=<?= $today ?>&st=shipped"><span class="g">🚚</span><div class="mv"><?= $inTransit ?></div><div class="ml">In transit now</div></a>
   <div class="metric red"><span class="g">↩️</span><div class="mv"><?= (int)$M['returned'] ?></div><div class="ml">Returned this month<?= $M['ret_rate']!==null ? ' · '.round($M['ret_rate'],1).'%' : '' ?></div></div>
 </div>
 
@@ -172,16 +172,16 @@ body.dark .dz-map-head h2{color:#fbbf24}
     <div class="panel-head" style="padding:0 0 4px"><h2>⚠ Needs attention</h2></div>
     <?php $any = false; ?>
     <?php if ($darazUnmatched): $any = true; ?><a class="dzd-att a1" href="#mapSku"><span>🔗 <?= count($darazUnmatched) ?> Daraz SKU(s) not matched to a product</span><span>Map →</span></a><?php endif; ?>
-    <?php if ($noFees): $any = true; ?><a class="dzd-att a2" href="daraz_sales.php?from=<?= date('Y-m-d', strtotime('-60 days')) ?>&to=<?= $today ?>&f=nofee"><span>💸 <?= $noFees ?> delivered order(s) with no Daraz fees — profit looks too high</span><span>Fix →</span></a><?php endif; ?>
-    <?php if ($stuck): $any = true; ?><a class="dzd-att a3" href="daraz_sales.php?from=2000-01-01&to=<?= $today ?>&st=pack"><span>⏳ <?= $stuck ?> order(s) waiting to pack for over 3 days</span><span>View →</span></a><?php endif; ?>
-    <?php if ($unlinked): $any = true; ?><a class="dzd-att a4" href="daraz_sales.php?from=<?= date('Y-m-d', strtotime('-60 days')) ?>&to=<?= $today ?>&f=unlinked"><span>🔗 <?= $unlinked ?> booked order line(s) not linked to a Daraz order number yet (last 60 days)</span><span>Link →</span></a><?php endif; ?>
+    <?php if ($noFees): $any = true; ?><a class="dzd-att a2" href="daraz_sales.php?view=list&from=<?= date('Y-m-d', strtotime('-60 days')) ?>&to=<?= $today ?>&f=nofee"><span>💸 <?= $noFees ?> delivered order(s) with no Daraz fees — profit looks too high</span><span>Fix →</span></a><?php endif; ?>
+    <?php if ($stuck): $any = true; ?><a class="dzd-att a3" href="daraz_sales.php?view=list&from=2000-01-01&to=<?= $today ?>&st=pack"><span>⏳ <?= $stuck ?> order(s) waiting to pack for over 3 days</span><span>View →</span></a><?php endif; ?>
+    <?php if ($unlinked): $any = true; ?><a class="dzd-att a4" href="daraz_sales.php?view=list&from=<?= date('Y-m-d', strtotime('-60 days')) ?>&to=<?= $today ?>&f=unlinked"><span>🔗 <?= $unlinked ?> booked order line(s) not linked to a Daraz order number yet (last 60 days)</span><span>Link →</span></a><?php endif; ?>
     <?php if (!$any): ?><div class="dzd-ok">✓ All clear — nothing needs fixing right now.</div><?php endif; ?>
   </div>
 
   <div class="dzd-sec">This month by status — click to open in Daraz Sales</div>
   <div class="dz-pipe">
     <?php foreach ($pipe as $gk => [$lbl,$sts,$col]): $pd = $pipeData[$gk]; ?>
-    <a class="dz-col" style="--c:<?= $col ?>" href="daraz_sales.php?range=month&st=<?= $gk==='returned'?'returned':$gk ?>">
+    <a class="dz-col" style="--c:<?= $col ?>" href="daraz_sales.php?view=list&range=month&st=<?= $gk==='returned'?'returned':$gk ?>">
       <div class="dz-col-h"><span><?= e($lbl) ?></span><span class="dz-col-n"><?= $pd['n'] ?></span></div>
       <div class="dz-col-amt"><?= money($pd['amt']) ?> order value</div>
       <?php foreach ($pd['items'] as $it): ?><div class="dz-mini"><?= e($it['customer'] ?: '—') ?> <span>· <?= e($it['product_name'] ?: ($it['daraz_item_name'] ?? '') ?: 'item') ?></span></div><?php endforeach; ?>

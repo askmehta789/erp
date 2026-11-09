@@ -13,6 +13,11 @@ ensure_order_exchange_cols();
 try { q("ALTER TABLE orders ADD COLUMN IF NOT EXISTS sales_person_id INT NULL AFTER code"); } catch (Exception $e) {}
 try { q("ALTER TABLE orders ADD INDEX idx_sales_person_id (sales_person_id)"); } catch (Exception $e) {}
 ensure_company_salesperson();
+/* Daraz Sales opens this same spreadsheet in Daraz-only mode (daraz_sales.php defines the flag):
+   only Daraz orders are shown and saved here, with a Daraz order number column */
+$DZMODE = defined('SALES_DARAZ_MODE');
+if ($DZMODE) daraz_ensure_cols();
+$SELF = basename($_SERVER['PHP_SELF']);
 
 /* ---------------------------------------------------------------------
    AJAX ENDPOINT  (same file)   sales.php?ajax=1
@@ -39,7 +44,12 @@ if (isset($_GET['ajax'])) {
 
     /* Daraz orders live in Daraz Sales only — this sheet never creates, edits or deletes them */
     $DZ_CID = (int)val("SELECT id FROM couriers WHERE LOWER(name)='daraz' ORDER BY id LIMIT 1");
-    if ($DZ_CID) {
+    if ($DZ_CID && $DZMODE) {
+        if (in_array($op, ['add','create','create_multi','update'], true)) $_POST['courier_id'] = $DZ_CID;   /* always a Daraz order here */
+        if (in_array($op, ['update','delete'], true) && (int)val("SELECT COALESCE(courier_id,0) FROM orders WHERE id=?", [(int)($_POST['id'] ?? 0)]) !== $DZ_CID) {
+            echo json_encode(['ok'=>false,'error'=>'This sheet only edits Daraz orders.']); exit;
+        }
+    } elseif ($DZ_CID) {
         $toDaraz = (int)($_POST['courier_id'] ?? 0) === $DZ_CID;
         $isDaraz = in_array($op, ['update','delete'], true) && (int)val("SELECT COALESCE(courier_id,0) FROM orders WHERE id=?", [(int)($_POST['id'] ?? 0)]) === $DZ_CID;
         if ((in_array($op, ['add','create','create_multi','update'], true) && $toDaraz) || $isDaraz) {
@@ -74,7 +84,7 @@ if (isset($_GET['ajax'])) {
                           ? (float)$_POST['exchange_charge'] : 0.0)
                       : 0.0;
 
-        return [
+        $__f = [
             'order_date'      => ($_POST['order_date'] ?? '') ?: date('Y-m-d'),
             'customer'        => trim($_POST['customer']  ?? ''),
             'phone'           => trim($_POST['phone']     ?? ''),
@@ -95,6 +105,13 @@ if (isset($_GET['ajax'])) {
             'remarks'         => trim($_POST['remarks'] ?? ''),
             'order_group'     => (($g=trim($_POST['order_group'] ?? ''))!=='' ? $g : null),
         ];
+        if (defined('SALES_DARAZ_MODE')) {
+            $dzn = preg_replace('/\D+/', '', (string)($_POST['daraz_order_id'] ?? ''));
+            if ($dzn === '' && preg_match('/^\s*(?:Daraz\s*#?\s*)?(\d{9,})\s*$/i', $__f['remarks'], $mm)) $dzn = $mm[1];
+            $__f['daraz_order_id'] = $dzn !== '' ? $dzn : null;
+            $__f['phone'] = daraz_clean_phone($__f['phone']);
+        }
+        return $__f;
     };
 
     $fullRow = function($id) {
@@ -147,6 +164,12 @@ if (isset($_GET['ajax'])) {
                   'zone'=>$zone,'payment_type'=>$ptype,'payment_status'=>$pay_status,'status'=>$status,
                   'courier_id'=>$cid,'remarks'=>$remarks,'order_group'=>$grp,
                 ];
+                if (defined('SALES_DARAZ_MODE')) {
+                  $dzn = preg_replace('/\D+/', '', (string)($_POST['daraz_order_id'] ?? ''));
+                  if ($dzn === '' && preg_match('/^\s*(?:Daraz\s*#?\s*)?(\d{9,})\s*$/i', $remarks, $mm)) $dzn = $mm[1];
+                  $f['daraz_order_id'] = $dzn !== '' ? $dzn : null;
+                  $f['phone'] = daraz_clean_phone($f['phone']);
+                }
                 $cols=implode('`,`',array_keys($f)); $ph=implode(',',array_fill(0,count($f),'?'));
                 q("INSERT INTO orders(`$cols`) VALUES($ph)", array_values($f));
                 $id=(int)db()->lastInsertId();
@@ -283,7 +306,7 @@ if (isset($_GET['ajax'])) {
 /* ---------------------------------------------------------------------
    NORMAL PAGE RENDER
    --------------------------------------------------------------------- */
-$PAGE_TITLE = 'Sales';
+$PAGE_TITLE = $DZMODE ? 'Daraz Sales' : 'Sales';
 $products = rows("SELECT id,name,sku,price,cost,stock,low_stock FROM products ORDER BY name");
 /* bulk FIFO cost lookup instead of fifo_current_cost() per product — that was 2 DB
    round-trips (a migration-check COUNT + the cost SELECT) for every single product on
@@ -303,7 +326,7 @@ try { q("ALTER TABLE couriers ADD COLUMN IF NOT EXISTS default_delivery DECIMAL(
 /* Daraz has its own Sales sheet (Daraz → Daraz Sales): its orders and the Daraz courier
    are left out of this sheet entirely */
 $dzCidMain = (int)val("SELECT id FROM couriers WHERE LOWER(name)='daraz' ORDER BY id LIMIT 1");
-$couriers = rows("SELECT id,name,COALESCE(default_delivery,0) AS default_delivery,COALESCE(cancel_charge,100) AS cancel_charge FROM couriers WHERE status='active' AND LOWER(name)<>'daraz' ORDER BY name");
+$couriers = rows("SELECT id,name,COALESCE(default_delivery,0) AS default_delivery,COALESCE(cancel_charge,100) AS cancel_charge FROM couriers WHERE status='active' AND LOWER(name)".($DZMODE ? "='daraz'" : "<>'daraz'")." ORDER BY name");
 $salespersons = rows("SELECT id,name FROM employees WHERE department='Sales' AND status='active' ORDER BY name");
 $orders   = rows("
     SELECT o.*, p.name AS product_name, c.name AS courier_name, sp.name AS sales_person_name
@@ -311,7 +334,7 @@ $orders   = rows("
     LEFT JOIN products p ON p.id = o.product_id
     LEFT JOIN couriers c ON c.id = o.courier_id
     LEFT JOIN employees sp ON sp.id = o.sales_person_id
-    WHERE  COALESCE(o.courier_id,0) <> ".$dzCidMain."
+    WHERE  COALESCE(o.courier_id,0) ".($DZMODE ? '=' : '<>')." ".$dzCidMain."
     ORDER  BY o.order_date ASC,
              COALESCE((SELECT MIN(g.id) FROM orders g WHERE g.order_group=o.order_group AND o.order_group IS NOT NULL AND o.order_group<>''), o.id) ASC,
              o.id ASC");
@@ -410,11 +433,23 @@ body.dark .sl-menu{background:rgba(15,23,42,.97);border-color:rgba(148,163,184,.
 </style>
 
 <div class="page-head">
+  <?php if ($DZMODE): ?>
+  <div><h1><img src="assets/daraz-icon.ico" alt="" style="height:24px;vertical-align:-4px"> Daraz Sales</h1><p>Only Daraz orders · works like Google Sheets — type in the bottom row to add, edit any cell · <b>Customer Paid</b> = price, <b>Daraz Chg</b> = Daraz charges</p><?= daraz_tabs('daraz_sales.php') ?></div>
+  <?php else: ?>
   <div><h1>Sales</h1><p>Works like Google Sheets — type in the empty bottom row to add orders, edit any cell, sort &amp; filter by clicking column headers</p></div>
+  <?php endif; ?>
   <!-- header keeps the two everyday actions; the rest live in one "More" menu -->
   <div class="sl-actions">
     <a class="btn" href="labels.php" target="_blank" title="Print shipping labels">🏷 Print Labels</a>
+    <?php if ($DZMODE): ?>
+    <button class="btn" type="button" onclick="dzlOpen('')" title="Check or link one order by its Daraz order number">🔗 Check by ID</button>
+    <button class="btn" type="button" onclick="dzSheetSync()" title="Get the latest status, price and Daraz charges for every order shown">🔄 Sync shown</button>
+    <a class="btn" href="daraz_sales.php?view=list&amp;import=1" title="Bulk paste from Excel or the Daraz Seller Center export">📋 Paste Import</a>
+    <a class="btn" href="daraz_sales.php?view=list" title="List with filters and bulk status / charges">☰ List view</a>
+    <span id="importBtn" style="display:none"></span>
+    <?php else: ?>
     <button class="btn" id="importBtn" title="Paste rows copied from Excel / Google Sheets">📋 Paste Import</button>
+    <?php endif; ?>
     <button class="btn" id="addRowBtn">＋ Add Row</button>
     <button class="btn btn-primary" id="addFormBtn">📝 New Order</button>
     <div class="sl-more">
@@ -681,7 +716,7 @@ function toRow(o){
     delivery_charge:parseFloat(o.delivery_charge)||0, zone:(String(o.zone||'').toLowerCase()==='outside')?'Outside':'Inside',
     payment_type:(String(o.payment_type||'').toLowerCase()==='prepaid')?'Prepaid':'COD', payment_status:(String(o.payment_status||'').toLowerCase()==='paid')?'Paid':'Unpaid',
     status:o.status||'pending', courier_name:cour?cour.name:(o.courier_name||''),
-    remarks:o.remarks||'', revenue:parseFloat(o.revenue)||0, profit:parseFloat(o.profit)||0, _ncm:(o.ncm_order_id||''), _group:(o.order_group||''), _sel:false
+    remarks:o.remarks||'', daraz_order_id:o.daraz_order_id||'', revenue:parseFloat(o.revenue)||0, profit:parseFloat(o.profit)||0, _ncm:(o.ncm_order_id||''), _group:(o.order_group||''), _sel:false
   };
 }
 var DATA = ORDERS.map(toRow);
@@ -922,6 +957,8 @@ function profitR(inst,td,r,c,prop,val){
 var COLS=[
   {data:'_sel',title:'✓',width:36,type:'checkbox',className:'htCenter'},
   {data:'code',title:'Order',width:104,readOnly:true,renderer:codeR},
+<?php if ($DZMODE): ?>  {data:'daraz_order_id',title:'Daraz #',width:150},
+<?php endif; ?>
   {data:'sales_person_name',title:'Sales Person',width:130,type:'dropdown',source:spNames,className:'nowrapcell'},
   {data:'product_name',title:'Product',width:150,type:'dropdown',source:prodNames,renderer:prodR},
   {data:'order_date',title:'Date',width:104,type:'date',dateFormat:'YYYY-MM-DD',correctFormat:true},
@@ -930,8 +967,8 @@ var COLS=[
   {data:'address',title:'Address',width:150},
   {data:'zone',title:'Zone',width:88,type:'dropdown',source:ZONES},
   {data:'qty',title:'Quantity',width:80,type:'numeric',renderer:qtyR},
-  {data:'sell_price',title:'Price',width:88,type:'numeric',renderer:priceR},
-  {data:'delivery_charge',title:'Delivery',width:92,type:'autocomplete',source:COMMON_DELIV,strict:false,filter:false,renderer:moneyR},
+  {data:'sell_price',title:<?= $DZMODE ? "'Customer Paid'" : "'Price'" ?>,width:<?= $DZMODE ? 112 : 88 ?>,type:'numeric',renderer:priceR},
+  {data:'delivery_charge',title:<?= $DZMODE ? "'Daraz Chg'" : "'Delivery'" ?>,width:92,type:'autocomplete',source:COMMON_DELIV,strict:false,filter:false,renderer:moneyR},
   {data:'cancel_charge',title:'Cancel Chg',width:92,type:'numeric',renderer:moneyR},
   {data:'exchange_charge',title:'Exchange Chg',width:100,type:'numeric',renderer:moneyR},
   {data:'revenue',title:'Revenue',width:98,readOnly:true,renderer:moneyR},
@@ -975,7 +1012,7 @@ function post(params, cb){
   setSave('saving','● Saving…');
   params.csrf=CSRF;
   var body=Object.keys(params).map(function(k){return encodeURIComponent(k)+'='+encodeURIComponent(params[k]==null?'':params[k]);}).join('&');
-  fetch('sales.php?ajax=1',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},credentials:'same-origin',body:body})
+  fetch(<?= json_encode($SELF.'?ajax=1') ?>,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},credentials:'same-origin',body:body})
    .then(function(r){return r.json();})
    .then(function(d){
      if(d.ok){setSave('saved','✔ Saved');setTimeout(function(){setSave('idle','● All saved');},1500);cb(null,d);}
@@ -994,7 +1031,7 @@ function payload(row){
     delivery_charge:row.delivery_charge, zone:row.zone, payment_type:row.payment_type,
     payment_status:row.payment_status, status:row.status, courier_id:cour?cour.id:'',
     cancel_charge:row.cancel_charge||0, exchange_charge:row.exchange_charge||0, remarks:row.remarks,
-    order_group:row._group||''
+    order_group:row._group||''<?= $DZMODE ? ",\n    daraz_order_id:row.daraz_order_id||''" : '' ?>
   };
 }
 
@@ -1526,7 +1563,7 @@ window.addEventListener('keydown',function(e){
         document.getElementById('f_pay').value='COD';
       },150);
     }
-    if(qs.get('new')==='daraz'){ location.replace('daraz_sales.php?new=1'); return; }   /* Daraz orders are booked in Daraz Sales */
+    if(qs.get('new')==='daraz'<?= $DZMODE ? "&&false" : '' ?>){ location.replace('daraz_sales.php?new=1'); return; }   /* Daraz orders are booked in Daraz Sales */
     if(qs.get('new')==='pickndrop'){
       setTimeout(function(){
         openOrderForm();
@@ -1941,4 +1978,12 @@ document.getElementById('csvBtn').onclick=function(){
 })();
 </script>
 
+<?php if ($DZMODE): ?>
+<?= daraz_shared_css() ?>
+<?= daraz_link_ui() ?>
+<script>
+/* sync every Daraz order currently shown in the sheet (respects filters/search) */
+function dzSheetSync(){ dzlRecheck((VIEW||[]).map(function(r){return r.daraz_order_id;}).filter(Boolean)); }
+</script>
+<?php endif; ?>
 <?php require __DIR__.'/includes/footer.php'; ?>

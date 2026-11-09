@@ -380,9 +380,12 @@ function daraz_range(array $src): array {
 
 /* render the date bar (presets + custom from/to) — $page is the target script */
 function daraz_range_bar(array $R, string $page, string $extra = ''): string {
+  /* $page may carry its own query (e.g. daraz_sales.php?view=list) — keep it on every link and on the form */
+  [$path, $pq] = array_pad(explode('?', $page, 2), 2, '');
+  $hidden = ''; parse_str($pq, $pqa); foreach ($pqa as $hk => $hv) $hidden .= '<input type="hidden" name="'.e($hk).'" value="'.e($hv).'">';
   $h = '<div class="panel dz-range"><span class="dz-range-lbl">📅 Showing <b>'.e($R['label']).'</b></span><div class="dz-pills">';
-  foreach ($R['presets'] as $k => [$l]) $h .= '<a class="dz-pill'.($R['range']===$k?' on':'').'" href="'.e($page).'?range='.$k.$extra.'">'.e($l).'</a>';
-  $h .= '</div><form method="get" action="'.e($page).'" class="dz-range-form">'
+  foreach ($R['presets'] as $k => [$l]) $h .= '<a class="dz-pill'.($R['range']===$k?' on':'').'" href="'.e($path.'?'.($pq!==''?$pq.'&':'').'range='.$k.$extra).'">'.e($l).'</a>';
+  $h .= '</div><form method="get" action="'.e($path).'" class="dz-range-form">'.$hidden
       . '<input type="date" name="from" value="'.e($R['start']).'" aria-label="From date"><span class="muted">to</span>'
       . '<input type="date" name="to" value="'.e($R['end']).'" aria-label="To date"><button class="btn nh-ghost">Apply</button></form></div>';
   return $h;

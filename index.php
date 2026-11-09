@@ -219,7 +219,7 @@ $sq = $isLifetime ? '' : '&from='.urlencode($start).'&to='.urlencode($end);
 $oLink = function (string $statuses) use ($ch, $sq, $start, $end) {
   if ($ch !== 'daraz') return 'sales.php?'.ltrim(($statuses !== '' ? 'status='.$statuses : '').$sq, '&');
   $map = ['pending'=>'pending', 'processing,shipped'=>'shipped', 'delivered'=>'delivered', 'returned,cancelled'=>'returned', 'returned'=>'returned'];
-  return 'daraz_sales.php?from='.urlencode($start).'&to='.urlencode($end).(isset($map[$statuses]) ? '&st='.$map[$statuses] : '');
+  return 'daraz_sales.php?view=list&from='.urlencode($start).'&to='.urlencode($end).(isset($map[$statuses]) ? '&st='.$map[$statuses] : '');
 };
 
 require __DIR__.'/includes/header.php';

@@ -3,6 +3,13 @@
    sheet). Edit status / Daraz fees per row or in bulk, link or re-check orders against
    Daraz by order number, filter, sort and export. */
 require_once __DIR__.'/daraz_common.php';
+/* Daraz Sales opens as the same spreadsheet as main Sales, Daraz orders only (sales.php in
+   Daraz mode). ?view=list keeps this filterable list with bulk tools, import and the order form. */
+if (($_GET['view'] ?? '') !== 'list' && !isset($_POST['_action'])) {
+  define('SALES_DARAZ_MODE', true);
+  require __DIR__.'/sales.php';
+  exit;
+}
 require_login(); require_page_access();
 daraz_ensure_cols();
 $PAGE_TITLE = 'Daraz Sales';
@@ -34,7 +41,7 @@ function dzs_update_line(int $id, ?string $newStatus, ?float $fees): bool {
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   check_csrf();
   $act = $_POST['_action'] ?? '';
-  $back = 'daraz_sales.php?'.$R['qs'];
+  $back = 'daraz_sales.php?view=list&'.$R['qs'];
 
   /* ---- book / edit a Daraz order (Daraz orders live only on this page) ---- */
   if ($act === 'save_order') {
@@ -203,11 +210,11 @@ body.dark .dzs-fee{background:rgba(2,6,23,.5);color:var(--ink);border-color:rgba
   </div>
   <div class="nh-actions">
     <button type="button" class="btn nh-ghost" onclick="dzlOpen('')">🔗 Check a Daraz order by ID</button>
-    <?php if ($perm['add']): ?><button type="button" class="btn nh-ghost" onclick="dziOpen()">📋 Paste Import</button><button type="button" class="btn nh-cta" onclick="dzoOpen(null)">＋ New Daraz Order</button><?php endif; ?>
+    <?php if ($perm['add']): ?><a class="btn nh-ghost" href="daraz_sales.php">📊 Sheet view</a><button type="button" class="btn nh-ghost" onclick="dziOpen()">📋 Paste Import</button><button type="button" class="btn nh-cta" onclick="dzoOpen(null)">＋ New Daraz Order</button><?php endif; ?>
   </div>
 </div>
 <?= daraz_tabs('daraz_sales.php') ?>
-<?= daraz_range_bar($R, 'daraz_sales.php') ?>
+<?= daraz_range_bar($R, 'daraz_sales.php?view=list') ?>
 <?php if($fl=flash()) echo '<div class="flash">'.e($fl).'</div>'; ?>
 
 <div class="panel" style="margin-top:16px">
@@ -444,7 +451,8 @@ function dziSubmit(){
 }
 function dziOpen(){document.getElementById('dziText').value='';dziPreview();document.getElementById('dziModal').classList.add('open');document.body.classList.add('modal-open');setTimeout(function(){document.getElementById('dziText').focus();},60);}
 function dziClose(){document.getElementById('dziModal').classList.remove('open');document.body.classList.remove('modal-open');}
-(function(){var m=document.getElementById('dziModal');m.addEventListener('click',function(e){if(e.target===m)dziClose();});})();
+(function(){var m=document.getElementById('dziModal');m.addEventListener('click',function(e){if(e.target===m)dziClose();});
+  if(new URLSearchParams(location.search).get('import')==='1')dziOpen();})();
 </script>
 <!-- book / edit a Daraz order -->
 <div class="modal-bg" id="dzoModal" style="z-index:99980"><form class="modal" method="post" style="width:640px;max-width:96vw">

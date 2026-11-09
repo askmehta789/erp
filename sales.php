@@ -399,6 +399,7 @@ body.dark .sl-menu{background:rgba(15,23,42,.97);border-color:rgba(148,163,184,.
   <div><h1>Sales</h1><p>Works like Google Sheets — type in the empty bottom row to add orders, edit any cell, sort &amp; filter by clicking column headers</p></div>
   <!-- header keeps the two everyday actions; the rest live in one "More" menu -->
   <div class="sl-actions">
+    <a class="btn" href="labels.php" target="_blank" title="Print shipping labels">🏷 Print Labels</a>
     <button class="btn" id="addRowBtn">＋ Add Row</button>
     <button class="btn btn-primary" id="addFormBtn">📝 New Order</button>
     <div class="sl-more">
@@ -407,7 +408,6 @@ body.dark .sl-menu{background:rgba(15,23,42,.97);border-color:rgba(148,163,184,.
         <button type="button" class="sl-mi" id="colBtn">⚙ Columns <span class="muted">show / hide</span></button>
         <button type="button" class="sl-mi" id="importBtn">📋 Paste Import</button>
         <button type="button" class="sl-mi" id="csvBtn">⬇ Export CSV</button>
-        <a class="sl-mi" href="labels.php" target="_blank">🏷 Print Labels</a>
         <div class="sl-sep"></div>
         <button type="button" class="sl-mi" id="assignLuprahBtn" title="Bulk-tag every order with no sales person as Luprah (company sales)">🏢 Unassigned → Luprah</button>
       </div>

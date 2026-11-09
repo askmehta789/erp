@@ -400,13 +400,13 @@ body.dark .sl-menu{background:rgba(15,23,42,.97);border-color:rgba(148,163,184,.
   <!-- header keeps the two everyday actions; the rest live in one "More" menu -->
   <div class="sl-actions">
     <a class="btn" href="labels.php" target="_blank" title="Print shipping labels">🏷 Print Labels</a>
+    <button class="btn" id="importBtn" title="Paste rows copied from Excel / Google Sheets">📋 Paste Import</button>
     <button class="btn" id="addRowBtn">＋ Add Row</button>
     <button class="btn btn-primary" id="addFormBtn">📝 New Order</button>
     <div class="sl-more">
       <button class="btn" id="moreBtn" aria-haspopup="true" aria-expanded="false">⋯ More <span style="font-size:10px">▾</span></button>
       <div class="sl-menu" id="moreMenu" role="menu">
         <button type="button" class="sl-mi" id="colBtn">⚙ Columns <span class="muted">show / hide</span></button>
-        <button type="button" class="sl-mi" id="importBtn">📋 Paste Import</button>
         <button type="button" class="sl-mi" id="csvBtn">⬇ Export CSV</button>
         <div class="sl-sep"></div>
         <button type="button" class="sl-mi" id="assignLuprahBtn" title="Bulk-tag every order with no sales person as Luprah (company sales)">🏢 Unassigned → Luprah</button>

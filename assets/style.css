@@ -1459,3 +1459,10 @@ body.dark .htContextMenu table tbody tr td.current,body.dark .htContextMenu tabl
 body.dark .handsontable td.htDimmed{color:#8aa0bd}
 body.dark .advpanel{background:#111a2e;border-color:rgba(148,163,184,.14);box-shadow:none}
 body.dark .apill,body.dark .chip#advBtn.on{background:rgba(124,92,247,.2);color:#c4b5fd;border-color:rgba(124,92,247,.4)}
+/* dark containers: one even surface, no grey glare / uneven shade */
+body.dark .panel,body.dark .card,body.dark .metric,body.dark .stat,body.dark .qa,body.dark .chat-shell,body.dark .page-head,
+body.dark .ncmv3 .panel,body.dark .ncmv3 .card,body.dark .ncmv3 .metric{
+  background:#111a2e!important;border:1px solid rgba(148,163,184,.14)!important;
+  box-shadow:0 1px 2px rgba(0,0,0,.35)!important;
+  backdrop-filter:none!important;-webkit-backdrop-filter:none!important}
+body.dark .panel:not(.noglow):before,body.dark .login-card:before,body.dark .modal:before{content:none}

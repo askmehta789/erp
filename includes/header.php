@@ -30,7 +30,7 @@ $helpLine  = setting('help_line', '01-5970736');
 </head>
 <body>
 <script>/* apply default theme when the user has no saved preference */
-(function(){try{if(localStorage.getItem('erp_dark')===null){var d=<?= json_encode(strtolower(setting('default_theme','light'))==='dark') ?>;if(d)document.body.classList.add('dark');}}catch(e){}})();</script>
+(function(){try{if(localStorage.getItem('erp_dark')==='1')document.body.classList.add('dark');if(localStorage.getItem('erp_dark')===null){var d=<?= json_encode(strtolower(setting('default_theme','light'))==='dark') ?>;if(d)document.body.classList.add('dark');}}catch(e){}})();</script>
 <?php $notifsOn = strtolower(setting('notifications_enabled','yes')) !== 'no'; ?>
 <?php if ($notifsOn && strtolower(setting('enable_toasts','yes')) !== 'no'): ?><div class="toast-wrap" id="toastWrap"></div><?php endif; ?>
 <script>window.ERP_CSRF=<?= json_encode(csrf()) ?>;</script>

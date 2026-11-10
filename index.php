@@ -579,13 +579,15 @@ function rrToggle(showCancel){
 }
 
 var CH_GRID = (getComputedStyle(document.body).getPropertyValue('--border')||'#e9edf3').trim();
+var CH_DARK = document.body.classList.contains('dark');
+if (CH_DARK) { Chart.defaults.color = '#8aa0bd'; Chart.defaults.borderColor = 'rgba(148,163,184,.12)'; }
 var baseOpts = {responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}}};
 
 /* revenue / net profit / expenses trend for the selected period */
 new Chart(document.getElementById('trendChart'),{
   data:{labels:<?= json_encode(array_map(fn($k)=>$byMonth ? date('M Y',strtotime($k.'-01')) : date('j M',strtotime($k)), array_keys($trend))) ?>,
     datasets:[
-      {type:'bar',label:'Revenue',data:<?= json_encode(array_values(array_map(fn($t)=>round($t['rev']), $trend))) ?>,backgroundColor:'rgba(59,130,246,.45)',borderRadius:5,maxBarThickness:38},
+      {type:'bar',label:'Revenue',data:<?= json_encode(array_values(array_map(fn($t)=>round($t['rev']), $trend))) ?>,backgroundColor:CH_DARK?'rgba(96,165,250,.6)':'rgba(59,130,246,.45)',borderRadius:5,maxBarThickness:38},
       {type:'line',label:'Net profit',data:<?= json_encode(array_values(array_map(fn($t)=>round($t['profit']), $trend))) ?>,borderColor:'#14b8a6',backgroundColor:'#14b8a6',tension:.35,pointRadius:2},
       {type:'line',label:'Expenses',data:<?= json_encode(array_values(array_map(fn($t)=>round($t['exp']), $trend))) ?>,borderColor:'#ef4444',backgroundColor:'#ef4444',borderDash:[5,4],tension:.35,pointRadius:0}
     ]},

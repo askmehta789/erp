@@ -1420,3 +1420,42 @@ body.dark .page-head{background:rgba(17,25,44,.62);border-color:rgba(148,163,184
   .page-head>div:not(:first-child)>form>input[type=date],.page-head>div:not(:first-child)>form>select{flex:1 1 120px;min-width:0}
   .page-head > div:last-child form .btn,.page-head form .btn{flex:0 0 auto;width:auto;min-width:40px}
 }
+
+/* ============ Dark mode fixes ============ */
+body.dark{color-scheme:dark}
+/* Sales / Daraz Sales sheet */
+body.dark #hotBox .handsontable,body.dark #hotBox .handsontable table.htCore{background:#111a2e}
+body.dark #hotBox .handsontable td{background:#111a2e;color:#e8edf6;border-color:rgba(148,163,184,.14)!important}
+body.dark #hotBox .handsontable th{background:#0d1526!important;color:#8aa0bd;border-color:rgba(148,163,184,.14)!important}
+body.dark #hotBox .htCore th .colHeader{color:#8aa0bd}
+/* status tints: deep, muted versions so the light text stays readable */
+body.dark #hotBox .htCore tbody tr.row-del > td{background:#0f2c24!important}
+body.dark #hotBox .htCore tbody tr.row-ship > td{background:#33260f!important}
+body.dark #hotBox .htCore tbody tr.row-red > td{background:#341a1c!important}
+body.dark #hotBox .htCore tbody tr.row-exchanged > td{background:#15234a!important}
+body.dark #hotBox .htCore tbody tr.row-del > td.current,
+body.dark #hotBox .htCore tbody tr.row-ship > td.current,
+body.dark #hotBox .htCore tbody tr.row-red > td.current,
+body.dark #hotBox .htCore tbody tr.row-exchanged > td.current{background:#1c2947!important}
+body.dark #hotBox td.cc-needcell{background:#33260f!important}
+body.dark #hotBox .htCore tbody tr.row-red > td.cc-needcell{background:#40241a!important}
+body.dark #hotBox .htCore tbody tr.row-exchanged > td.cc-needcell{background:#1a2c5c!important}
+body.dark #hotBox .cc-need{color:#fbbf24}
+body.dark #hotBox .htCore tbody tr.row-grp-first > td{border-top-color:rgba(96,165,250,.35)}
+body.dark #hotBox .htCore tbody tr.row-grp-last > td{border-bottom-color:rgba(96,165,250,.35)}
+body.dark .grp-tag{background:rgba(79,124,247,.2);color:#93b4ff}
+body.dark .htCore td.c-warn{background:#3a2a10!important;color:#fcd34d}
+body.dark .htCore td.c-bad{background:#3d1a1d!important;color:#fca5a5}
+body.dark .htCore td.c-dup{background:#232a5c!important;color:#c7d2fe}
+body.dark .ht-status.pending,body.dark .ht-status.processing{background:rgba(148,163,184,.16);color:#cbd5e1}
+/* selection, editors and dropdown lists */
+body.dark .handsontable td.area:before{background:#6366f1}
+body.dark .handsontableInput,body.dark .handsontable .handsontableInput{background:#17223a!important;color:#e8edf6!important;box-shadow:0 0 0 2px #6366f1 inset!important}
+body.dark .handsontable.listbox td,body.dark .handsontable.listbox .ht_master table{background:#17223a!important;color:#e8edf6!important}
+body.dark .handsontable.listbox tr:hover td,body.dark .handsontable.listbox tr td.current{background:#24335a!important}
+body.dark .htContextMenu table.htCore,body.dark .htDropdownMenu table.htCore{background:#17223a;border-color:rgba(148,163,184,.2);color:#e8edf6}
+body.dark .htContextMenu table tbody tr td,body.dark .htDropdownMenu table tbody tr td{background:#17223a;color:#e8edf6}
+body.dark .htContextMenu table tbody tr td.current,body.dark .htContextMenu table tbody tr td.zeroclipboard-is-hover{background:#24335a}
+body.dark .handsontable td.htDimmed{color:#8aa0bd}
+body.dark .advpanel{background:#111a2e;border-color:rgba(148,163,184,.14);box-shadow:none}
+body.dark .apill,body.dark .chip#advBtn.on{background:rgba(124,92,247,.2);color:#c4b5fd;border-color:rgba(124,92,247,.4)}

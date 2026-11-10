@@ -16,7 +16,7 @@ ensure_company_salesperson();
 /* Daraz Sales opens this same spreadsheet in Daraz-only mode (daraz_sales.php defines the flag):
    only Daraz orders are shown and saved here, with a Daraz order number column */
 $DZMODE = defined('SALES_DARAZ_MODE');
-if ($DZMODE) daraz_ensure_cols();
+if ($DZMODE) { daraz_ensure_cols(); if (!isset($_GET['ajax'])) daraz_backfill_ids_from_remarks(); }
 $SELF = basename($_SERVER['PHP_SELF']);
 
 /* ---------------------------------------------------------------------
@@ -107,7 +107,7 @@ if (isset($_GET['ajax'])) {
         ];
         if (defined('SALES_DARAZ_MODE')) {
             $dzn = preg_replace('/\D+/', '', (string)($_POST['daraz_order_id'] ?? ''));
-            if ($dzn === '' && preg_match('/^\s*(?:Daraz\s*#?\s*)?(\d{9,})\s*$/i', $__f['remarks'], $mm)) $dzn = $mm[1];
+            if ($dzn === '') $dzn = (string)daraz_id_from_remarks($__f['remarks']);
             $__f['daraz_order_id'] = $dzn !== '' ? $dzn : null;
             $__f['phone'] = daraz_clean_phone($__f['phone']);
         }
@@ -166,7 +166,7 @@ if (isset($_GET['ajax'])) {
                 ];
                 if (defined('SALES_DARAZ_MODE')) {
                   $dzn = preg_replace('/\D+/', '', (string)($_POST['daraz_order_id'] ?? ''));
-                  if ($dzn === '' && preg_match('/^\s*(?:Daraz\s*#?\s*)?(\d{9,})\s*$/i', $remarks, $mm)) $dzn = $mm[1];
+                  if ($dzn === '') $dzn = (string)daraz_id_from_remarks($remarks);
                   $f['daraz_order_id'] = $dzn !== '' ? $dzn : null;
                   $f['phone'] = daraz_clean_phone($f['phone']);
                 }

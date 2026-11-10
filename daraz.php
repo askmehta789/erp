@@ -5,6 +5,7 @@
    bulk import of every order. */
 require_once __DIR__.'/daraz_common.php';
 require_login(); require_page_access();
+daraz_backfill_ids_from_remarks();   /* fill Daraz # from Remarks for older hand-booked orders */
 daraz_ensure_cols(); daraz_ensure_ads_table();
 $PAGE_TITLE = 'Daraz Dashboard';
 $u = current_user();

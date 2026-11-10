@@ -11,6 +11,7 @@ if (($_GET['view'] ?? '') !== 'list' && !isset($_POST['_action'])) {
   exit;
 }
 require_login(); require_page_access();
+daraz_backfill_ids_from_remarks();   /* fill Daraz # from Remarks for older hand-booked orders */
 daraz_ensure_cols();
 $PAGE_TITLE = 'Daraz Sales';
 $perm = order_perms();

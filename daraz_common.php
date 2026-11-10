@@ -10,6 +10,52 @@
    ============================================================ */
 require_once __DIR__.'/daraz_api.php';
 
+/* Pull a Daraz order number out of free-text Remarks ("Daraz #204188712345678",
+   "204188712345678 cod", "240712-9917742" …). Digits may contain dashes/spaces; the
+   result is digits only. Phone numbers are skipped (10-digit 98/97…, or +977 forms),
+   so a customer's mobile written in Remarks is never mistaken for an order number. */
+function daraz_id_from_remarks(?string $remarks): ?string {
+  $r = (string)$remarks;
+  if ($r === '') return null;
+  $isPhone = function (string $d): bool {
+    if (strlen($d) === 10 && preg_match('/^9[78]/', $d)) return true;            /* 98XXXXXXXX / 97XXXXXXXX */
+    if (strlen($d) === 13 && preg_match('/^9779[78]/', $d)) return true;         /* 977 + mobile */
+    return false;
+  };
+  /* "Daraz #…" / "order no …" written explicitly wins */
+  if (preg_match('/(?:daraz|order)\s*(?:no\.?|number|id)?\s*[#:]?\s*(\d[\d\- ]{7,}\d)/i', $r, $m)) {
+    $d = preg_replace('/\D+/', '', $m[1]);
+    if (strlen($d) >= 9 && !$isPhone($d)) return $d;
+  }
+  /* otherwise the longest digit run (dashes allowed inside) that isn't a phone number */
+  $best = null;
+  if (preg_match_all('/\d[\d\-]{7,}\d/', $r, $all)) {
+    foreach ($all[0] as $tok) {
+      $d = preg_replace('/\D+/', '', $tok);
+      if (strlen($d) < 11 || $isPhone($d)) continue;                               /* order numbers are long */
+      if ($best === null || strlen($d) > strlen($best)) $best = $d;
+    }
+  }
+  return $best;
+}
+
+/* One-time-per-row fill: Daraz orders booked with their number only in Remarks get the
+   Daraz # column set from it (Remarks text itself is left untouched). Cheap & idempotent —
+   only rows with an empty Daraz # and some digits in Remarks are looked at. */
+function daraz_backfill_ids_from_remarks(): int {
+  daraz_ensure_cols();
+  $dz = daraz_courier_id();
+  if (!$dz) return 0;
+  $n = 0;
+  foreach (rows("SELECT id, remarks FROM orders WHERE courier_id=? AND (daraz_order_id IS NULL OR daraz_order_id='')
+                 AND remarks REGEXP '[0-9]{6}'", [$dz]) as $r) {
+    $id = daraz_id_from_remarks($r['remarks']);
+    if ($id) { q("UPDATE orders SET daraz_order_id=? WHERE id=?", [$id, (int)$r['id']]); $n++; }
+  }
+  if ($n) log_activity("Daraz: read the order number from Remarks for $n order(s)", 'Daraz');
+  return $n;
+}
+
 function daraz_courier_id(): int {
   static $id = null;
   if ($id !== null) return $id;

@@ -1135,14 +1135,29 @@ function updateAdvUI(){
   var sm=document.getElementById('advSummary'); if(sm)sm.textContent=finalView().length+' of '+DATA.length+' orders match';
 }
 function esc(t){var d=document.createElement('div');d.textContent=t==null?'':t;return d.innerHTML;}
+/* CSV helpers: in Daraz Sales the export also carries the Daraz order number (and Daraz
+   wording for price / charges). Long order numbers are written as ="…" so Excel keeps all
+   15 digits instead of turning them into 2.04189E+14. */
+var CSV_DARAZ=<?= $DZMODE ? 'true' : 'false' ?>;
+function csvAdapt(heads,keys){
+  if(!CSV_DARAZ) return;
+  heads.splice(1,0,'Daraz Order #'); keys.splice(1,0,'daraz_order_id');
+  keys.forEach(function(k,i){ if(k==='sell_price')heads[i]='Customer Paid'; if(k==='delivery_charge')heads[i]='Daraz Charges'; });
+}
+function csvCell(k,v){
+  v=(v==null?'':String(v));
+  if(k==='daraz_order_id'&&/^\d{9,}$/.test(v)) return '"=""'+v+'"""';
+  return '"'+v.replace(/"/g,'""')+'"';
+}
 function exportFiltered(){
   var rows=finalView();
   var heads=['Order','Sales Person','Product','Date','Customer','Phone','Address','Zone','Qty','Price','Delivery','Cancel Chg','Exchange Chg','Revenue','Payment','Status'];
   var keys=['code','sales_person_name','product_name','order_date','customer','phone','address','zone','qty','sell_price','delivery_charge','cancel_charge','exchange_charge','revenue','payment_type','status'];
+  csvAdapt(heads,keys);
   var lines=[heads.join(',')];
-  rows.forEach(function(r){lines.push(keys.map(function(k){var v=(r[k]==null?'':String(r[k]));return '"'+v.replace(/"/g,'""')+'"';}).join(','));});
+  rows.forEach(function(r){lines.push(keys.map(function(k){return csvCell(k,r[k]);}).join(','));});
   var blob=new Blob([lines.join('\n')],{type:'text/csv'});
-  var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='sales_filtered.csv';a.click();
+  var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=CSV_DARAZ?'daraz_sales_filtered.csv':'sales_filtered.csv';a.click();
 }
 function updateChips(){
   /* badge counts must respect the active advanced filters (salesperson, date range, etc.) —
@@ -1959,10 +1974,11 @@ if(document.getElementById('sheetSearch').value.trim()!==''){
 document.getElementById('csvBtn').onclick=function(){
   var heads=['Order','Sales Person','Product','Date','Customer','Phone','Address','Zone','Quantity','Price','Delivery','Cancel Charge','Exchange Charge','Revenue','Payment Type','Status','Payment Received','Courier','Profit'];
   var keys=['code','sales_person_name','product_name','order_date','customer','phone','address','zone','qty','sell_price','delivery_charge','cancel_charge','exchange_charge','revenue','payment_type','status','payment_status','courier_name','profit'];
+  csvAdapt(heads,keys);
   var lines=[heads.join(',')];
-  DATA.forEach(function(r){lines.push(keys.map(function(k){var v=(r[k]==null?'':String(r[k]));return '"'+v.replace(/"/g,'""')+'"';}).join(','));});
+  DATA.forEach(function(r){lines.push(keys.map(function(k){return csvCell(k,r[k]);}).join(','));});
   var blob=new Blob([lines.join('\n')],{type:'text/csv'});
-  var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='sales_export.csv';a.click();
+  var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=CSV_DARAZ?'daraz_sales_export.csv':'sales_export.csv';a.click();
 };
 
 /* ---- role-based order permissions (Users → 🛒 Order Access) ---- */

@@ -558,7 +558,8 @@ function dzsExport(){
       (float)$o['delivery_charge'], $o['daraz_fee_source'] ?? '', round(order_profit($o),2), $o['status'], $o['daraz_checked_at'] ?? '' ]; } ?>
   var DATA=<?= json_encode($csv) ?>;
   dzsRows().forEach(function(tr){if(dzsMatch(tr)&&DATA[tr.getAttribute('data-id')])lines.push(DATA[tr.getAttribute('data-id')]);});
-  var csv=lines.map(function(r){return r.map(function(v){return '"'+String(v).replace(/"/g,'""')+'"';}).join(',');}).join('\n');
+  /* column 0 = Daraz order number: written as ="…" so Excel keeps all digits (not 2.04E+14) */
+  var csv=lines.map(function(r){return r.map(function(v,i){v=String(v);if(i===0&&/^\d{9,}$/.test(v))return '"=""'+v+'"""';return '"'+v.replace(/"/g,'""')+'"';}).join(',');}).join('\n');
   var a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='daraz-sales-<?= e($R['start']) ?>-to-<?= e($R['end']) ?>.csv';a.click();
 }
 /* links from the Dashboard open with a filter already applied (?st=pack, ?f=nofee …) */

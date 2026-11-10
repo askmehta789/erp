@@ -1390,7 +1390,10 @@ html{-webkit-text-size-adjust:100%}
 /* ===== unified page header — every page using .page-head =====
    one glass card (same look as the Daraz / NCM heroes), even padding, the title
    block takes the free space so every action button groups together on the right */
-.page-head{align-items:center;gap:12px 18px;margin:0 0 18px;padding:18px 22px;border-radius:18px;
+/* position + z-index: the glass blur makes the header its own layer, so its dropdowns
+   (More menu, Columns list…) must sit ABOVE the cards that follow — but below the sticky
+   top bar (z 30) and the mobile sidebar (z 50) */
+.page-head{position:relative;z-index:20;align-items:center;gap:12px 18px;margin:0 0 18px;padding:18px 22px;border-radius:18px;
   background:rgba(255,255,255,.62);border:1px solid rgba(255,255,255,.85);
   backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
   box-shadow:0 8px 28px rgba(30,41,59,.07),inset 0 1px 0 rgba(255,255,255,.9)}

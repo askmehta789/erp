@@ -151,7 +151,7 @@ function dzlApply(){
   }).catch(function(){btn.disabled=false;out.insertBefore(dzlNote('bad','Network error.'),out.firstChild);});
 }
 /* re-check many linked orders one by one, list only the ones that need syncing */
-function dzlRecheck(ids){
+function dzlRecheck(ids,auto){
   ids=(ids||[]).filter(function(x,i,a){return x&&a.indexOf(x)===i;});
   if(!ids.length){alert('None of these orders are linked to a Daraz order number yet. Link them first (🔗 on each row).');return;}
   dzlOpen('');document.getElementById('dzlSingleBar').style.display='none';
@@ -166,7 +166,7 @@ function dzlRecheck(ids){
   function summary(c){var s=[];c.lines.forEach(function(L){L.fields.forEach(function(f){if(f.diff)s.push(f.erp+' → '+f.daraz);});});
     if(c.totals.fee_target!==null&&Math.abs(c.totals.erp_fees-c.totals.fee_target)>0.009)s.push('charges '+dzlMoney(c.totals.erp_fees)+' → '+dzlMoney(c.totals.fee_target));return s.join(' · ');}
   function next(){
-    if(done>=ids.length){prog.textContent='Finished: '+ok+' already match, '+diffIds.length+' need syncing, '+(done-ok-diffIds.length)+' could not be checked.';if(diffIds.length)allBtn.style.display='';return;}
+    if(done>=ids.length){prog.textContent='Finished: '+ok+' already match, '+diffIds.length+' need syncing, '+(done-ok-diffIds.length)+' could not be checked.';if(diffIds.length){if(auto)allBtn.onclick(true);else allBtn.style.display='';}return;}
     var id=ids[done];prog.textContent='Checking '+(done+1)+' of '+ids.length+'…';
     fetch('daraz_link.php?action=check&fin=1&id='+encodeURIComponent(id),{credentials:'same-origin'}).then(function(r){return r.json();}).then(function(j){
       done++;
@@ -177,8 +177,8 @@ function dzlRecheck(ids){
       next();
     }).catch(function(){done++;row(id,'⚠ network error',false);next();});
   }
-  allBtn.onclick=function(){
-    if(!confirm('Sync status and Daraz charges for '+diffIds.length+' order(s)?'))return;
+  allBtn.onclick=function(skipAsk){
+    if(skipAsk!==true&&!confirm('Sync status and Daraz charges for '+diffIds.length+' order(s)?'))return;
     allBtn.disabled=true;var i=0,fails=0;
     (function step(){
       if(i>=diffIds.length){prog.textContent='✓ Synced '+(diffIds.length-fails)+' order(s)'+(fails?', '+fails+' failed':'')+'. Close this window to refresh.';dzlChanged=true;return;}
@@ -187,6 +187,15 @@ function dzlRecheck(ids){
     })();
   };
   next();
+}
+/* check EVERY linked Daraz order with Daraz and sync the ones that differ, in one go */
+function dzlResyncAll(){
+  if(!confirm('Check every linked Daraz order with Daraz and sync status, price and charges wherever they differ?\n\nThis can take a few minutes — keep this window open.'))return;
+  fetch('daraz_link.php?action=all_ids',{credentials:'same-origin'}).then(function(r){return r.json();}).then(function(j){
+    if(!j.ok){alert(j.error||'Could not load the Daraz orders.');return;}
+    if(!j.ids.length){alert('No ERP orders are linked to a Daraz order number yet.');return;}
+    dzlRecheck(j.ids,true);
+  }).catch(function(){alert('Network error.');});
 }
 function dzlUnlink(erpId,code){
   if(!confirm('Unlink ERP order '+code+' from its Daraz order number?'))return;

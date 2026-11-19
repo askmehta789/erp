@@ -1,6 +1,7 @@
 <?php
 /* daraz_link.php — JSON endpoint behind "Link / check by Daraz order ID".
    Orders are booked by hand in the ERP; Daraz only supplies STATUS and CHARGES.
+   GET  ?action=all_ids                       → every Daraz order number linked to an ERP order
    GET  ?action=check&id=DARAZ[&fin=0]      → fetch ONE Daraz order, compare with its linked ERP
                                               order (or suggest ERP orders to link it to)
    POST action=link,   erp_id, id, csrf      → link a hand-booked ERP order to that Daraz number
@@ -19,6 +20,12 @@ $id     = preg_replace('/\D+/', '', (string)($_POST['id'] ?? $_GET['id'] ?? ''))
 $isPost = $_SERVER['REQUEST_METHOD'] === 'POST';
 
 try {
+  if ($action === 'all_ids') {
+    daraz_ensure_cols();
+    $ids = array_column(rows("SELECT daraz_order_id, MAX(id) AS last_id FROM orders WHERE daraz_order_id IS NOT NULL AND daraz_order_id<>''
+                              GROUP BY daraz_order_id ORDER BY last_id DESC"), 'daraz_order_id');
+    dzl_out(['ok'=>true, 'ids'=>array_values(array_map('strval', $ids))]);
+  }
   if ($action === 'check') {
     if ($id === '') dzl_out(['ok'=>false,'error'=>'Enter a Daraz order number.']);
     $dz = daraz_fetch_order($id, ($_GET['fin'] ?? '1') !== '0');

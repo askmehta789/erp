@@ -223,6 +223,7 @@ body.dark .dzs-fee{background:rgba(2,6,23,.5);color:var(--ink);border-color:rgba
     <h2>🧾 Daraz orders <span id="dzsShowing" class="muted" style="font-size:12px;font-weight:600"></span></h2>
     <div style="display:flex;gap:6px;flex-wrap:wrap">
       <button type="button" class="btn btn-sm" onclick="dzsRecheckShown()" title="Get the latest status and Daraz charges for every linked order shown below">🔄 Sync shown with Daraz</button>
+      <?php if ($perm['edit']): ?><button type="button" class="btn btn-sm" onclick="dzlResyncAll()" title="Check EVERY linked Daraz order (not just the ones shown) and sync status, price and charges where they differ">🔁 Re-sync ALL Daraz orders</button><?php endif; ?>
       <button type="button" class="btn btn-sm" onclick="dzsExport()">⬇ Export CSV</button>
     </div>
   </div>
@@ -264,7 +265,7 @@ body.dark .dzs-fee{background:rgba(2,6,23,.5);color:var(--ink);border-color:rgba
 
   <div class="table-wrap"><table class="tbl led-tbl dzs-tbl" id="dzsTbl"><thead><tr>
     <th style="width:28px"><input type="checkbox" id="dzsAll" onclick="dzsSelAll(this.checked)" aria-label="Select all shown"></th>
-    <th>Daraz order</th><th>Customer</th><th>Product</th><th style="text-align:right">Customer paid</th>
+    <th>Daraz order</th><th>Customer</th><th>Product</th><th style="text-align:right">Price (you earn)</th>
     <th style="text-align:right">Daraz fees</th><th style="text-align:right">Profit</th><th>Status</th><th></th>
   </tr></thead><tbody>
   <?php foreach ($orders as $o):
@@ -472,7 +473,7 @@ function dziClose(){document.getElementById('dziModal').classList.remove('open')
       </select>
       <input name="item_name" id="dzo_item" placeholder="…or type the Daraz item name if it isn't a product yet" style="margin-top:6px"></div>
     <div><label>Qty *</label><input type="number" name="qty" id="dzo_qty" min="1" value="1" required></div>
-    <div><label>Customer paid (per unit) *</label><input type="number" step="any" min="0" name="sell_price" id="dzo_price" required></div>
+    <div><label>Price you earn (per unit) *</label><input type="number" step="any" min="0" name="sell_price" id="dzo_price" required></div>
     <div><label>Daraz charges (Rs.)</label><input type="number" step="any" min="0" name="fees" id="dzo_fees" placeholder="0"></div>
     <div><label>Payment</label><select name="payment_type" id="dzo_pay"><option value="cod">COD</option><option value="prepaid">Prepaid</option></select></div>
     <div><label>Status</label><select name="status" id="dzo_status"><?php foreach ($STATUSES as $st): ?><option value="<?= $st ?>"><?= ucfirst($st) ?></option><?php endforeach; ?></select></div>
@@ -551,7 +552,7 @@ function dzsBulkSubmit(f){var ids=dzsSelIds(false);if(!ids.length)return false;
   document.getElementById('dzsBulkIds').value=ids.join(',');return confirm('Apply to '+ids.length+' order line(s)?');}
 function dzsRecheckShown(){var ids=dzsRows().filter(function(tr){return dzsMatch(tr);}).map(function(tr){return tr.getAttribute('data-oid');}).filter(Boolean);dzlRecheck(ids);}
 function dzsExport(){
-  var lines=[['Daraz order','ERP code','Date','Customer','Phone','Payment','Product','SKU','Qty','Customer paid (per unit)','Cost','Daraz fees','Fee source','Profit','Status','Checked with Daraz']];
+  var lines=[['Daraz order','ERP code','Date','Customer','Phone','Payment','Product','SKU','Qty','Price you earn (per unit)','Cost','Daraz fees','Fee source','Profit','Status','Checked with Daraz']];
   <?php $csv=[]; foreach ($orders as $o) { $csv[(int)$o['id']] = [
       $o['daraz_order_id'] ?: '', $o['code'], $o['order_date'], $o['customer'] ?: '', $o['phone'] ?: '', $o['payment_type'] ?: '',
       $o['product_name'] ?: ($o['daraz_item_name'] ?? ''), $o['daraz_sku'] ?? '', (int)$o['qty'], (float)$o['sell_price'], (float)$o['cost_price'],

@@ -160,7 +160,10 @@ function daraz_normalize_order(string $orderId, array $h, array $items, ?array $
   $shipHeader = dz_num($h['shipping_fee'] ?? 0);
   if ($lines && array_sum(array_column($lines, 'ship_customer')) <= 0 && $shipHeader > 0) $lines[0]['ship_customer'] = $shipHeader;
 
-  $fin = ['ok'=>false, 'error'=>$finErr, 'fees'=>0.0, 'credits'=>0.0, 'payout'=>0.0, 'rows'=>[]];
+  /* fees = every deduction; net_fees = fees minus credits that just pass money back to you
+     (e.g. "Shipping Fee Paid by Buyer"), so that  order value − net_fees = payout  */
+  $fin = ['ok'=>false, 'error'=>$finErr, 'fees'=>0.0, 'credits'=>0.0, 'net_fees'=>0.0, 'payout'=>0.0, 'rows'=>[]];
+  $productCredit = 0.0; $productSeen = false;
   if ($txns !== null) {
     foreach ($txns as $t) {
       $on = preg_replace('/\D+/', '', (string)($t['order_no'] ?? $t['trade_order_id'] ?? $orderId));
@@ -169,8 +172,14 @@ function daraz_normalize_order(string $orderId, array $h, array $items, ?array $
       $fin['rows'][] = ['name'=>(string)($t['fee_name'] ?? $t['transaction_type'] ?? 'Transaction'), 'amount'=>$amt,
                         'date'=>(string)($t['transaction_date'] ?? '')];
       if ($amt < 0) $fin['fees'] += -$amt; else $fin['credits'] += $amt;
+      if (preg_match('/product price|item price/i', end($fin['rows'])['name'])) { $productSeen = true; $productCredit += $amt; }
     }
     $fin['payout'] = round($fin['credits'] - $fin['fees'], 2);
+    /* credits other than the product price (buyer-paid shipping etc.) reduce your real cost */
+    $productTotal = 0.0;
+    foreach ($lines as $Lq) if ($Lq['status'] !== 'cancelled') $productTotal += $Lq['unit_paid'] * $Lq['qty'];
+    $otherCredits = $fin['credits'] - ($productSeen ? $productCredit : min($fin['credits'], $productTotal));
+    $fin['net_fees'] = round(max(0, $fin['fees'] - max(0, $otherCredits)), 2);
     $fin['ok'] = (bool)$fin['rows'];
     if (!$fin['rows']) $fin['error'] = 'No finance entries yet — Daraz posts fees after the order is delivered and settled.';
   }
@@ -236,7 +245,7 @@ function daraz_status_to_apply(string $erp, string $dz): ?string {
 }
 /* the Daraz charge the ERP should hold for the order (its first line), or null = leave it */
 function daraz_fee_target(array $dz, array $firstRow): ?float {
-  if ($dz['finance']['ok']) return round($dz['finance']['fees'], 2);
+  if ($dz['finance']['ok']) return round($dz['finance']['net_fees'], 2);
   /* the old bulk import stored the CUSTOMER's shipping as your cost — undo exactly that */
   if (($firstRow['daraz_fee_source'] ?? null) === null && !empty($firstRow['daraz_sku']) && $dz['ship_header'] > 0
       && abs((float)$firstRow['delivery_charge'] - $dz['ship_header']) < 0.01) return 0.0;
@@ -280,7 +289,7 @@ function daraz_compare(array $dz): array {
   if ($feeTarget !== null && abs($erpFee - $feeTarget) > 0.009) $out['diffs']++;
   $out['totals'] = [
     'erp_revenue'=>round($erpRev,2), 'daraz_revenue'=>round($dzRev,2),
-    'erp_fees'=>round($erpFee,2), 'daraz_fees'=>$dz['finance']['ok'] ? round($dz['finance']['fees'],2) : null,
+    'erp_fees'=>round($erpFee,2), 'daraz_fees'=>$dz['finance']['ok'] ? round($dz['finance']['net_fees'],2) : null,
     'fee_target'=>$feeTarget, 'payout'=>$dz['finance']['ok'] ? $dz['finance']['payout'] : null,
     'ship_customer'=>round(array_sum(array_column($dz['lines'],'ship_customer')),2),
     'ship_as_cost'=>$erp && !$dz['finance']['ok'] && $feeTarget === 0.0 && $erpFee > 0,

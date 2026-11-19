@@ -113,7 +113,7 @@ function dzlRender(j,out){
   if(c.diffs===0)frag.appendChild(dzlNote('ok','✓ Status, price and Daraz charges already match.'));
   else frag.appendChild(dzlNote('warn','⚠ '+c.diffs+' thing(s) to sync — highlighted below. Sync sets the status, the price the customer paid, and the Daraz charges. Qty and product stay as booked.'));
   if(c.totals.ship_as_cost)frag.appendChild(dzlNote('bad','The ERP counts the customer’s shipping ('+dzlMoney(c.totals.ship_customer)+') as your Daraz charge. Sync resets it.'));
-  if(o.finance.ok)frag.appendChild(dzlNote('ok','Real Daraz charges found: '+dzlMoney(o.finance.fees)+' · payout '+dzlMoney(o.finance.payout)));
+  if(o.finance.ok)frag.appendChild(dzlNote('ok','Real Daraz charges found: '+dzlMoney(o.finance.net_fees)+(Math.abs(o.finance.fees-o.finance.net_fees)>0.009?' (deductions '+dzlMoney(o.finance.fees)+' − buyer-paid shipping/credits '+dzlMoney(o.finance.fees-o.finance.net_fees)+')':'')+' · payout '+dzlMoney(o.finance.payout)));
   else if(o.finance.error)frag.appendChild(dzlNote('warn',o.finance.error));
   (c.notes||[]).forEach(function(n){frag.appendChild(dzlNote('warn',n));});
   c.lines.forEach(function(L){

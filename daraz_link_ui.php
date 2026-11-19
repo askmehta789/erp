@@ -111,7 +111,7 @@ function dzlRender(j,out){
   }
 
   if(c.diffs===0)frag.appendChild(dzlNote('ok','✓ Status, price and Daraz charges already match.'));
-  else frag.appendChild(dzlNote('warn','⚠ '+c.diffs+' thing(s) to sync — highlighted below. Sync sets the status, the price the customer paid, and the Daraz charges. Qty and product stay as booked.'));
+  else frag.appendChild(dzlNote('warn','⚠ '+c.diffs+' thing(s) to sync — highlighted below. Sync sets the status, the price you earn (after your own discount), and the Daraz charges. Qty and product stay as booked.'));
   if(c.totals.ship_as_cost)frag.appendChild(dzlNote('bad','The ERP counts the customer’s shipping ('+dzlMoney(c.totals.ship_customer)+') as your Daraz charge. Sync resets it.'));
   if(o.finance.ok)frag.appendChild(dzlNote('ok','Real Daraz charges found: '+dzlMoney(o.finance.net_fees)+(Math.abs(o.finance.fees-o.finance.net_fees)>0.009?' (deductions '+dzlMoney(o.finance.fees)+' − buyer-paid shipping/credits '+dzlMoney(o.finance.fees-o.finance.net_fees)+')':'')+' · payout '+dzlMoney(o.finance.payout)));
   else if(o.finance.error)frag.appendChild(dzlNote('warn',o.finance.error));
@@ -132,7 +132,7 @@ function dzlRender(j,out){
   var tt=dzlEl('table',{'class':'dzl-tbl'}),h2=dzlEl('tr');
   ['Order','ERP now','After sync'].forEach(function(h,i){h2.appendChild(dzlEl('th',i?{'class':'r'}:null,h));});tt.appendChild(h2);
   var feeAfter=c.totals.fee_target===null?c.totals.erp_fees:c.totals.fee_target;
-  [['Daraz charges (your cost)',c.totals.erp_fees,feeAfter,true],['Payout from Daraz','—',c.totals.payout===null?'—':c.totals.payout,false],['Order value (customer paid)',c.totals.erp_revenue,c.totals.daraz_revenue,true]].forEach(function(r){
+  [['Daraz charges (your cost)',c.totals.erp_fees,feeAfter,true],['Payout from Daraz','—',c.totals.payout===null?'—':c.totals.payout,false],['Order value (you earn)',c.totals.erp_revenue,c.totals.daraz_revenue,true]].forEach(function(r){
     var d=r[3]&&Math.abs(parseFloat(r[1])-parseFloat(r[2]))>0.009,tr=dzlEl('tr',d?{'class':'dzl-diff'}:null);
     tr.appendChild(dzlEl('td',null,r[0]));tr.appendChild(dzlEl('td',{'class':'r'},dzlMoney(r[1])));tr.appendChild(dzlEl('td',{'class':'r'},dzlMoney(r[2])));tt.appendChild(tr);});
   frag.appendChild(tt);

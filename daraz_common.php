@@ -152,9 +152,11 @@ function daraz_normalize_order(string $orderId, array $h, array $items, ?array $
     $lines[$key]['ship_customer']    += $ship;
   }
   $lines = array_values($lines);
-  /* the price the ERP keeps for a Daraz order = what the CUSTOMER paid per unit (after every
-     voucher); Daraz's charges are recorded separately as the delivery charge */
-  foreach ($lines as &$Lp) $Lp['unit_paid'] = $Lp['qty'] > 0 && $Lp['paid'] > 0 ? round($Lp['paid'] / $Lp['qty'], 2) : $Lp['unit_revenue'];
+  /* the price the ERP keeps for a Daraz order = what YOU earn per unit: list price minus YOUR
+     (seller-funded) discount. Daraz-funded vouchers are paid back to you by Daraz, so they are not
+     taken off. Daraz's charges are recorded separately as the delivery charge. */
+  foreach ($lines as &$Lp) $Lp['unit_paid'] = $Lp['unit_revenue'] > 0 ? $Lp['unit_revenue']
+                                             : ($Lp['qty'] > 0 && $Lp['paid'] > 0 ? round($Lp['paid'] / $Lp['qty'], 2) : 0.0);
   unset($Lp);
   /* some responses carry shipping only on the header — keep it for reference on line 1 */
   $shipHeader = dz_num($h['shipping_fee'] ?? 0);
@@ -175,7 +177,12 @@ function daraz_normalize_order(string $orderId, array $h, array $items, ?array $
       if (preg_match('/product price|item price/i', end($fin['rows'])['name'])) { $productSeen = true; $productCredit += $amt; }
     }
     $fin['payout'] = round($fin['credits'] - $fin['fees'], 2);
-    /* credits other than the product price (buyer-paid shipping etc.) reduce your real cost */
+    /* Daraz's own "Product Price Paid by Buyer" row is the exact amount you earn — trust it
+       over the order API when the order has a single product line */
+    $live = array_keys(array_filter($lines, fn($Lx) => $Lx['status'] !== 'cancelled'));
+    if ($productSeen && $productCredit > 0 && count($live) === 1 && $lines[$live[0]]['qty'] > 0)
+      $lines[$live[0]]['unit_paid'] = round($productCredit / $lines[$live[0]]['qty'], 2);
+    /* credits other than the product price (buyer-paid shipping, shipping discount…) reduce your real cost */
     $productTotal = 0.0;
     foreach ($lines as $Lq) if ($Lq['status'] !== 'cancelled') $productTotal += $Lq['unit_paid'] * $Lq['qty'];
     $otherCredits = $fin['credits'] - ($productSeen ? $productCredit : min($fin['credits'], $productTotal));
@@ -278,7 +285,7 @@ function daraz_compare(array $dz): array {
     if ($to) $out['diffs']++;
     /* price follows what the customer actually paid on Daraz */
     $priceDiff = $L['unit_paid'] > 0 && abs((float)$r['sell_price'] - $L['unit_paid']) > 0.009;
-    $f[] = ['label'=>'Price per unit (customer paid)', 'erp'=>(float)$r['sell_price'], 'daraz'=>$L['unit_paid'], 'money'=>true, 'diff'=>$priceDiff, 'sync'=>true];
+    $f[] = ['label'=>'Price per unit (you earn)', 'erp'=>(float)$r['sell_price'], 'daraz'=>$L['unit_paid'], 'money'=>true, 'diff'=>$priceDiff, 'sync'=>true];
     if ($priceDiff) $out['diffs']++;
     /* qty is the ERP's own (booked by hand) — shown for information only */
     $f[] = ['label'=>'Qty (info only)', 'erp'=>(int)$r['qty'], 'daraz'=>$L['qty'], 'money'=>false, 'diff'=>false, 'sync'=>false, 'warn'=>(int)$r['qty'] !== $L['qty']];
@@ -298,7 +305,7 @@ function daraz_compare(array $dz): array {
 }
 
 /* ---------- 5) apply: status (with stock), customer-paid price and Daraz charges ----------
-   Price = what the customer paid per unit; delivery charge = Daraz's charges.
+   Price = what you earn per unit (after your own discount; Daraz vouchers excluded); delivery charge = Daraz's charges.
    Never creates orders, never changes qty / product / customer. */
 function daraz_apply(array $dz): array {
   daraz_ensure_cols();
@@ -343,7 +350,7 @@ function daraz_apply(array $dz): array {
       q("UPDATE orders SET delivery_charge=0, daraz_fee_source='finance' WHERE id IN (".implode(',', array_map(fn($r) => (int)$r['id'], array_slice($erp, 1))).")");
     $res['fees_set'] = true;
   }
-  log_activity("Daraz #{$dz['order_id']}: synced status ({$res['status_changed']} line(s) changed)".($res['price_changed'] ? ", price set to customer-paid on {$res['price_changed']} line(s)" : '').($res['fees_set'] ? ', charges '.money($feeTarget) : ''), 'Daraz');
+  log_activity("Daraz #{$dz['order_id']}: synced status ({$res['status_changed']} line(s) changed)".($res['price_changed'] ? ", price set to Daraz earning on {$res['price_changed']} line(s)" : '').($res['fees_set'] ? ', charges '.money($feeTarget) : ''), 'Daraz');
   return $res;
 }
 

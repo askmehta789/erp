@@ -413,6 +413,16 @@ function daraz_link_candidates(array $dz, int $limit = 8): array {
 }
 
 /* ---------- shared date-range picker ---------- */
+/* the earliest Daraz order (or ad spend) date — where "Lifetime" starts */
+function daraz_first_date(): string {
+  static $first = null;
+  if ($first !== null) return $first;
+  daraz_ensure_cols(); daraz_ensure_ads_table();
+  $d = array_filter([val("SELECT MIN(order_date) FROM orders WHERE courier_id=?", [daraz_courier_id()]),
+                     val("SELECT MIN(spend_date) FROM daraz_ads")]);
+  $first = $d ? date('Y-m-d', strtotime(min($d))) : date('Y-m-d');
+  return $first > date('Y-m-d') ? date('Y-m-d') : $first;
+}
 function daraz_range(array $src): array {
   $isDate = fn($d) => is_string($d) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $d) && strtotime($d);
   $today = date('Y-m-d');
@@ -423,6 +433,7 @@ function daraz_range(array $src): array {
     '30d'       => ['Last 30 days', date('Y-m-d', strtotime('-29 days')), $today],
     'month'     => ['This month',   date('Y-m-01'), date('Y-m-t')],
     'lastmonth' => ['Last month',   date('Y-m-01', strtotime('first day of last month')), date('Y-m-t', strtotime('last day of last month'))],
+    'all'       => ['Lifetime',     daraz_first_date(), $today],
   ];
   $range = (string)($src['range'] ?? '');
   if (isset($presets[$range])) { [$label, $start, $end] = $presets[$range]; }

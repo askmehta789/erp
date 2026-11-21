@@ -43,6 +43,7 @@ $groups = [
     'ncm_enabled'        => ['Enable NCM Sync','select',['yes','no']],
     'ncm_from_branch'    => ['NCM Pickup Branch (default)','text'],
     'ncm_default_weight' => ['Default Parcel Weight (kg)','number'],
+    'ncm_stuck_days'     => ['NCM: alert when a parcel\'s status hasn\'t changed for (days)','number'],
     'wa_tracking_template' => ['Tracking Link for WhatsApp ({id} = NCM order id)','text'],
     'ncm_portal_tpl'     => ['NCM Portal Order URL ({id} = order no.; blank = portal login)','text'],
     'usd_rate' => ['USD Rate (Rs. per $1, for ads report)','number'],

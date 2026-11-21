@@ -82,6 +82,9 @@ function ncm_book_one(array $bk, array $branchNames){
   if (is_array($ncmId)) $ncmId = json_encode($ncmId);
   if (!$ncmId) throw new Exception('NCM did not return an order id: '.json_encode($res));
   $charge = isset($res['delivery_charge']) ? (float)$res['delivery_charge'] : null;
+  /* remember the route for NCM Insights' charge check */
+  require_once __DIR__.'/ncm_insights_lib.php';
+  ncm_ins_save_route((string)$ncmId, $fbranch, $branch, (string)$payload['delivery_type'], (float)$payload['cod_charge']);
   if ($charge===null) { try { $od = ncm()->order((int)$ncmId); if (isset($od['delivery_charge'])) $charge=(float)$od['delivery_charge']; } catch (Exception $e) {} }
 
   /* AUTO-COMMENT: post the full delivery address (+ name/phone/package) on the new NCM order,
@@ -765,7 +768,7 @@ if(isset($_GET['rate_from'],$_GET['rate_to'],$_GET['rate_type'])){
   <div class="nh-left">
     <h1><img src="assets/ncm-icon.png" alt="NCM" style="height:28px;vertical-align:-6px;margin-right:6px"><span class="grad">NCM Courier Center</span></h1>
     <p>Live booking · tracking · COD · return prevention</p>
-    <div style="margin-top:10px"><a class="btn btn-primary" href="ncm_comments.php" style="font-size:13px;padding:10px 18px">💬 Comment Center<?php
+    <div style="margin-top:10px"><?php if(can_see('ncm_insights.php')): ?><a class="btn" href="ncm_insights.php" style="font-size:13px;padding:10px 18px;margin-right:6px">📈 Insights · speed, charges, COD</a><?php endif; ?><a class="btn btn-primary" href="ncm_comments.php" style="font-size:13px;padding:10px 18px">💬 Comment Center<?php
       $ccNeeds=0; foreach(($todayComments??[]) as $tc){ $tb=strtolower((string)($tc['addedBy']??'')); if(strpos($tb,'vendor')===false) $ccNeeds++; }
       echo $ccNeeds? ' <span style="background:rgba(255,255,255,.25);border-radius:99px;padding:1px 9px;font-size:11px;margin-left:6px">'.$ccNeeds.' need reply</span>':'';
     ?></a></div>
@@ -1205,9 +1208,10 @@ $ncmUnits=(int)val("SELECT COALESCE(SUM(o.qty),0) FROM orders o JOIN couriers c 
     <div><label>Alt Phone</label><input name="phone2"></div>
     <div><label>COD Amount (Rs.)</label><input name="cod_charge" id="bk_cod" type="number" step="any"></div>
     <div class="full"><label>Delivery Address</label><input name="address" id="bk_address"></div>
-    <div><label>From Branch (pickup)</label><input name="fbranch" list="brlist" value="<?= e(setting('ncm_from_branch','TINKUNE')) ?>"></div>
-    <div><label>To Branch (destination)</label><input name="branch" list="brlist" required></div>
-    <div><label>Delivery Type</label><select name="delivery_type"><?php foreach(ncm_delivery_types() as $k=>$t) echo '<option value="'.e($k).'">'.e($t['label']).'</option>'; ?></select></div>
+    <div><label>From Branch (pickup)</label><input name="fbranch" id="bk_fb" list="brlist" value="<?= e(setting('ncm_from_branch','TINKUNE')) ?>" onchange="bkRate()"></div>
+    <div><label>To Branch (destination)</label><input name="branch" id="bk_br" list="brlist" required onchange="bkRate()"></div>
+    <div><label>Delivery Type</label><select name="delivery_type" id="bk_dt" onchange="bkRate()"><?php foreach(ncm_delivery_types() as $k=>$t) echo '<option value="'.e($k).'">'.e($t['label']).'</option>'; ?></select></div>
+    <div class="full" id="bk_rate" style="font-size:12.5px;color:var(--muted);min-height:16px"></div>
     <div><label>Weight (kg)</label><input name="weight" value="<?= e(setting('ncm_default_weight','1')) ?>"></div>
     <div><label>Package / Contents</label><input name="package" id="bk_pkg" placeholder="e.g. Heel Guard Plus x2"></div>
     <div><label>Your Ref (order code)</label><input name="vref_id" id="bk_ref"></div>
@@ -1242,7 +1246,7 @@ document.addEventListener('DOMContentLoaded',function(){bookFor(<?= json_encode(
 document.addEventListener('DOMContentLoaded',function(){alert('Connect NCM first to book this order.');});
 <?php endif; ?>
 function closeBook(){document.getElementById('bookModal').classList.remove('open');}
-function bookFor(o){document.getElementById('bk_order_id').value=o.id;document.getElementById('bk_name').value=o.name||'';document.getElementById('bk_phone').value=o.phone||'';document.getElementById('bk_address').value=o.address||'';document.getElementById('bk_cod').value=o.cod||0;document.getElementById('bk_ref').value=o.ref||'';document.getElementById('bk_pkg').value=o.package||'';var bf=document.querySelector('#bookModal [name=branch]');if(bf)bf.value=bestBranch(o.address);document.getElementById('bookModal').classList.add('open');}
+function bookFor(o){document.getElementById('bk_order_id').value=o.id;document.getElementById('bk_name').value=o.name||'';document.getElementById('bk_phone').value=o.phone||'';document.getElementById('bk_address').value=o.address||'';document.getElementById('bk_cod').value=o.cod||0;document.getElementById('bk_ref').value=o.ref||'';document.getElementById('bk_pkg').value=o.package||'';var bf=document.querySelector('#bookModal [name=branch]');if(bf)bf.value=bestBranch(o.address);document.getElementById('bookModal').classList.add('open');bkRate();}
 function replyTo(id){document.getElementById('rp_id').value=id;document.getElementById('rp_lbl').textContent=id;document.getElementById('rp_back').value='comments='+id;document.getElementById('replyModal').classList.add('open');}
 function qr(t){document.getElementById('rp_text').value=t;}
 function setThr(t){var el=document.getElementById('thr_input');if(el){el.value=t;el.focus();autoGrow(el);}}
@@ -1460,6 +1464,12 @@ function exportNCM(){
   var blob=new Blob([lines.join('\n')],{type:'text/csv'});
   var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='ncm_orders.csv';a.click();
 }
+/* NCM's standard charge for the route picked in the booking form */
+function bkRate(){var el=document.getElementById('bk_rate');if(!el)return;var f=document.getElementById('bk_fb').value.trim(),t=document.getElementById('bk_br').value.trim(),d=document.getElementById('bk_dt').value;
+  if(!f||!t){el.textContent='';return;}el.textContent='Checking NCM rate…';
+  fetch('ncm_insights.php?ajax=rate&from='+encodeURIComponent(f)+'&to='+encodeURIComponent(t)+'&type='+encodeURIComponent(d),{credentials:'same-origin'}).then(function(r){return r.json();})
+  .then(function(j){el.innerHTML=j.ok?'Expected NCM charge: <b style="color:var(--brand)">Rs. '+Math.round(j.rate).toLocaleString('en-IN')+'</b> <span class="muted">(standard rate, up to 1 kg)</span>':'⚠ '+(j.error||'No rate');})
+  .catch(function(){el.textContent='';});}
 </script>
 </div><!-- /ncmv3 -->
 </div><!-- /ncmv3 -->

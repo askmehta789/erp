@@ -79,7 +79,7 @@ function all_access_pages() {
   return [
     'index.php'=>['🏠','Dashboard','Core'], 'sales.php'=>['🛒','Sales','Core'],
     'sales_dashboard.php'=>['🏆','Sales Team','Core'], 'assistant.php'=>['🤖','AI Assistant','Core'],
-    'ncm.php'=>['📮','NCM Courier','Delivery'], 'ncm_command.php'=>['🚚','NCM Command Center','Delivery'],
+    'ncm.php'=>['📮','NCM Courier','Delivery'], 'ncm_insights.php'=>['📈','NCM Insights','Delivery'], 'ncm_command.php'=>['🚚','NCM Command Center','Delivery'],
     'hungryhunter.php'=>['🛵','Hungry Hunter','Delivery'],
     'dropex.php'=>['🚴','Dropex','Delivery'],
     'daraz.php'=>['📊','Daraz Dashboard','Daraz'], 'daraz_sales.php'=>['🧾','Daraz Sales','Daraz'],

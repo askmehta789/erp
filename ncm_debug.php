@@ -6,10 +6,11 @@ require_login();
 if (role_rank(current_user()['role'] ?? '') < 3) { http_response_code(403); exit('Super Admin only'); }
 $PAGE_TITLE='NCM Debug';
 $id = trim((string)($_GET['id'] ?? ''));
-$rawHist=null; $histErr=''; $items=[]; $verdict=''; $rawCmt=null; $cmtErr=''; $local=null;
+$rawHist=null; $rawOrder=null; $histErr=''; $items=[]; $verdict=''; $rawCmt=null; $cmtErr=''; $local=null;
 if ($id!=='') {
   try { $rawHist = ncm()->statusHistory((int)$id); } catch (Exception $e) { $histErr=$e->getMessage(); }
   if (is_array($rawHist)) { $items = ncm_hist_items($rawHist); $verdict = ncm_timeline_verdict($items); }
+  try { $rawOrder = ncm()->order((int)$id); } catch (Exception $e) { $rawOrder = ['error'=>$e->getMessage()]; }
   try { $rawCmt = ncm()->comments((int)$id); } catch (Exception $e) { $cmtErr=$e->getMessage(); }
   try { $local = row("SELECT id,code,customer,status,payment_status,ncm_order_id,ncm_status,ncm_return_flag FROM orders WHERE ncm_order_id=? LIMIT 1",[$id]); } catch (Exception $e) {}
 }
@@ -28,6 +29,8 @@ require __DIR__.'/includes/header.php';
     <pre style="background:#101528;color:#cdd6f4;border-radius:10px;padding:12px;font-size:12px;overflow-x:auto"><?= e($items?json_encode($items,JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE):'(no steps parsed)') ?></pre>
     <h3 style="margin:16px 0 6px">RAW statusHistory response <?= $histErr?'(ERROR)':'' ?></h3>
     <pre style="background:#101528;color:#cdd6f4;border-radius:10px;padding:12px;font-size:12px;overflow-x:auto"><?= e($histErr ?: json_encode($rawHist,JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE)) ?></pre>
+    <h3 style="margin:16px 0 6px">RAW order details (GET /v1/order) — fields NCM Insights reads</h3>
+    <pre style="background:#101528;color:#cdd6f4;border-radius:10px;padding:12px;font-size:12px;overflow-x:auto"><?= e(json_encode($rawOrder,JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE)) ?></pre>
     <h3 style="margin:16px 0 6px">RAW comments response <?= $cmtErr?'(ERROR)':'' ?></h3>
     <pre style="background:#101528;color:#cdd6f4;border-radius:10px;padding:12px;font-size:12px;overflow-x:auto"><?= e($cmtErr ?: json_encode($rawCmt,JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE)) ?></pre>
     <p class="muted" style="margin-top:10px">📸 Screenshot this whole page (both RAW sections) and share it for exact diagnosis.</p>

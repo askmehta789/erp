@@ -44,19 +44,6 @@ try {
   }
 } catch (Exception $e) { $log[] = "NCM comment scan error: ".$e->getMessage(); }
 
-/* ============ 1c) NCM Insights: route, charge, COD and status times (a batch per run) ============ */
-try {
-  if (ncm()->configured()) {
-    require_once __DIR__.'/ncm_insights_lib.php';
-    if(function_exists('set_time_limit')) @set_time_limit(240);
-    $ni = ncm_insights_refresh(60);
-    $log[] = "NCM insights: {$ni['orders']} order(s) updated".($ni['rates']?", {$ni['rates']} rate(s)":'').($ni['queued']?", {$ni['queued']} queued":'');
-    /* stuck-parcel alerts → 🔔 notifications (deduped for a day per order) */
-    foreach (ncm_ins_stuck(max(1, (int)setting('ncm_stuck_days', 3))) as $sr)
-      notify('NCM #'.$sr['nid'].' ('.$sr['code'].', '.$sr['customer'].') stuck at "'.$sr['last_status'].'" for '.floor($sr['stuck_d']).' days', 'alert', 'ncm_insights.php?tab=speed', 24);
-  }
-} catch (Exception $e) { $log[] = "NCM insights error: ".$e->getMessage(); }
-
 /* ============ 1) NCM AUTO-SYNC (every run) ============ */
 try {
   if (ncm()->configured()) {

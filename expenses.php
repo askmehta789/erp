@@ -61,6 +61,40 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
 
       log_activity('Edited expense #'.$id,'Expenses'); flash('Expense updated.');
     } catch (Exception $ex) { flash('Error saving expense: '.$ex->getMessage()); }
+  } elseif (strcasecmp(trim($_POST['category']??''),'Ads')===0 && isset($_POST['ads_product']) && is_array($_POST['ads_product'])) {
+    /* bulk Ads entry: one expense (and one auto-billed due) per product with an amount */
+    $cur=($_POST['currency']??'')==='USD'?'USD':'Rs';
+    $expDate=$_POST['expense_date']?:date('Y-m-d');
+    $note=trim($_POST['description']??'');
+    $payFrom=($_POST['pay_from']??'cash')==='bank'?'bank':'cash';
+    $acc=(int)($_POST['account_id'] ?? 0) ?: null;
+    $prods=$_POST['ads_product']; $amts=(array)($_POST['ads_amount']??[]);
+    $lines=[];
+    foreach($prods as $i=>$p){
+      $p=trim((string)$p); $a=(float)($amts[$i]??0);
+      if($p!=='' && $a>0) $lines[]=[$p,$a];
+    }
+    if(!$lines){ flash('Enter the ad spend for at least one product.'); header('Location: expenses.php'); exit; }
+    $added=0; $sumRs=0;
+    try {
+      foreach($lines as [$product,$amt]){
+        $usd=null; $rs=$amt;
+        if($cur==='USD'){ $usd=$amt; $rs=round($amt*$RATE); }
+        $desc='Ads — '.$product.($note!==''?' · '.$note:'');
+        q("INSERT INTO expenses(expense_date,description,amount,currency,usd_amount,pay_from,category,product) VALUES(?,?,?,?,?,?,?,?)",
+          [$expDate,$desc,$rs,$cur,$usd,$payFrom,'Ads',$product]);
+        $newExpId=(int)val("SELECT LAST_INSERT_ID()");
+        if($acc){
+          $newExp=row("SELECT * FROM expenses WHERE id=?",[$newExpId]);
+          $tid=expense_bank_sync($newExp,$acc);
+          q("UPDATE expenses SET account_id=?, bank_txn_id=? WHERE id=?",[$acc,$tid,$newExpId]);
+        }
+        ads_autobill_sync($newExpId,true,$expDate,$rs,$product,$usd);
+        $added++; $sumRs+=$rs;
+      }
+      log_activity('Added '.$added.' ad expense(s)','Expenses');
+      flash('Added '.$added.' ad expense'.($added>1?'s':'').' — total '.money($sumRs).'.');
+    } catch (Exception $ex) { flash('Error saving ad expenses ('.$added.' saved before the error): '.$ex->getMessage()); }
   } else {
     $cur=$_POST['currency']==='USD'?'USD':'Rs';
     $amt=(float)($_POST['amount']??0); $usd=null; $rs=$amt;
@@ -273,31 +307,158 @@ $rangeLabel = ($amS===$amE) ? date('d M Y',strtotime($amS)) : date('d M Y',strto
   </tbody></table></div>
   <p class="muted" style="font-size:11.5px;padding:0 18px 14px">ROAS = delivered sales ÷ ad spend. Tag every Ads expense to a product for accurate rows — untagged spend appears as "(untagged)".</p>
 </div>
-<div class="card" style="margin-top:18px"><div class="panel-head"><h2>➕ Add Expense</h2></div><form method="post" style="padding:18px">
+<div class="card ax-card" style="margin-top:18px">
+<form method="post" id="addExpForm" onsubmit="return axSubmit()">
 <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="add">
-<div class="form-grid">
-<div><label>Date</label><input name="expense_date" type="date" value="<?= date('Y-m-d') ?>"></div>
-<div><label id="amtLbl">Amount (Rs.)</label><input name="amount" type="number" step="any" value="0"></div>
-<div><label>Currency</label><select name="currency" onchange="document.getElementById('amtLbl').textContent=this.value==='USD'?'Amount ($)':'Amount (Rs.)'"><option value="Rs">Rs. (NPR)</option><option value="USD">USD ($)</option></select></div>
-<div><label>Pay From</label><select name="pay_from"><option value="cash">💰 Cash</option><option value="bank">🏦 Bank</option></select></div>
-<div><label>Account (Bank page) — leave as "not linked" for cash you don't track there</label>
-  <select name="account_id">
-    <option value="0">⏳ — not linked —</option>
-    <?php foreach($linkAccounts as $A): ?>
-      <option value="<?= (int)$A['id'] ?>"><?= $A['kind']==='cash'?'💵':'🏦' ?> <?= e($A['name']) ?> — <?= money($acctBal[$A['id']] ?? 0) ?></option>
-    <?php endforeach; ?>
-  </select></div>
-<div><label>Category</label><select name="category" id="expCat" onchange="expCatChange()"><?php foreach($cats as $c) echo '<option'.($c==='Stock Purchase'?' data-warn="1"':'').'>'.e($c).'</option>'; ?></select></div>
-<div><label>Product (for ads)</label><select name="product"><option value="">— None —</option><?php foreach($products as $p) echo '<option>'.e($p['name']).'</option>'; ?></select></div>
-<div class="full" style="grid-column:span 2"><label>Description (required for USD $)</label><input name="description" placeholder="What was this expense for?"></div>
+<?php $catIcons=[
+  'Ads'=>'<path d="M3 11v2a1 1 0 0 0 1 1h2l5 4V6L6 10H4a1 1 0 0 0-1 1z"/><path d="M15 9a3 3 0 0 1 0 6"/><path d="M18 6a7 7 0 0 1 0 12"/>',
+  'Office'=>'<rect x="5" y="3" width="14" height="18" rx="1.5"/><path d="M9 7h2M13 7h2M9 11h2M13 11h2M10 21v-4h4v4"/>',
+  'Rent'=>'<path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-5h4v5"/>',
+  'Utilities'=>'<path d="M13 3L5 14h6l-1 7 8-11h-6z"/>',
+  'Delivery'=>'<path d="M3 7h11v9H3z"/><path d="M14 10h4l3 3v3h-7"/><circle cx="7" cy="18" r="1.6"/><circle cx="17" cy="18" r="1.6"/>',
+  'Other'=>'<path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6"/>',
+  'Stock Purchase'=>'<path d="M3 7l9-4 9 4-9 4z"/><path d="M3 7v10l9 4 9-4V7"/><path d="M12 11v10"/>'];
+function ax_ico($p){ return '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'.$p.'</svg>'; } ?>
+<div class="ax-head">
+  <div class="ax-title">
+    <span class="ax-badge"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></span>
+    <div><h2>Add Expense</h2><div class="ax-sub">Pick a category — Ads lets you enter every product at once</div></div>
+  </div>
 </div>
+<div class="ax-body">
+<div class="ax-cats" role="radiogroup" aria-label="Category">
+  <?php foreach($cats as $i=>$c): ?>
+    <label class="ax-cat"><input type="radio" name="category" value="<?= e($c) ?>" <?= $i===0?'checked':'' ?> <?= $c==='Stock Purchase'?'data-warn="1"':'' ?> onchange="expCatChange()"><span><?= ax_ico($catIcons[$c] ?? $catIcons['Other']) ?><?= e($c) ?></span></label>
+  <?php endforeach; ?>
+</div>
+<div class="ax-bar">
+  <div class="ax-cell"><label for="axDate">Date</label><input id="axDate" name="expense_date" type="date" value="<?= date('Y-m-d') ?>"></div>
+  <div class="ax-cell"><label>Currency</label>
+    <div class="ax-seg">
+      <label class="ax-opt"><input type="radio" name="currency" value="Rs" checked onchange="axCur()"><span>Rs. NPR</span></label>
+      <label class="ax-opt"><input type="radio" name="currency" value="USD" onchange="axCur()"><span>USD $</span></label>
+    </div></div>
+  <div class="ax-cell"><label>Pay from</label>
+    <div class="ax-seg">
+      <label class="ax-opt"><input type="radio" name="pay_from" value="cash" checked><span>Cash</span></label>
+      <label class="ax-opt"><input type="radio" name="pay_from" value="bank"><span>Bank</span></label>
+    </div></div>
+  <div class="ax-cell ax-cell-wide"><label for="axAcct">Linked account <span class="ax-hint">· shows on Bank page</span></label>
+    <select id="axAcct" name="account_id">
+      <option value="0">— Not linked —</option>
+      <?php foreach($linkAccounts as $A): ?>
+        <option value="<?= (int)$A['id'] ?>"><?= e($A['name']) ?> (<?= $A['kind']==='cash'?'Cash':'Bank' ?>) — <?= money($acctBal[$A['id']] ?? 0) ?></option>
+      <?php endforeach; ?>
+    </select></div>
+</div>
+
+<!-- Ads: one row per product, enter all at once -->
+<div class="ax-ads" id="axAds">
+  <div class="ax-ads-head">
+    <div><b>Ad spend by product</b><div class="ax-hint">Type what you spent on each product — leave blank to skip. One entry is saved per product.</div></div>
+    <div class="ax-ads-tools">
+      <input type="search" id="axFilter" placeholder="Filter products" oninput="axFilter(this.value)">
+      <button type="button" class="btn btn-sm" onclick="axClear()">Clear</button>
+    </div>
+  </div>
+  <div class="ax-row ax-row-h"><div>Product</div><div class="right">Spent (<span class="axCurLbl">Rs.</span>)</div><div class="right">≈ <span class="axOtherLbl">$</span></div></div>
+  <div class="ax-list">
+  <?php foreach($products as $p): $n=$p['name']; ?>
+    <div class="ax-row" data-name="<?= e(mb_strtolower($n)) ?>">
+      <div class="ax-pn"><span class="ax-ini"><?= e(mb_strtoupper(mb_substr($n,0,1))) ?></span><span class="ax-name" title="<?= e($n) ?>"><?= e($n) ?></span></div>
+      <div class="ax-in"><span class="axCurLbl">Rs.</span><input type="hidden" name="ads_product[]" value="<?= e($n) ?>" disabled><input type="number" name="ads_amount[]" min="0" step="any" placeholder="0" inputmode="decimal" aria-label="Ad spend for <?= e($n) ?>" oninput="axCalc()" disabled></div>
+      <div class="ax-conv num right">—</div>
+    </div>
+  <?php endforeach; if(!$products): ?><div class="empty" style="padding:16px">No products yet — add products first.</div><?php endif; ?>
+  </div>
+  <div class="ax-foot">
+    <div><b id="axFilled">0</b> of <?= count($products) ?> products filled</div>
+    <div class="ax-total"><span class="ax-tl">Total</span><span class="num" id="axTotal">Rs. 0</span><span class="muted num" id="axTotal2"></span></div>
+  </div>
+</div>
+
+<!-- other categories: single amount -->
+<div class="ax-grid" id="axSingle" style="margin-top:14px">
+  <div class="ax-f"><label id="amtLbl">Amount (Rs.)</label><input name="amount" id="axAmount" type="number" step="any" min="0" placeholder="0"></div>
+</div>
+
+<div class="ax-f" style="margin-top:14px"><label id="axDescLbl">Description (required for USD $)</label><input name="description" id="axDesc" placeholder="What was this expense for?"></div>
+
 <div id="stockWarn" style="display:none;margin-top:12px;background:var(--amber-bg,#fef3c7);border:1px solid #f0c040;color:#8a5a00;border-radius:12px;padding:12px 14px;font-size:12.5px;line-height:1.6">
   ⚠️ <b>Heads up — this can double-count your cost.</b><br>
   If you're buying stock to sell (like VitiGO from a vendor), record it as a <a href="products.php" style="color:#8a5a00;font-weight:800;text-decoration:underline">Restock</a> instead. That builds the cost into each product automatically, so it's subtracted once as you sell.<br>
   Logging it here <b>as well</b> would subtract the same money twice and can make your <b>Net Profit show a fake loss</b>. Only use this category for stock you are <b>not</b> tracking as a batch.
 </div>
-<button class="btn btn-primary" style="margin-top:14px;width:100%;justify-content:center">Add Expense</button>
+<button class="btn btn-primary ax-submit" id="axBtn">Add Expense</button>
+</div>
 </form></div>
+<style>
+.ax-card{overflow:hidden}
+.ax-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:18px 20px 4px}
+.ax-title{display:flex;align-items:center;gap:12px}
+.ax-badge{width:38px;height:38px;border-radius:11px;background:rgba(99,102,241,.1);color:var(--brand);border:1px solid rgba(99,102,241,.2);display:flex;align-items:center;justify-content:center;flex:none}
+.ax-head h2{margin:0;font-size:17px;font-weight:800;letter-spacing:-.01em}
+.ax-sub{font-size:12.5px;color:var(--muted);margin-top:2px}
+.ax-body{padding:16px 20px 20px}
+.ax-cats{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;scrollbar-width:thin}
+.ax-cat{position:relative;margin:0!important;flex:none}
+.ax-cat input{position:absolute;opacity:0;pointer-events:none}
+.ax-cat span{display:flex;align-items:center;gap:8px;height:38px;padding:0 14px;border-radius:10px;border:1px solid var(--border);background:var(--surface);font-size:13px;font-weight:600;color:var(--muted);cursor:pointer;white-space:nowrap;transition:border-color .15s,background .15s,color .15s}
+.ax-cat span svg{flex:none;opacity:.7}
+.ax-cat span:hover{color:var(--ink);border-color:rgba(120,130,170,.5)}
+.ax-cat input:checked+span{color:var(--brand);border-color:var(--brand);background:rgba(99,102,241,.07);font-weight:700;box-shadow:inset 0 0 0 1px var(--brand)}
+.ax-cat input:checked+span svg{opacity:1}
+.ax-cat input:focus-visible+span{outline:2px solid var(--brand);outline-offset:2px}
+.ax-bar{margin-top:16px;display:grid;grid-template-columns:1fr 1fr 1fr 1.4fr;border:1px solid var(--border);border-radius:16px;background:var(--surface);box-shadow:0 2px 10px rgba(30,40,80,.05)}
+.ax-cell{padding:10px 14px 12px;min-width:0;border-left:1px solid var(--border);display:flex;flex-direction:column;gap:6px;transition:background .15s}
+.ax-cell:first-child{border-left:0;border-radius:16px 0 0 16px}
+.ax-cell:last-child{border-radius:0 16px 16px 0}
+.ax-cell:focus-within{background:rgba(99,102,241,.06)}
+.ax-cell>label{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0}
+.ax-cell>label .ax-hint{text-transform:none;letter-spacing:0;font-weight:500}
+.ax-cell>input,.ax-cell>select{width:100%;height:34px;border:0;background:transparent;color:var(--ink);font-size:14.5px;font-weight:700;padding:0;outline:none;cursor:pointer}
+.ax-cell .ax-seg{height:34px;box-sizing:border-box;flex-wrap:nowrap;padding:3px}
+.ax-cell .ax-opt span{min-height:28px}
+.ax-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
+.ax-f label{display:block;font-size:12px;color:var(--muted);font-weight:700;margin-bottom:6px}
+.ax-hint{font-weight:500;font-size:11.5px;color:var(--muted)}
+.ax-f input,.ax-f select{width:100%;height:40px;padding:0 12px;border:1px solid var(--border);border-radius:10px;font-size:13.5px;background:var(--surface);color:var(--ink);box-sizing:border-box}
+.ax-seg{display:flex;gap:2px;background:rgba(120,130,170,.1);padding:3px;border-radius:9px;flex-wrap:wrap}
+.ax-toggle{height:40px;box-sizing:border-box;flex-wrap:nowrap}
+.ax-opt{position:relative;flex:1;margin:0!important;display:flex!important}
+.ax-opt input{position:absolute;opacity:0;pointer-events:none}
+.ax-opt span{flex:1;display:flex;align-items:center;justify-content:center;white-space:nowrap;padding:0 12px;min-height:32px;border-radius:8px;font-size:13px;font-weight:600;color:var(--muted);cursor:pointer;transition:background .15s,color .15s}
+.ax-opt span:hover{color:var(--ink)}
+.ax-opt input:checked+span{background:var(--surface);color:var(--ink);font-weight:700;box-shadow:0 1px 2px rgba(30,40,80,.12),0 0 0 1px rgba(120,130,170,.2)}
+.ax-opt input:focus-visible+span{outline:2px solid var(--brand);outline-offset:1px}
+.ax-ads{margin-top:16px;border:1px solid var(--border);border-radius:14px;overflow:hidden}
+.ax-ads-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:12px 16px;background:rgba(120,130,170,.07);border-bottom:1px solid var(--border)}
+.ax-ads-tools{display:flex;gap:8px;align-items:center}
+.ax-ads-tools input{height:34px;width:190px;padding:0 12px;border:1px solid var(--border);border-radius:9px;font-size:13px;background:var(--surface);color:var(--ink)}
+.ax-list{max-height:420px;overflow-y:auto}
+.ax-row{display:grid;grid-template-columns:minmax(0,1fr) 200px 130px;gap:12px;align-items:center;padding:8px 16px;border-bottom:1px solid var(--border)}
+.ax-row:last-child{border-bottom:none}
+.ax-row.on{background:rgba(99,102,241,.08)}
+.ax-row-h{font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;padding:9px 16px}
+.ax-row .right{text-align:right}
+.ax-pn{display:flex;align-items:center;gap:10px;min-width:0}
+.ax-ini{width:30px;height:30px;flex:none;border-radius:8px;background:rgba(99,102,241,.14);color:var(--brand);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800}
+.ax-name{font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ax-in{display:flex;align-items:center;height:36px;border:1px solid var(--border);border-radius:9px;background:var(--surface);overflow:hidden}
+.ax-in:focus-within{border-color:var(--brand);box-shadow:0 0 0 3px rgba(99,102,241,.15)}
+.ax-in>span{padding:0 10px;font-size:12.5px;color:var(--muted);height:100%;display:flex;align-items:center;border-right:1px solid var(--border);background:rgba(120,130,170,.07)}
+.ax-in input{flex:1;min-width:0;border:0;height:100%;padding:0 10px;font-size:14px;font-weight:700;text-align:right;background:transparent;color:var(--ink);outline:none}
+.ax-conv{font-size:12.5px;color:var(--muted)}
+.ax-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:12px 16px;background:rgba(120,130,170,.07);border-top:1px solid var(--border);font-size:13px}
+.ax-total{display:flex;align-items:baseline;gap:10px}
+.ax-tl{font-size:11.5px;font-weight:800;color:var(--muted);text-transform:uppercase}
+#axTotal{font-size:20px;font-weight:900}
+.ax-submit{margin-top:16px;width:100%;justify-content:center;height:46px;font-size:14.5px}
+.ax-submit:disabled{opacity:.55;cursor:not-allowed}
+@media(max-width:900px){.ax-grid{grid-template-columns:1fr 1fr}.ax-bar{grid-template-columns:1fr 1fr}.ax-cell{border-radius:0!important}.ax-cell:nth-child(3){border-left:0}.ax-cell:nth-child(n+3){border-top:1px solid var(--border)}}
+@media(max-width:560px){.ax-bar{grid-template-columns:1fr}.ax-cell{border-left:0}.ax-cell+.ax-cell{border-top:1px solid var(--border)}}
+@media(max-width:560px){.ax-grid{grid-template-columns:1fr}.ax-row{grid-template-columns:minmax(0,1fr) 140px}.ax-conv,.ax-row-h>div:last-child{display:none}.ax-ads-tools input{width:140px}}
+</style>
 <div class="card" id="expense-history" style="margin-top:18px;scroll-margin-top:18px">
   <div class="panel-head" style="flex-wrap:wrap;gap:10px">
     <h2>🧾 Expense History</h2>
@@ -486,12 +647,72 @@ function toggleHistAdv(){
 </script>
 
 <script>
+var AX_RATE=<?= json_encode($RATE) ?>;
+function axCatInput(){ return document.querySelector('#addExpForm input[name="category"]:checked'); }
+function axIsAds(){ var c=axCatInput(); return !!c && c.value==='Ads'; }
+function axIsUsd(){ var c=document.querySelector('#addExpForm input[name="currency"]:checked'); return !!c && c.value==='USD'; }
+function axRs(n){ return 'Rs. '+Math.round(n).toLocaleString('en-IN'); }
+function axUsd(n){ return '$'+n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); }
 function expCatChange(){
-  var sel=document.getElementById('expCat');
-  var opt=sel && sel.options[sel.selectedIndex];
+  var c=axCatInput(), ads=axIsAds();
   var warn=document.getElementById('stockWarn');
-  if(warn) warn.style.display = (opt && opt.getAttribute('data-warn')==='1') ? 'block' : 'none';
+  if(warn) warn.style.display = (c && c.getAttribute('data-warn')==='1') ? 'block' : 'none';
+  document.getElementById('axAds').style.display = ads ? '' : 'none';
+  document.getElementById('axSingle').style.display = ads ? 'none' : '';
+  document.getElementById('axAmount').disabled = ads;
+  document.querySelectorAll('#axAds .ax-list input').forEach(function(i){ i.disabled=!ads; });
+  axCur();
 }
+function axCur(){
+  var usd=axIsUsd(), ads=axIsAds();
+  document.querySelectorAll('.axCurLbl').forEach(function(s){ s.textContent=usd?'$':'Rs.'; });
+  document.querySelectorAll('.axOtherLbl').forEach(function(s){ s.textContent=usd?'Rs.':'$'; });
+  document.getElementById('amtLbl').textContent=usd?'Amount ($)':'Amount (Rs.)';
+  document.getElementById('axDescLbl').textContent = ads ? 'Note (optional — added to each entry, e.g. "Meta ads")' : (usd ? 'Description (required for USD $)' : 'Description');
+  axCalc();
+}
+function axCalc(){
+  var usd=axIsUsd(), ads=axIsAds(), total=0, filled=0;
+  document.querySelectorAll('#axAds .ax-row[data-name]').forEach(function(r){
+    var v=parseFloat(r.querySelector('input[type=number]').value)||0;
+    r.classList.toggle('on', v>0);
+    r.querySelector('.ax-conv').textContent = v>0 ? (usd?axRs(v*AX_RATE):axUsd(v/AX_RATE)) : '—';
+    if(v>0){ total+=v; filled++; }
+  });
+  document.getElementById('axFilled').textContent=filled;
+  document.getElementById('axTotal').textContent = usd?axUsd(total):axRs(total);
+  document.getElementById('axTotal2').textContent = total>0 ? '≈ '+(usd?axRs(total*AX_RATE):axUsd(total/AX_RATE)) : '';
+  var b=document.getElementById('axBtn');
+  if(ads){
+    b.textContent = filled ? 'Add '+filled+' ad expense'+(filled>1?'s':'')+' · '+(usd?axUsd(total):axRs(total)) : 'Enter ad spend above';
+    b.disabled = !filled;
+  } else { b.textContent='Add Expense'; b.disabled=false; }
+}
+function axFilter(q){
+  q=(q||'').toLowerCase().trim();
+  document.querySelectorAll('#axAds .ax-row[data-name]').forEach(function(r){
+    r.style.display = (!q || r.getAttribute('data-name').indexOf(q)!==-1) ? '' : 'none';
+  });
+}
+function axClear(){
+  document.querySelectorAll('#axAds .ax-list input[type=number]').forEach(function(i){ i.value=''; });
+  axCalc();
+}
+function axSubmit(){
+  if(axIsAds()) return true;
+  var amt=parseFloat(document.getElementById('axAmount').value)||0;
+  if(amt<=0){ alert('Enter an amount greater than 0.'); return false; }
+  if(axIsUsd() && !document.getElementById('axDesc').value.trim()){ alert('Description is required for USD expenses.'); return false; }
+  return true;
+}
+/* Enter inside a product amount jumps to the next visible product instead of submitting */
+document.addEventListener('keydown',function(ev){
+  var t=ev.target; if(ev.key!=='Enter' || !t.closest || !t.closest('#axAds .ax-list')) return;
+  ev.preventDefault();
+  var all=[].slice.call(document.querySelectorAll('#axAds .ax-row[data-name]')).filter(function(r){return r.style.display!=='none';})
+          .map(function(r){return r.querySelector('input[type=number]');});
+  var i=all.indexOf(t); if(i>-1 && all[i+1]) all[i+1].focus();
+});
 document.addEventListener('DOMContentLoaded',expCatChange);
 </script>
 

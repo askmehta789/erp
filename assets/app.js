@@ -164,3 +164,28 @@ function crudEdit(n,btn){var m=document.getElementById('mbg_'+n);if(!m)return;
   });
   m.classList.add('open');document.body.classList.add('modal-open');}
 function crudClose(n){var m=document.getElementById('mbg_'+n);if(m)m.classList.remove('open');document.body.classList.remove('modal-open');}
+/* ---- page-change feedback: a thin progress bar at the top as soon as a link is clicked,
+   so a slow page (e.g. Sales with thousands of orders) never looks like a dead click ---- */
+(function(){
+  var bar=null, timer=null;
+  function start(){
+    if(!bar){ bar=document.createElement('div'); bar.id='navProgress'; document.body.appendChild(bar); }
+    clearInterval(timer); bar.className='go'; bar.style.width='0%'; var w=0;
+    requestAnimationFrame(function(){ w=18; bar.style.width=w+'%'; });
+    /* creep towards 90% until the next page replaces this one */
+    timer=setInterval(function(){ w+=(90-w)*0.08; bar.style.width=w.toFixed(1)+'%'; },250);
+  }
+  function stop(){ clearInterval(timer); if(bar){ bar.className=''; bar.style.width='0%'; } document.querySelectorAll('.is-opening').forEach(function(a){a.classList.remove('is-opening');}); }
+  document.addEventListener('click',function(e){
+    if(e.defaultPrevented||e.button!==0||e.metaKey||e.ctrlKey||e.shiftKey||e.altKey) return;
+    var a=e.target.closest&&e.target.closest('a[href]'); if(!a) return;
+    var href=a.getAttribute('href')||'';
+    if(!href||href.charAt(0)==='#'||/^(javascript:|mailto:|tel:|https?:\/\/wa\.me)/i.test(href)) return;
+    if(a.target&&a.target!=='_self') return; if(a.hasAttribute('download')) return;
+    if(a.origin&&a.origin!==location.origin) return;
+    if(a.pathname===location.pathname&&a.search===location.search&&a.hash) return;
+    a.classList.add('is-opening');
+    start();
+  },false);
+  window.addEventListener('pageshow',stop);   /* back/forward cache: clear it again */
+})();

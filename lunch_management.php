@@ -139,6 +139,9 @@ $allEmps = rows("SELECT id,name,salary,lunch_rate,status FROM employees e
                    AND ((COALESCE(e.is_company,0)=0 AND COALESCE(e.status,'active')<>'inactive')
                     OR EXISTS(SELECT 1 FROM lunch_orders lo WHERE lo.employee_id=e.id AND lo.order_date BETWEEN ? AND ?))
                  ORDER BY name", [$mStart,$mEnd]);
+/* base salary as it applied in the month being viewed (salary hikes start from a set month) */
+ensure_salary_history();
+foreach ($allEmps as &$ae) $ae['salary'] = salary_base_for((int)$ae['id'], $m, (float)$ae['salary']); unset($ae);
 $empName = []; foreach ($allEmps as $ae) $empName[(int)$ae['id']] = $ae['name'];
 
 $lunchAgg = lunch_monthly_agg($mStart, $mEnd, $empFilter);

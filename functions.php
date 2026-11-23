@@ -768,3 +768,62 @@ function ensure_salary_ym_bs() {
   } catch (Exception $e) {}
   set_setting('salary_ym_bs_migrated','1');
 }
+
+/* ===== Salary history (hikes) =====
+   employees.salary is the CURRENT base salary. A hike is stored in salary_history with
+   the Nepali (BS) month it starts from, so earlier months keep paying the old amount
+   instead of being silently rewritten. The first change for someone also stores their
+   previous salary as a '0000-00' baseline row, covering every month before the hike. */
+function ensure_salary_history() {
+  static $done=false; if($done) return; $done=true;
+  try { q("CREATE TABLE IF NOT EXISTS salary_history(
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    employee_id INT NOT NULL,
+    effective_ym CHAR(7) NOT NULL,
+    amount DECIMAL(12,2) NOT NULL,
+    note VARCHAR(160) DEFAULT '',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uniq_emp_ym(employee_id, effective_ym),
+    INDEX(employee_id))"); } catch (Exception $e) {}
+  salary_refresh_current();
+}
+/* all history rows, grouped per employee and sorted oldest → newest (cached per request) */
+function salary_history_map($reset=false) {
+  static $map=null;
+  if ($reset) { $map=null; return []; }
+  if ($map===null) {
+    $map=[];
+    try { foreach (rows("SELECT * FROM salary_history ORDER BY employee_id, effective_ym") as $r) $map[(int)$r['employee_id']][]=$r; } catch (Exception $e) {}
+  }
+  return $map;
+}
+/* base salary that applies in BS month $ym; $fallback = employees.salary when there's no history */
+function salary_base_for($employeeId, $ym, $fallback) {
+  $h = salary_history_map()[(int)$employeeId] ?? [];
+  if (!$h) return (float)$fallback;
+  $amt = (float)$h[0]['amount'];
+  foreach ($h as $r) { if ($r['effective_ym'] <= $ym) $amt=(float)$r['amount']; else break; }
+  return $amt;
+}
+/* keep employees.salary = what applies this month (a future-dated hike switches on by itself) */
+function salary_refresh_current() {
+  if (!function_exists('bs_ym_of')) return;
+  $cur = bs_ym_of(date('Y-m-d')); if (!$cur) return;
+  foreach (salary_history_map() as $eid=>$h) {
+    $now = salary_base_for($eid, $cur, 0);
+    try { q("UPDATE employees SET salary=? WHERE id=? AND ROUND(COALESCE(salary,0),2)<>ROUND(?,2)", [$now,$eid,$now]); } catch (Exception $e) {}
+  }
+}
+/* record a salary change for $employeeId starting BS month $effYm */
+function salary_record_change($employeeId, $oldAmount, $newAmount, $effYm, $note='') {
+  ensure_salary_history();
+  $employeeId=(int)$employeeId;
+  if (!$employeeId || !preg_match('/^\d{4}-\d{2}$/',$effYm)) return false;
+  if (!(int)val("SELECT COUNT(*) FROM salary_history WHERE employee_id=?",[$employeeId]))
+    q("INSERT INTO salary_history(employee_id,effective_ym,amount,note) VALUES(?,?,?,?)",[$employeeId,'0000-00',(float)$oldAmount,'Salary before first recorded change']);
+  q("INSERT INTO salary_history(employee_id,effective_ym,amount,note) VALUES(?,?,?,?)
+     ON DUPLICATE KEY UPDATE amount=VALUES(amount), note=VALUES(note)",[$employeeId,$effYm,(float)$newAmount,$note]);
+  salary_history_map(true);
+  salary_refresh_current();
+  return true;
+}

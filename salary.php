@@ -6,8 +6,22 @@ require_login(); require_page_access();
    below, since it writes straight to these columns */
 ensure_lunch_system();
 ensure_employee_profile_fields();
+ensure_salary_history();
 /* embedded Staff Directory posts carry _entity=employees; handled & redirected before salary handlers */
-if (($_POST['_entity'] ?? '') === 'employees') handle_crud('employees');
+if (($_POST['_entity'] ?? '') === 'employees') {
+  /* changing someone's salary in the directory counts as a change from THIS month on,
+     so earlier months keep their old base instead of being rewritten */
+  if (($_POST['_action'] ?? '') === 'update' && isset($_POST['salary']) && ($_POST['csrf'] ?? '') === ($_SESSION['csrf'] ?? null)) {
+    $sid=(int)($_POST['id'] ?? 0);
+    $oldSal=(float)val("SELECT COALESCE(salary,0) FROM employees WHERE id=?",[$sid]);
+    $newSal=(float)$_POST['salary'];
+    if ($sid && abs($newSal-$oldSal)>0.009) {
+      salary_record_change($sid,$oldSal,$newSal,bs_ym_of(date('Y-m-d')),'Changed in Staff Directory');
+      log_activity("Salary changed ".money($oldSal)." → ".money($newSal)." (emp #$sid)",'Salary');
+    }
+  }
+  handle_crud('employees');
+}
 $PAGE_TITLE='Staff Salary';
 $u = current_user();
 $isAdmin = role_rank($u['role'] ?? '') >= 3;
@@ -98,6 +112,40 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
     } else flash('Pick an employee and enter an amount.');
     header('Location: salary.php?m='.urlencode($ym).(isset($_POST['back_emp'])&&$_POST['back_emp']?'&emp='.(int)$_POST['back_emp']:'')); exit;
   }
+  if ($act==='hike' && $isAdmin) {
+    $eid=(int)($_POST['employee_id'] ?? 0);
+    $newSal=round((float)($_POST['new_salary'] ?? 0),2);
+    $hm=max(1,min(12,(int)($_POST['eff_month'] ?? 0))); $hy=(int)($_POST['eff_year'] ?? 0);
+    $effYm=$hy ? sprintf('%04d-%02d',$hy,$hm) : bs_ym_of(date('Y-m-d'));
+    $note=trim($_POST['note'] ?? '');
+    $emp0=$eid ? row("SELECT id,name,salary FROM employees WHERE id=?",[$eid]) : null;
+    if (!$emp0 || $newSal<=0) {
+      flash('Pick an employee and enter the new salary.');
+    } else {
+      $before=salary_base_for($eid,bs_ym_add($effYm,-1),(float)$emp0['salary']);
+      salary_record_change($eid,(float)$emp0['salary'],$newSal,$effYm,$note);
+      $diff=$newSal-$before;
+      log_activity("Salary hike ".$emp0['name'].": ".money($before)." → ".money($newSal)." from $effYm",'Salary');
+      flash($emp0['name'].'\'s salary is now '.money($newSal).' from '.bs_ym_label($effYm,false).' ('.($diff>=0?'+':'−').money(abs($diff)).'). Earlier months keep '.money($before).'.');
+    }
+    header('Location: salary.php?m='.urlencode($effYm).(isset($_POST['back_emp'])&&$_POST['back_emp']?'&emp='.(int)$_POST['back_emp']:'')); exit;
+  }
+  if ($act==='hike_del' && $isAdmin) {
+    $hid=(int)($_POST['id'] ?? 0);
+    $hr=row("SELECT * FROM salary_history WHERE id=?",[$hid]);
+    if ($hr && $hr['effective_ym']!=='0000-00') {
+      q("DELETE FROM salary_history WHERE id=?",[$hid]);
+      /* only the baseline left → the history no longer changes anything, drop it */
+      if ((int)val("SELECT COUNT(*) FROM salary_history WHERE employee_id=?",[(int)$hr['employee_id']])<=1) {
+        $base0=(float)val("SELECT amount FROM salary_history WHERE employee_id=? AND effective_ym='0000-00'",[(int)$hr['employee_id']]);
+        q("DELETE FROM salary_history WHERE employee_id=?",[(int)$hr['employee_id']]);
+        q("UPDATE employees SET salary=? WHERE id=?",[$base0,(int)$hr['employee_id']]);
+      }
+      salary_history_map(true); salary_refresh_current();
+      flash('Salary change removed.');
+    }
+    header('Location: salary.php?m='.urlencode(preg_match('/^\d{4}-\d{2}$/',$_POST['m'] ?? '')?$_POST['m']:bs_ym_of(date('Y-m-d'))).'&emp='.(int)($hr['employee_id'] ?? 0)); exit;
+  }
   if ($act==='del' && $isAdmin) {
     $delId=(int)($_POST['id'] ?? 0);
     $row0=row("SELECT bank_txn_id, expense_id FROM salary_entries WHERE id=?",[$delId]);
@@ -128,7 +176,7 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
           SUM(CASE WHEN type='lunch' THEN amount ELSE 0 END) lun,
           SUM(CASE WHEN type='deduction' THEN amount ELSE 0 END) ded
         FROM salary_entries WHERE ym=? AND employee_id=?",[$ym2,$eid2]);
-      $payable2=(float)$e2['salary']+(float)($agg2['bon']??0)+(float)($agg2['lun']??0)-(float)($agg2['ded']??0);
+      $payable2=salary_base_for($eid2,$ym2,(float)$e2['salary'])+(float)($agg2['bon']??0)+(float)($agg2['lun']??0)-(float)($agg2['ded']??0);
       $paid2=(float)($agg2['pay']??0)+(float)($agg2['adv']??0);
       $due2=round($payable2-$paid2,2);
       if ($due2>0.01) {
@@ -186,15 +234,18 @@ $G=function($id,$k)use($agg){ return isset($agg[$id])?(float)$agg[$id][$k]:0; };
 $tPayable=0;$tPaid=0;$tDue=0;$tLunch=0;$tBonus=0;$tAdvance=0;
 $rowsOut=[];
 foreach($emps as $e){
-  $id=(int)$e['id']; $base=(float)($e['salary'] ?? 0);
+  $id=(int)$e['id']; $base=salary_base_for($id,$m,(float)($e['salary'] ?? 0));
+  $prevBase=salary_base_for($id,bs_ym_add($m,-1),(float)($e['salary'] ?? 0));
+  $hikeDiff=$base-$prevBase;   /* ≠0 only in the month a change starts */
   $bon=$G($id,'bon'); $ded=$G($id,'ded'); $adv=$G($id,'adv'); $pay=$G($id,'pay'); $lun=$G($id,'lun');
   $payable = $base + $bon + $lun - $ded;
   $paid    = $pay + $adv;                     /* advances count toward the month */
   $due     = $payable - $paid;
   $st = $paid<=0.01 ? 'Pending' : ($due>0.01 ? 'Partial' : 'Paid');
   $tPayable+=$payable; $tPaid+=min($paid,$payable); $tDue+=max(0,$due); $tLunch+=$lun; $tBonus+=$bon; $tAdvance+=$adv;
-  $rowsOut[]=compact('e','id','base','bon','lun','ded','adv','pay','payable','paid','due','st');
+  $rowsOut[]=compact('e','id','base','hikeDiff','bon','lun','ded','adv','pay','payable','paid','due','st');
 }
+$salHist = salary_history_map();
 
 $entries = rows("SELECT s.*, e.name FROM salary_entries s LEFT JOIN employees e ON e.id=s.employee_id
                  WHERE s.ym=?".($empFilter?" AND s.employee_id=".$empFilter:"")." ORDER BY s.entry_date DESC, s.id DESC",[$m]);
@@ -254,6 +305,7 @@ $stPill=fn($s)=>['Paid'=>'p-green','Partial'=>'p-yellow','Pending'=>'p-red'][$s]
     <a class="btn" style="background:var(--orange-bg);color:var(--orange)" href="lunch_management.php?m=<?= e($m) ?>">🍱 Lunch Management</a>
     <a class="btn" target="_blank" href="salary_report.php?m=<?= e($m) ?>&emp=<?= $empFilter ?>" title="<?= $empFilter?'PDF statement for '.e($empName[$empFilter] ?? 'this staff member'):'PDF report for all staff' ?>">📄 <?= $empFilter?'PDF Report':'PDF Report (All Staff)' ?></a>
     <?php if($isAdmin && $tDue>0.5): ?><button class="btn" style="background:var(--green-bg);color:var(--green)" onclick="openPayAll()">💰 Pay All Due</button><?php endif; ?>
+    <?php if($isAdmin): ?><button class="btn" onclick="openHike(<?= $empFilter ?: '' ?>)">📈 Salary Hike</button><?php endif; ?>
     <button class="btn btn-primary" onclick="openSal()">＋ Add Entry</button>
   </div>
 </div>
@@ -277,7 +329,7 @@ $stPill=fn($s)=>['Paid'=>'p-green','Partial'=>'p-yellow','Pending'=>'p-red'][$s]
   <?php foreach($rowsOut as $r): ?>
     <tr>
       <td><b><?= e($r['e']['name']) ?></b><br><small class="muted"><?= e($r['e']['role'] ?: '') ?> · <?= money((float)$r['e']['lunch_rate']) ?>/day lunch</small></td>
-      <td class="num right"><?= money($r['base']) ?></td>
+      <td class="num right"><?= money($r['base']) ?><?php if(abs($r['hikeDiff'])>0.009): ?><br><span class="pill <?= $r['hikeDiff']>0?'p-green':'p-red' ?>" style="font-size:10px" title="Salary changed from this month"><?= $r['hikeDiff']>0?'▲ +':'▼ −' ?><?= money(abs($r['hikeDiff'])) ?></span><?php endif; ?></td>
       <td class="num right" style="color:var(--green)"><?= $r['bon']>0?'+'.money($r['bon']):'—' ?></td>
       <td class="num right" style="color:<?= $r['lun']<-0.009?'var(--red)':'var(--orange)' ?>"><?= $r['lun']>0.009?'+'.money($r['lun']):($r['lun']<-0.009?money($r['lun']):'—') ?></td>
       <td class="num right" style="color:var(--red)"><?= $r['ded']>0?'−'.money($r['ded']):'—' ?></td>
@@ -295,6 +347,29 @@ $stPill=fn($s)=>['Paid'=>'p-green','Partial'=>'p-yellow','Pending'=>'p-red'][$s]
   <?php endforeach; if(!$rowsOut) echo '<tr><td colspan="11"><div class="empty">No staff yet — add employees in <a href="hrm.php">HRM</a> first.</div></td></tr>'; ?>
   </tbody></table></div>
 </div>
+
+<?php if($empFilter): $sh=$salHist[$empFilter] ?? []; ?>
+<div class="panel" style="margin-top:16px">
+  <div class="panel-head"><h2>📈 Salary History · <?= e($empName[$empFilter] ?? '') ?></h2>
+    <?php if($isAdmin): ?><button class="btn btn-sm" onclick="openHike(<?= $empFilter ?>)">＋ Salary Hike</button><?php endif; ?></div>
+  <?php if(!$sh): ?>
+    <div class="panel-body"><div class="muted">No salary changes recorded — <?= money((float)($emps[0]['salary'] ?? 0)) ?> applies to every month.</div></div>
+  <?php else: ?>
+  <div class="table-wrap"><table class="tbl num-tbl"><thead><tr><th>From month</th><th class="right">Base salary</th><th class="right">Change</th><th>Note</th><th></th></tr></thead><tbody>
+    <?php $prevAmt=null; $shRows=[]; foreach($sh as $h){ $shRows[]=['h'=>$h,'diff'=>$prevAmt===null?null:(float)$h['amount']-$prevAmt]; $prevAmt=(float)$h['amount']; }
+      foreach(array_reverse($shRows) as $x): $h=$x['h']; $isBase=$h['effective_ym']==='0000-00'; ?>
+      <tr>
+        <td><b><?= $isBase?'Before first change':e(bs_ym_label($h['effective_ym'])) ?></b></td>
+        <td class="num right" style="font-weight:700"><?= money($h['amount']) ?></td>
+        <td class="num right"><?php if($x['diff']===null): ?>—<?php else: ?><span style="font-weight:700;color:<?= $x['diff']>=0?'var(--green)':'var(--red)' ?>"><?= $x['diff']>=0?'+':'−' ?><?= money(abs($x['diff'])) ?></span><?php endif; ?></td>
+        <td class="muted"><?= e($h['note']) ?></td>
+        <td class="right"><?php if($isAdmin && !$isBase): ?><form method="post" style="display:inline" onsubmit="return confirm('Remove this salary change? Months from then on go back to the previous salary.')"><input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="hike_del"><input type="hidden" name="id" value="<?= (int)$h['id'] ?>"><input type="hidden" name="m" value="<?= e($m) ?>"><button class="iact del" title="Remove">🗑</button></form><?php endif; ?></td>
+      </tr>
+    <?php endforeach; ?>
+  </tbody></table></div>
+  <?php endif; ?>
+</div>
+<?php endif; ?>
 
 <div class="panel" style="margin-top:16px">
   <div class="panel-head"><h2>📈 Salary Trend — Last 12 Months<?= $empFilter?' · '.e($empName[$empFilter] ?? ''):'' ?></h2></div>
@@ -411,6 +486,27 @@ $stPill=fn($s)=>['Paid'=>'p-green','Partial'=>'p-yellow','Pending'=>'p-red'][$s]
 </form></div>
 
 <?php if($isAdmin): ?>
+<!-- salary hike modal -->
+<div class="modal-bg" id="hikeModal" style="z-index:99990"><form class="modal" method="post" style="width:460px;max-width:94vw">
+  <div class="modal-head"><span>📈 Salary Hike</span><span class="mx" onclick="closeHike()">✕</span></div>
+  <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="hike">
+  <input type="hidden" name="back_emp" value="<?= $empFilter ?>">
+  <div class="modal-body">
+    <div class="full"><label>Employee *</label><select name="employee_id" id="hk_emp" required onchange="hikeCalc()"><option value="">—</option>
+      <?php foreach(rows("SELECT id,name,salary FROM employees WHERE COALESCE(is_company,0)=0 ORDER BY name") as $ae): ?><option value="<?= (int)$ae['id'] ?>" data-sal="<?= (float)$ae['salary'] ?>"><?= e($ae['name']) ?></option><?php endforeach; ?></select></div>
+    <div><label>Current salary</label><div id="hk_cur" style="padding-top:9px;font-weight:800">—</div></div>
+    <div><label>New salary (Rs.) *</label><input type="number" step="any" min="1" name="new_salary" id="hk_new" required oninput="hikeCalc()"></div>
+    <div class="full"><label>Starts from salary month (BS)</label>
+      <div style="display:flex;gap:6px">
+        <select name="eff_month" style="flex:1"><?php foreach(bs_months_np() as $i=>$mn): ?><option value="<?= $i+1 ?>"<?= ($i+1)===$bsM?' selected':'' ?>><?= e($mn) ?></option><?php endforeach; ?></select>
+        <input type="number" name="eff_year" value="<?= $bsY ?>" min="2000" max="2090" style="width:90px">
+      </div></div>
+    <div class="full" id="hk_diff" style="font-size:13px;font-weight:700"></div>
+    <div class="full"><label>Note</label><input name="note" placeholder="e.g. Annual increment"></div>
+    <div class="full muted" style="font-size:12px">Months before the start month keep the old salary. Payments already recorded aren't changed.</div>
+  </div>
+  <div class="modal-foot"><button type="button" class="btn" onclick="closeHike()">Cancel</button><button class="btn btn-primary">💾 Save Hike</button></div>
+</form></div>
 <!-- bulk pay-all modal -->
 <div class="modal-bg" id="payAllModal" style="z-index:99990"><form class="modal" method="post" style="width:440px;max-width:94vw">
   <div class="modal-head"><span>💰 Pay All Remaining</span><span class="mx" onclick="closePayAll()">✕</span></div>
@@ -444,6 +540,25 @@ function openSal(eid){
 }
 function closeSal(){document.getElementById('salModal').classList.remove('open');document.body.classList.remove('modal-open');}
 (function(){var mm=document.getElementById('salModal');mm.addEventListener('click',function(e){if(e.target===mm)closeSal();});})();
+
+function openHike(eid){
+  var m=document.getElementById('hikeModal'); if(!m) return;
+  if(eid) document.getElementById('hk_emp').value=eid;
+  document.getElementById('hk_new').value=''; hikeCalc();
+  m.classList.add('open'); document.body.classList.add('modal-open');
+}
+function closeHike(){var m=document.getElementById('hikeModal');if(m){m.classList.remove('open');document.body.classList.remove('modal-open');}}
+function hikeCalc(){
+  var s=document.getElementById('hk_emp'), o=s.options[s.selectedIndex], cur=o&&o.value?parseFloat(o.getAttribute('data-sal'))||0:null;
+  var nv=parseFloat(document.getElementById('hk_new').value)||0, f=function(n){return 'Rs. '+Math.round(n).toLocaleString('en-IN');};
+  document.getElementById('hk_cur').textContent = cur===null?'—':f(cur);
+  var d=document.getElementById('hk_diff');
+  if(cur===null||!nv){ d.textContent=''; return; }
+  var diff=nv-cur, pct=cur>0?(diff/cur*100):0;
+  d.style.color = diff>=0?'var(--green)':'var(--red)';
+  d.textContent = (diff>=0?'▲ +':'▼ −')+f(Math.abs(diff)).replace('Rs. ','Rs. ')+(cur>0?' ('+(diff>=0?'+':'')+pct.toFixed(1)+'%)':'');
+}
+(function(){var hm=document.getElementById('hikeModal');if(hm)hm.addEventListener('click',function(e){if(e.target===hm)closeHike();});})();
 
 function openPayAll(){var m=document.getElementById('payAllModal');if(m){m.classList.add('open');document.body.classList.add('modal-open');}}
 function closePayAll(){var m=document.getElementById('payAllModal');if(m){m.classList.remove('open');document.body.classList.remove('modal-open');}}

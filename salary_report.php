@@ -6,6 +6,7 @@ require_once __DIR__.'/functions.php'; require_once __DIR__.'/nepali_date.php';
 require_login(); require_page_access();
 ensure_lunch_system();
 ensure_employee_profile_fields();
+ensure_salary_history();
 
 $m = preg_match('/^\d{4}-\d{2}$/', $_GET['m'] ?? '') ? $_GET['m'] : bs_ym_of(date('Y-m-d'));
 [$bsY,$bsM] = array_map('intval', explode('-', $m));
@@ -31,7 +32,7 @@ $G=function($id,$k)use($agg){ return isset($agg[$id])?(float)$agg[$id][$k]:0; };
 $rowsOut=[];
 $tBase=$tBon=$tLun=$tDed=$tPayable=$tAdv=$tPay=$tDue=0.0;
 foreach ($emps as $e) {
-  $id=(int)$e['id']; $base=(float)($e['salary']??0);
+  $id=(int)$e['id']; $base=salary_base_for($id,$m,(float)($e['salary']??0));  /* salary that applied in THIS month (hikes) */
   $bon=$G($id,'bon'); $ded=$G($id,'ded'); $adv=$G($id,'adv'); $pay=$G($id,'pay'); $lun=$G($id,'lun');
   $payable=$base+$bon+$lun-$ded; $paid=$pay+$adv; $due=$payable-$paid;
   $st = $paid<=0.01 ? 'Pending' : ($due>0.01 ? 'Partial' : 'Paid');

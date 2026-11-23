@@ -209,12 +209,20 @@ $lunchPill = fn($s) => ['ok'=>'p-green','leave'=>'p-grey','review'=>'p-yellow','
 $lunchLabel = fn($s) => ['ok'=>'Completed','leave'=>'Leave','review'=>'Requires Review','wfh'=>'Work From Home','deducted'=>'Deducted from Salary','holiday'=>'Holiday'][$s] ?? ucfirst($s);
 ?>
 <div class="page-head">
-  <div><h1>🍱 Lunch Management</h1><p>Track daily lunch orders and automatically calculate salary adjustments.
-    <a href="salary.php" class="muted" style="text-decoration:underline">← Staff Salary</a></p></div>
+  <div>
+    <a href="salary.php?m=<?= e($m) ?>" class="lm-back" title="Back to Staff &amp; Salary">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
+      Staff &amp; Salary
+    </a>
+    <h1>🍱 Lunch Management</h1><p>Track daily lunch orders and automatically calculate salary adjustments.</p>
+  </div>
+  <style>
+    .lm-back{display:inline-flex;align-items:center;gap:6px;margin-bottom:8px;padding:5px 12px 5px 8px;border:1px solid var(--border);border-radius:99px;background:var(--surface);color:var(--muted);font-size:12.5px;font-weight:700;text-decoration:none;transition:color .15s,border-color .15s,background .15s}
+    .lm-back:hover{color:var(--brand);border-color:var(--brand);background:rgba(99,102,241,.06)}
+  </style>
   <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
     <form method="get" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-      <select name="emp"><option value="0">All Staff</option>
-        <?php foreach($allEmps as $ae): ?><option value="<?= (int)$ae['id'] ?>"<?= $empFilter===(int)$ae['id']?' selected':'' ?>><?= e($ae['name']) ?></option><?php endforeach; ?></select>
+      <input type="hidden" name="emp" value="<?= (int)$empFilter ?>">
       <a class="btn btn-sm" href="?m=<?= e(bs_ym_add($m,-1)) ?>&emp=<?= $empFilter ?>&d=<?= e($d) ?>" title="Previous Nepali month">◀</a>
       <span style="font-weight:800;padding:0 4px;white-space:nowrap"><?= e(bs_ym_label($m)) ?></span>
       <a class="btn btn-sm" href="?m=<?= e(bs_ym_add($m,1)) ?>&emp=<?= $empFilter ?>&d=<?= e($d) ?>" title="Next Nepali month">▶</a>

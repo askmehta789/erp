@@ -341,29 +341,31 @@ body.dark .dzs-fee{background:rgba(2,6,23,.5);color:var(--ink);border-color:rgba
 .dzi-tbl tr.dup td{opacity:.45;text-decoration:line-through}
 .dzi-tag{font-size:10.5px;font-weight:800;padding:1px 7px;border-radius:999px}
 .dzi-ok{background:rgba(15,157,99,.14);color:#0f9d63}.dzi-warn{background:rgba(245,158,11,.16);color:#b45309}.dzi-skip{background:rgba(100,116,139,.16);color:#475569}
-.dzi-opts{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:8px;font-size:12.5px}
-.dzi-opts label{display:flex;gap:6px;align-items:center;margin:0;font-weight:600}
-.dzi-opts select,.dzi-opts input[type=date]{width:auto}
+.dzi-opts{display:flex;gap:6px 14px;flex-wrap:wrap;align-items:center;margin-top:8px;font-size:11.5px;color:var(--muted)}
+.dzi-opts label{display:flex;gap:6px;align-items:center;margin:0;font-weight:600;font-size:11.5px;color:var(--muted)}
+.dzi-opts select,.dzi-opts input[type=date]{width:auto;padding:3px 8px;font-size:11.5px;height:auto;border-radius:7px}
 </style>
-<div class="modal-bg" id="dziModal" style="z-index:99985"><form class="modal" method="post" style="width:860px;max-width:96vw" onsubmit="return dziSubmit()">
-  <div class="modal-head"><span>📋 Paste Daraz orders</span><span class="mx" onclick="dziClose()">✕</span></div>
+<div class="modal-bg" id="dziModal" style="z-index:99985"><form class="modal" method="post" style="width:620px;max-width:94vw" onsubmit="return dziSubmit()">
+  <div class="modal-head"><span>📋 Paste Import</span><span class="mx" onclick="dziClose()">✕</span></div>
   <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="import_orders"><?= $R['keep'] ?>
   <input type="hidden" name="rows" id="dzi_rows"><input type="hidden" name="skipped" id="dzi_skipped" value="0">
-  <div class="modal-body" style="display:block">
-    <p class="muted" style="font-size:12px;margin:0 0 8px">Copy rows from Excel / Google Sheets or the <b>Daraz Seller Center order export</b> and paste below — <b>first line = column names</b>, any order.<br>
-      Understood: <i>order number · date · customer / shipping name · phone · address · product / item name / seller SKU · qty · price / paid price · Daraz charges / fees · status · payment</i>.
-      No header? Default order: <code>Order number, Customer, Phone, Address, Product, Qty, Price</code>.</p>
-    <textarea id="dziText" rows="7" style="width:100%;font-family:monospace;font-size:12px" oninput="dziPreview()"
-      placeholder="Order Number&#9;Customer&#9;Phone&#9;Address&#9;Product&#9;Qty&#9;Paid Price&#9;Daraz Charges&#9;Status&#10;204188712345678&#9;Sita Rai&#9;9779812345678&#9;Kathmandu&#9;Smart Watch&#9;1&#9;2400&#9;210&#9;Delivered"></textarea>
+  <div style="padding:16px 22px">
+    <p class="muted" style="font-size:12px;margin:0 0 8px">One order per line, columns separated by <b>Tab</b> (paste from Excel / Daraz Seller Center export) or comma.<br>
+      <b>Any column order works</b> — just make the first line a header, e.g. <code>Order Number, Customer, Phone, Address, Product, Qty, Price</code>.<br>
+      No header? Columns are <b>detected automatically</b> — phone, product, qty, price, customer &amp; address are worked out from the data.<br>
+      <span style="font-size:11px">Understood names: order number/order id · date · customer/shipping name · phone/mobile · address/city · product/item/seller sku · qty/quantity · price/paid price · daraz charges/fees · status · payment</span></p>
+    <textarea id="dziText" rows="8" style="width:100%;font-family:monospace;font-size:12px" oninput="dziPreview()"
+      placeholder="Order Number, Customer, Phone, Address, Product, Qty, Price&#10;204188712345678, Sita Rai, 9812345678, Kathmandu, Smart Watch, 1, 2400&#10;204188712345679, Ramesh Shrestha, 9841234567, Banepa-8, Heel Guard Plus, 1, 1000"></textarea>
     <div class="dzi-opts">
-      <label>Status if not given <select name="def_status" id="dzi_defst" onchange="dziPreview()"><?php foreach ($STATUSES as $st): ?><option value="<?= $st ?>"><?= ucfirst($st) ?></option><?php endforeach; ?></select></label>
-      <label>Date if not given <input type="date" id="dzi_defdate" value="<?= date('Y-m-d') ?>" onchange="dziPreview()"></label>
-      <label><input type="checkbox" name="skip_dup" value="1" id="dzi_skip" checked onchange="dziPreview()" style="width:auto"> Skip orders already in the ERP</label>
+      <label>Status if missing <select name="def_status" id="dzi_defst" onchange="dziPreview()"><?php foreach ($STATUSES as $st): ?><option value="<?= $st ?>"><?= ucfirst($st) ?></option><?php endforeach; ?></select></label>
+      <label>Date if missing <input type="date" id="dzi_defdate" value="<?= date('Y-m-d') ?>" onchange="dziPreview()"></label>
+      <label><input type="checkbox" name="skip_dup" value="1" id="dzi_skip" checked onchange="dziPreview()" style="width:auto"> Skip orders already in ERP</label>
     </div>
-    <div id="dziOut" style="margin-top:6px;max-height:320px;overflow:auto"></div>
+    <div id="dziOut" style="margin-top:6px;max-height:300px;overflow:auto"></div>
+    <div id="dziSum" style="font-size:12.5px;font-weight:700;margin-top:8px;color:var(--brand)"></div>
   </div>
-  <div class="modal-foot"><span class="muted" id="dziSum" style="margin-right:auto;font-size:12.5px"></span>
-    <button type="button" class="btn" onclick="dziClose()">Cancel</button><button class="btn btn-primary" id="dziBtn" disabled>⬆ Import</button></div>
+  <div class="modal-foot">
+    <button type="button" class="btn" onclick="dziClose()">Cancel</button><button class="btn btn-primary" id="dziBtn">⬆ Import Orders</button></div>
 </form></div>
 <script>
 var DZI_PRODUCTS=<?= json_encode(array_map(fn($p) => ['id'=>(int)$p['id'],'name'=>$p['name'],'sku'=>(string)$p['sku'],'dsku'=>(string)$p['daraz_sku'],'price'=>(float)$p['price']], $allProducts)) ?>;
@@ -398,13 +400,67 @@ function dziProduct(name,sku){var n=dziNorm(name),s=dziNorm(sku),i,p;
   for(i=0;i<DZI_PRODUCTS.length;i++){p=DZI_PRODUCTS[i];if(n&&dziNorm(p.name)===n)return p;}
   for(i=0;i<DZI_PRODUCTS.length;i++){p=DZI_PRODUCTS[i];var pn=dziNorm(p.name);if(n&&pn.length>3&&(n.indexOf(pn)>-1||pn.indexOf(n)>-1))return p;}
   return null;}
+/* No header line: work out each column from what's in it (any column order works).
+   phone = 98xxxxxxxx · Daraz order # = 12+ digits · date · status / payment / Inside-Outside words ·
+   product = matches a product in the ERP · qty = small whole number · price = the bigger number ·
+   customer = text right before the phone · address = text right after it · product = leftover text. */
+function dziCellType(v){
+  var t=String(v||'').trim(), n=dziNorm(t), d=t.replace(/[\s\-()+]/g,'');
+  if(!t)return '';
+  if(/^(977)?9\d{9}$/.test(d)||/^0?1\d{6,7}$/.test(d))return 'phone';
+  if(/^\d{11,}$/.test(d))return 'dz';
+  if(/\d{4}[-\/.]\d{1,2}[-\/.]\d{1,2}|\d{1,2}[-\/.]\d{1,2}[-\/.]\d{4}/.test(t))return 'date';
+  if(/^(inside|outside)( valley)?$|^(in|out)side ?valley$/.test(n))return 'zone';
+  if(/^(cod|cash on delivery|prepaid|paid|esewa|khalti|card|online)$/.test(n))return 'payment';
+  if(n.split(' ').length<=3&&dziStatus(t)&&!/\d/.test(t))return 'status';
+  if(/^-?[\d,]+(\.\d+)?$/.test(t.replace(/^(rs\.?|npr)\s*/i,'')))return 'num';
+  if(dziProduct(t,t))return 'product';
+  return 'text';
+}
+function dziInfer(lines){
+  var cols=[],nCol=0;
+  lines.forEach(function(l){var f=dziSplit(l);nCol=Math.max(nCol,f.length);});
+  for(var c=0;c<nCol;c++){
+    var votes={},nums=[],ints=true,vals={};
+    lines.forEach(function(l){var v=String(dziSplit(l)[c]||'').trim().replace(/^"|"$/g,''),ty=dziCellType(v);if(!ty)return;votes[ty]=(votes[ty]||0)+1;vals[dziNorm(v)]=1;
+      if(ty==='num'){var x=dziNum(v);nums.push(x);if(x!==Math.floor(x))ints=false;}});
+    var best='',bc=0;for(var k in votes){if(votes[k]>bc){best=k;bc=votes[k];}}
+    /* a product column with a few unknown names is still the product column */
+    if(best==='text'&&votes.product)best='product';
+    cols.push({i:c,type:best,avg:nums.length?nums.reduce(function(a,b){return a+b;},0)/nums.length:0,ints:ints,distinct:Object.keys(vals).length});
+  }
+  var map={},used={};
+  function take(k,col){if(col&&map[k]===undefined&&!used[col.i]){map[k]=col.i;used[col.i]=1;}}
+  ['phone','dz','date','status','payment','product'].forEach(function(k){take(k,cols.filter(function(x){return x.type===k;})[0]);});
+  var num=cols.filter(function(x){return x.type==='num';});
+  take('qty',num.filter(function(x){return x.ints&&x.avg>0&&x.avg<=50;}).sort(function(a,b){return a.avg-b.avg;})[0]);
+  num=num.filter(function(x){return !used[x.i];});
+  take('price',num.slice().sort(function(a,b){return b.avg-a.avg;})[0]);
+  take('fees',num.filter(function(x){return !used[x.i];})[0]);
+  var text=cols.filter(function(x){return x.type==='text'&&!used[x.i];});
+  if(map.phone!==undefined){
+    take('customer',text.filter(function(x){return x.i<map.phone;}).pop());
+    take('address',text.filter(function(x){return x.i>map.phone&&!used[x.i];})[0]);
+  }
+  text=text.filter(function(x){return !used[x.i];});
+  if(map.product===undefined){
+    /* product names repeat across orders, customer names don't — pick the most repetitive text */
+    take('product',text.slice().sort(function(a,b){return a.distinct-b.distinct;})[0]);
+    text=text.filter(function(x){return !used[x.i];});
+  }
+  take('customer',text[0]); text=text.filter(function(x){return !used[x.i];});
+  take('address',text[0]);
+  return map;
+}
+var DZI_LABELS={dz:'Order #',date:'Date',customer:'Customer',phone:'Phone',address:'Address',product:'Product',sku:'SKU',qty:'Qty',price:'Price',fees:'Daraz charges',status:'Status',payment:'Payment'};
 function dziParse(){
   var lines=document.getElementById('dziText').value.split(/\r?\n/).filter(function(l){return l.trim()!=='';});
   if(!lines.length)return {rows:[],header:false};
   var head=dziSplit(lines[0]).map(dziNorm),map={},hits=0;
   head.forEach(function(h,i){for(var k in DZI_SYN){if(map[k]===undefined&&DZI_SYN[k].indexOf(h)>-1){map[k]=i;hits++;return;}}});
   var header=hits>=2;
-  if(header)lines=lines.slice(1);else map={dz:0,customer:1,phone:2,address:3,product:4,qty:5,price:6};
+  if(header)lines=lines.slice(1);else map=dziInfer(lines);
+  var detected=Object.keys(map).sort(function(a,b){return map[a]-map[b];}).map(function(k){return DZI_LABELS[k]||k;});
   var defSt=document.getElementById('dzi_defst').value,defDate=document.getElementById('dzi_defdate').value,grouped={},out=[];
   lines.forEach(function(l){
     var f=dziSplit(l).map(function(x){return String(x).trim().replace(/^"|"$/g,'');});
@@ -420,15 +476,15 @@ function dziParse(){
     if(key&&grouped[key]){grouped[key].qty+=r.qty;grouped[key].fees+=r.fees;return;}
     if(key)grouped[key]=r;out.push(r);
   });
-  return {rows:out,header:header};
+  return {rows:out,header:header,detected:detected};
 }
 var dziData=null;
 function dziPreview(){
   var res=dziParse(),rows=res.rows,box=document.getElementById('dziOut'),skip=document.getElementById('dzi_skip').checked;
   var ex={};DZI_EXISTING.forEach(function(x){ex[x]=1;});
   var nNew=0,nDup=0,nWarn=0,html='';
-  if(!rows.length){box.innerHTML='';document.getElementById('dziSum').textContent='';document.getElementById('dziBtn').disabled=true;dziData=null;return;}
-  html='<div class="muted" style="font-size:12px">'+(res.header?'✅ Column names recognised from the first line.':'ℹ️ No column names found — using the default order.')+'</div>';
+  if(!rows.length){box.innerHTML='';document.getElementById('dziSum').textContent='';dziData=null;return;}
+  html='<div class="muted" style="font-size:12px">'+(res.header?'✅ Column names recognised from the first line.':'🔎 No header line — columns detected from the data: <b>'+dziEsc((res.detected||[]).join(' · '))+'</b>')+'</div>';
   html+='<table class="dzi-tbl"><tr><th></th><th>Daraz #</th><th>Date</th><th>Customer</th><th>Phone</th><th>Product</th><th>Qty</th><th>Price</th><th>Charges</th><th>Status</th></tr>';
   rows.forEach(function(r){
     var dup=skip&&r.daraz_order_id&&ex[r.daraz_order_id];r._skip=!!dup;
@@ -437,15 +493,17 @@ function dziPreview(){
     html+='<tr'+(dup?' class="dup"':'')+'><td>'+tag+'</td><td>'+dziEsc(r.daraz_order_id||'—')+'</td><td>'+dziEsc(r.date)+'</td><td>'+dziEsc(r.customer||'—')+'</td><td>'+dziEsc(r.phone)+'</td><td title="'+dziEsc(r.item)+'">'+dziEsc(r.product_name||r.item||'—')+'</td><td>'+r.qty+'</td><td>'+Math.round(r.price)+'</td><td>'+(r.fees?Math.round(r.fees):'')+'</td><td>'+dziEsc(r.status)+'</td></tr>';
   });
   box.innerHTML=html+'</table>';
+  document.getElementById('dziSum').style.color='var(--brand)';
   document.getElementById('dziSum').innerHTML='<b>'+nNew+'</b> line(s) to import'+(nDup?' · '+nDup+' skipped':'')+(nWarn?' · <span style="color:#b45309">'+nWarn+' without a matched product (imported, fix later)</span>':'');
-  document.getElementById('dziBtn').disabled=!nNew;
+
   dziData=rows;
 }
 function dziSubmit(){
-  if(!dziData)return false;
+  var sum=document.getElementById('dziSum');
+  if(!dziData){sum.style.color='var(--red)';sum.textContent='Paste at least one order line first.';return false;}
   var send=dziData.filter(function(r){return !r._skip;}).map(function(r){return {daraz_order_id:r.daraz_order_id,date:r.date,customer:r.customer,phone:r.phone,address:r.address,
     item:r.item,sku:r.sku,product_id:r.product_id,qty:r.qty,price:r.price,fees:r.fees,status:r.status,payment:r.payment};});
-  if(!send.length)return false;
+  if(!send.length){sum.style.color='var(--red)';sum.textContent='Nothing new to import — every order is already in the ERP.';return false;}
   document.getElementById('dzi_rows').value=JSON.stringify(send);
   document.getElementById('dzi_skipped').value=dziData.length-send.length;
   document.getElementById('dziBtn').disabled=true;document.getElementById('dziBtn').textContent='Importing…';

@@ -11,6 +11,8 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
   $act=$_POST['_action'] ?? '';
   $backM=preg_match('/^\d{4}-\d{2}$/',$_POST['m'] ?? '')?$_POST['m']:bs_ym_of(date('Y-m-d'));
   $backEmp=(int)($_POST['back_emp'] ?? 0);
+  /* owners/managers set to Lunch Management = "Excluded" can't get lunch entries */
+  $lunchExcluded=array_map('intval',array_column(rows("SELECT id FROM employees WHERE COALESCE(lunch_mode,'included')='excluded'"),'id'));
 
   if ($act==='save_entry') {
     $id=(int)($_POST['id'] ?? 0);
@@ -26,6 +28,8 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
     $old = $id ? row("SELECT * FROM lunch_orders WHERE id=?",[$id]) : null;
     if (!$eid) {
       flash('Pick an employee.');
+    } elseif (in_array($eid,$lunchExcluded,true)) {
+      flash('This staff member is excluded from Lunch Management (see their HRM profile).');
     } elseif ($id && !$old) {
       flash('That lunch entry no longer exists — it may have been deleted. Add it again if needed.');
     } else {
@@ -69,7 +73,7 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
     $saved=0;
     foreach ($atts as $eidKey=>$attRaw) {
       $eid=(int)$eidKey;
-      if (!$eid) continue;
+      if (!$eid || in_array($eid,$lunchExcluded,true)) continue;
       $att=in_array($attRaw,['present','leave','wfh','holiday'],true)?$attRaw:'present';
       $ordered=(($ords[$eidKey] ?? '0')==='1') ? 1 : 0;
       $amt=$ordered ? max(0,(float)($amts[$eidKey] ?? 0)) : 0;
@@ -129,9 +133,11 @@ if (!$mRange) { $m = bs_ym_of(date('Y-m-d')); [$bsY,$bsM] = array_map('intval', 
    as a salesperson) and inactive/former staff used to show up here too — inflating
    Pending Entries and getting rows in Quick Daily Entry. Anyone who already has
    lunch logged in this month is still included so their history isn't hidden. */
+/* staff set to Lunch Management = "Excluded" (owner/manager) never appear here at all */
 $allEmps = rows("SELECT id,name,salary,lunch_rate,status FROM employees e
-                 WHERE (COALESCE(e.is_company,0)=0 AND COALESCE(e.status,'active')<>'inactive')
-                    OR EXISTS(SELECT 1 FROM lunch_orders lo WHERE lo.employee_id=e.id AND lo.order_date BETWEEN ? AND ?)
+                 WHERE COALESCE(e.lunch_mode,'included')<>'excluded'
+                   AND ((COALESCE(e.is_company,0)=0 AND COALESCE(e.status,'active')<>'inactive')
+                    OR EXISTS(SELECT 1 FROM lunch_orders lo WHERE lo.employee_id=e.id AND lo.order_date BETWEEN ? AND ?))
                  ORDER BY name", [$mStart,$mEnd]);
 $empName = []; foreach ($allEmps as $ae) $empName[(int)$ae['id']] = $ae['name'];
 
@@ -139,7 +145,7 @@ $lunchAgg = lunch_monthly_agg($mStart, $mEnd, $empFilter);
 
 /* daily entries for the selected month (all staff, or one when filtered) */
 $monthEntries = rows("SELECT lo.*, e.name, e.lunch_rate FROM lunch_orders lo JOIN employees e ON e.id=lo.employee_id
-                 WHERE lo.order_date BETWEEN ? AND ?".($empFilter?" AND lo.employee_id=".$empFilter:"")."
+                 WHERE lo.order_date BETWEEN ? AND ? AND COALESCE(e.lunch_mode,'included')<>'excluded'".($empFilter?" AND lo.employee_id=".$empFilter:"")."
                  ORDER BY lo.order_date DESC, e.name",[$mStart,$mEnd]);
 
 /* Daily Lunch Entries table: only the latest 10 show at once, rest on next page */
@@ -159,10 +165,10 @@ function lm_dp_url($page,$m,$empFilter,$d) {
    bulk "quick daily entry" prefill and the pending-count stat */
 $dayEntries = [];
 foreach (rows("SELECT * FROM lunch_orders WHERE order_date=?",[$d]) as $t) $dayEntries[(int)$t['employee_id']] = $t;
-$dayStaffIds = array_column(rows("SELECT id FROM employees WHERE COALESCE(is_company,0)=0 AND COALESCE(status,'active')<>'inactive'"), 'id');
+$dayStaffIds = array_column(rows("SELECT id FROM employees WHERE COALESCE(is_company,0)=0 AND COALESCE(status,'active')<>'inactive' AND COALESCE(lunch_mode,'included')<>'excluded'"), 'id');
 $dayStaffIds = array_map('intval', $dayStaffIds);
 $dayStaff = array_values(array_filter(
-  rows("SELECT id,name,salary,lunch_rate FROM employees ORDER BY name"),
+  rows("SELECT id,name,salary,lunch_rate FROM employees WHERE COALESCE(lunch_mode,'included')<>'excluded' ORDER BY name"),
   fn($e) => in_array((int)$e['id'], $dayStaffIds, true) || isset($dayEntries[(int)$e['id']])
 ));
 $pendingEntries = count(array_filter($dayStaff, fn($e) => !isset($dayEntries[(int)$e['id']])));

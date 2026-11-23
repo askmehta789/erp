@@ -196,6 +196,7 @@ function entities() {
      'fields'=>[['name','Name','text',null,true],['role','Job Title','text'],
        ['department','Department','select',['Sales','Finance','HR','Inventory','Logistics','Management']],
        ['salary','Salary (Rs.)','number'],['lunch_rate','Lunch Allowance (Rs/day)','number'],
+       ['lunch_mode','Lunch Management','select',['included','excluded']],
        ['phone','Phone Number','text'],['office_phone','Office Assigned Phone','text'],
        ['email','Email','text'],['pan_number','PAN Number','text'],
        ['bank_name','Bank Name','text'],['bank_account','Bank Account Number','text'],
@@ -591,6 +592,7 @@ function ensure_employee_profile_fields() {
     'bank_name'     => "VARCHAR(100) NULL",
     'bank_account'  => "VARCHAR(50) NULL",
     'address'       => "VARCHAR(255) NULL",
+    'lunch_mode'    => "VARCHAR(12) NOT NULL DEFAULT 'included'",
   ] as $col=>$def) {
     try { q("ALTER TABLE employees ADD COLUMN IF NOT EXISTS `$col` $def"); } catch (Exception $e) {}
   }
@@ -625,6 +627,12 @@ function ensure_company_salesperson() {
 function ensure_lunch_system() {
   static $done=false; if($done) return; $done=true;
   try { q("ALTER TABLE employees ADD COLUMN IF NOT EXISTS lunch_rate DECIMAL(10,2) NOT NULL DEFAULT 150"); } catch (Exception $e) {}
+  /* lunch_mode='excluded' = not part of the lunch system (owners/managers): hidden from
+     Lunch Management and never given a lunch salary adjustment */
+  try { q("ALTER TABLE employees ADD COLUMN IF NOT EXISTS lunch_mode VARCHAR(12) NOT NULL DEFAULT 'included'"); } catch (Exception $e) {}
+  if (setting('lunch_mode_seeded','') !== '1') {
+    try { q("UPDATE employees SET lunch_mode='excluded' WHERE TRIM(name) IN ('Aditya Kushwaha','Raushan Babu Kushwaha')"); set_setting('lunch_mode_seeded','1'); } catch (Exception $e) {}
+  }
   try { q("CREATE TABLE IF NOT EXISTS lunch_orders(
     id INT AUTO_INCREMENT PRIMARY KEY,
     employee_id INT NOT NULL,
@@ -702,7 +710,7 @@ function lunch_day_calc($rate, $attendance, $lunchOrdered, $orderAmount) {
 function lunch_monthly_agg($mStart, $mEnd, $empFilter = 0) {
   ensure_lunch_system();
   $sql = "SELECT lo.*, e.lunch_rate FROM lunch_orders lo JOIN employees e ON e.id=lo.employee_id
-          WHERE lo.order_date BETWEEN ? AND ?".($empFilter ? " AND lo.employee_id=".(int)$empFilter : "");
+          WHERE lo.order_date BETWEEN ? AND ? AND COALESCE(e.lunch_mode,'included')<>'excluded'".($empFilter ? " AND lo.employee_id=".(int)$empFilter : "");
   $out = [];
   foreach (rows($sql, [$mStart, $mEnd]) as $r) {
     $eid = (int)$r['employee_id'];

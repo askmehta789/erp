@@ -788,6 +788,14 @@ document.querySelectorAll('.pd3-fchip').forEach(function(chip){
     pd3ApplyFilters();
   });
 });
+/* deep link: products.php?f=out (or low, loss, dead…) opens with that filter chip on — used by the dashboard */
+(function(){
+  try{
+    var f=new URLSearchParams(location.search).get('f'); if(!f) return;
+    var chip=document.querySelector('.pd3-fchip[data-f="'+f.replace(/[^a-z]/g,'')+'"]');
+    if(chip) setTimeout(function(){ chip.click(); var g=document.getElementById('pd3Grid'); if(g) g.scrollIntoView({behavior:'smooth',block:'start'}); },0);
+  }catch(e){}
+})();
 function pd3ApplyFilters(){
   var q = document.getElementById('pd3Search').value.toLowerCase().trim();
   document.querySelectorAll('.pd3-card').forEach(function(card){

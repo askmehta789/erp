@@ -151,14 +151,31 @@ foreach (rows("SELECT expense_date d, SUM(amount) a FROM $expTbl x WHERE expense
 }
 
 /* stock summary for dashboard */
-$prodRows    = rows("SELECT stock, low_stock, cost FROM products");
+$prodRows    = rows("SELECT id, stock, low_stock, cost FROM products");
 $stkProducts = count($prodRows);
 $stkUnits    = array_sum(array_column($prodRows,'stock'));
 try { ensure_stock_batches(); $stkValue = (float)val("SELECT COALESCE(SUM(qty_left*unit_cost),0) FROM stock_batches"); }
 catch (Exception $e) { $stkValue = 0; }
 if ($stkValue <= 0) $stkValue = array_sum(array_map(fn($p)=>(int)$p['stock']*(float)$p['cost'], $prodRows));
-$stkLow      = count(array_filter($prodRows, fn($p)=>(int)$p['stock']>0 && (int)$p['stock']<=(int)$p['low_stock']));
-$stkOut      = count(array_filter($prodRows, fn($p)=>(int)$p['stock']<=0));
+/* out / low stock counted exactly like the Products page: on hand = stock − units already
+   shipped (in a courier van), free = on hand − units promised to pending/processing orders.
+   Hungry Hunter / Dropex orders draw from their own consignment stock, so they're skipped. */
+$hhCidD = function_exists('hh_courier_id') ? hh_courier_id() : 0;
+$dxCidD = function_exists('dropex_courier_id') ? dropex_courier_id() : 0;
+$commitD = [];
+foreach (rows("SELECT product_id, status, COALESCE(courier_id,0) AS cid, SUM(qty) AS q FROM orders
+               WHERE status IN ('pending','processing','shipped') GROUP BY product_id, status, cid") as $r) {
+  $pid=(int)$r['product_id']; if(!$pid) continue;
+  if (($hhCidD && (int)$r['cid']===$hhCidD) || ($dxCidD && (int)$r['cid']===$dxCidD)) continue;
+  if (!isset($commitD[$pid])) $commitD[$pid]=['out'=>0,'res'=>0];
+  $commitD[$pid][$r['status']==='shipped'?'out':'res'] += (int)$r['q'];
+}
+$stkOut=0; $stkLow=0;
+foreach ($prodRows as $p) {
+  $hand = max(0,(int)$p['stock'] - (int)($commitD[(int)$p['id']]['out'] ?? 0));
+  $free = max(0,$hand - (int)($commitD[(int)$p['id']]['res'] ?? 0));
+  if ($hand<=0) $stkOut++; elseif ($free<=(int)$p['low_stock']) $stkLow++;
+}
 $margin      = $revenue>0? round($profit/$revenue*100,1):0;
 $netMargin   = $revenue>0? round($net/$revenue*100,1):0;
 
@@ -195,7 +212,7 @@ $todo=[];
 $awaiting = $pending + $processing;
 if ($awaiting>0)     $todo[] = ['🕒','var(--amber)', "$awaiting order".($awaiting>1?'s':'')." awaiting dispatch", 'sales.php?status=pending,processing'];
 if ($shipped>0)      $todo[] = ['🚚','var(--blue)',  "$shipped order".($shipped>1?'s':'')." in transit", 'sales.php?status=shipped'];
-if ($stkOut>0)       $todo[] = ['🚫','var(--red)',   "$stkOut product".($stkOut>1?'s':'')." out of stock", 'products.php'];
+if ($stkOut>0)       $todo[] = ['🚫','var(--red)',   "$stkOut product".($stkOut>1?'s':'')." out of stock", 'products.php?f=out'];
 /* COD threshold alert */
 $codHeld = 0; foreach (cod_holdings() as $h) $codHeld += max(0,$h['held']);
 $codThr = (float)setting('cod_alert_threshold', 100000);
@@ -209,7 +226,7 @@ if ($codThr > 0) {
 $reo = reorder_suggestions();
 if (count($reo))
   $todo[] = ['🛒','var(--amber)', count($reo).' product'.(count($reo)>1?'s':'').' need reorder soon ('.e($reo[0]['name']).' ~'.$reo[0]['cover_days'].'d left)', 'products.php'];
-if ($stkLow>0)       $todo[] = ['⚠️','var(--amber)', "$stkLow product".($stkLow>1?'s':'')." low on stock", 'products.php'];
+if ($stkLow>0)       $todo[] = ['⚠️','var(--amber)', "$stkLow product".($stkLow>1?'s':'')." low on stock", 'products.php?f=low'];
 if ($codPending>0)   $todo[] = ['💰','var(--teal)',  money(round($codPending))." COD in transit (undelivered orders)", 'cod.php'];
 if ($returned>0)     $todo[] = ['↩️','var(--red)',   "$returned returned/cancelled — review why", 'reports.php'];
 

@@ -2,6 +2,8 @@
 require_once __DIR__.'/functions.php'; require_login(); require_page_access();
 ensure_banks();
 ensure_expense_bank_columns();
+/* products.ads_on = "we're running ads for this product" — only these show in the bulk Ads entry */
+try { if(!row("SHOW COLUMNS FROM products LIKE 'ads_on'")) q("ALTER TABLE products ADD COLUMN ads_on TINYINT(1) NOT NULL DEFAULT 0"); } catch (Exception $e) {}
 /* keep the auto-billed "due" entry (created by ads_autobill on add) in sync when an
    expense is edited — updates it if still an Ads expense, removes it if the category
    changed away from Ads, creates it if the category changed TO Ads. Never touches
@@ -28,6 +30,17 @@ function ads_autobill_sync($expenseId, $isAdsCategory, $date, $amountRs, $produc
 $RATE=(float)setting('usd_rate', USD_RATE);
 if ($_SERVER['REQUEST_METHOD']==='POST') {
   check_csrf(); $a=$_POST['_action']??'';
+  if ($a==='ads_list') {
+    /* save which products are currently running ads (called by fetch from the Add Expense card) */
+    $ids=array_values(array_filter(array_map('intval',(array)($_POST['ids']??[]))));
+    try {
+      q("UPDATE products SET ads_on=0");
+      if($ids) q("UPDATE products SET ads_on=1 WHERE id IN (".implode(',',array_fill(0,count($ids),'?')).")",$ids);
+      log_activity('Updated ads product list ('.count($ids).')','Expenses');
+      header('Content-Type: application/json'); echo json_encode(['ok'=>true,'count'=>count($ids)]);
+    } catch (Exception $ex) { http_response_code(500); header('Content-Type: application/json'); echo json_encode(['ok'=>false,'error'=>$ex->getMessage()]); }
+    exit;
+  }
   if ($a==='delete') {
     try {
       ensure_payees();
@@ -125,7 +138,8 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
 }
 $PAGE_TITLE='Expenses'; require __DIR__.'/includes/header.php';
 $ex=rows("SELECT * FROM expenses ORDER BY expense_date DESC, id DESC");
-$products=rows("SELECT name FROM products ORDER BY name");
+$products=rows("SELECT * FROM products ORDER BY name");
+$adsOnCount=count(array_filter($products,fn($p)=>!empty($p['ads_on'])));
 $total=array_sum(array_column($ex,'amount'));
 $cash=array_sum(array_map(fn($e)=>$e['pay_from']==='cash'?$e['amount']:0,$ex));
 $bank=$total-$cash;
@@ -357,14 +371,40 @@ function ax_ico($p){ return '<svg viewBox="0 0 24 24" width="16" height="16" fil
   <div class="ax-ads-head">
     <div><b>Ad spend by product</b><div class="ax-hint">Type what you spent on each product — leave blank to skip. One entry is saved per product.</div></div>
     <div class="ax-ads-tools">
-      <input type="search" id="axFilter" placeholder="Filter products" oninput="axFilter(this.value)">
+      <input type="search" id="axFilter" placeholder="Filter products" oninput="axApply()">
       <button type="button" class="btn btn-sm" onclick="axClear()">Clear</button>
+      <button type="button" class="btn btn-sm ax-pick-btn" onclick="axPickOpen()">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M4 12h10M4 18h6"/><path d="M17 15l2 2 3-4"/></svg>
+        Choose products <span class="ax-pill" id="axOnCount"><?= $adsOnCount ?: 'all' ?></span></button>
     </div>
   </div>
+
+  <!-- pick which products are running ads (saved, remembered for next time) -->
+  <div class="ax-pick" id="axPick" hidden>
+    <div class="ax-pick-top">
+      <div><b>Products running ads</b><div class="ax-hint">Only ticked products show in the list above. Saved for next time — change it whenever stock changes.</div></div>
+      <div class="ax-ads-tools">
+        <input type="search" id="axPickSearch" placeholder="Search products" oninput="axPickFilter(this.value)">
+        <button type="button" class="btn btn-sm" onclick="axPickAll(true)">All</button>
+        <button type="button" class="btn btn-sm" onclick="axPickAll(false)">None</button>
+      </div>
+    </div>
+    <div class="ax-pick-list">
+      <?php foreach($products as $p): ?>
+        <label class="ax-chk" data-name="<?= e(mb_strtolower($p['name'])) ?>"><input type="checkbox" data-id="<?= (int)$p['id'] ?>" <?= !empty($p['ads_on'])?'checked':'' ?>><span><?= e($p['name']) ?></span></label>
+      <?php endforeach; ?>
+    </div>
+    <div class="ax-pick-foot">
+      <span class="ax-hint" id="axPickMsg"></span>
+      <button type="button" class="btn btn-sm" onclick="axPickClose()">Cancel</button>
+      <button type="button" class="btn btn-sm btn-primary" onclick="axPickSave()">Save list</button>
+    </div>
+  </div>
+  <div class="ax-note" id="axNoList" <?= $adsOnCount?'hidden':'' ?>>No products chosen yet, so all products are shown. Use <b>Choose products</b> to keep only the ones you're running ads for.</div>
   <div class="ax-row ax-row-h"><div>Product</div><div class="right">Spent (<span class="axCurLbl">Rs.</span>)</div><div class="right">≈ <span class="axOtherLbl">$</span></div></div>
   <div class="ax-list">
   <?php foreach($products as $p): $n=$p['name']; ?>
-    <div class="ax-row" data-name="<?= e(mb_strtolower($n)) ?>">
+    <div class="ax-row" data-name="<?= e(mb_strtolower($n)) ?>" data-id="<?= (int)$p['id'] ?>" data-on="<?= !empty($p['ads_on'])?'1':'0' ?>">
       <div class="ax-pn"><span class="ax-ini"><?= e(mb_strtoupper(mb_substr($n,0,1))) ?></span><span class="ax-name" title="<?= e($n) ?>"><?= e($n) ?></span></div>
       <div class="ax-in"><span class="axCurLbl">Rs.</span><input type="hidden" name="ads_product[]" value="<?= e($n) ?>" disabled><input type="number" name="ads_amount[]" min="0" step="any" placeholder="0" inputmode="decimal" aria-label="Ad spend for <?= e($n) ?>" oninput="axCalc()" disabled></div>
       <div class="ax-conv num right">—</div>
@@ -372,7 +412,7 @@ function ax_ico($p){ return '<svg viewBox="0 0 24 24" width="16" height="16" fil
   <?php endforeach; if(!$products): ?><div class="empty" style="padding:16px">No products yet — add products first.</div><?php endif; ?>
   </div>
   <div class="ax-foot">
-    <div><b id="axFilled">0</b> of <?= count($products) ?> products filled</div>
+    <div><b id="axFilled">0</b> of <span id="axShown"><?= $adsOnCount ?: count($products) ?></span> products filled</div>
     <div class="ax-total"><span class="ax-tl">Total</span><span class="num" id="axTotal">Rs. 0</span><span class="muted num" id="axTotal2"></span></div>
   </div>
 </div>
@@ -436,6 +476,19 @@ function ax_ico($p){ return '<svg viewBox="0 0 24 24" width="16" height="16" fil
 .ax-ads-tools{display:flex;gap:8px;align-items:center}
 .ax-ads-tools input{height:34px;width:190px;padding:0 12px;border:1px solid var(--border);border-radius:9px;font-size:13px;background:var(--surface);color:var(--ink)}
 .ax-list{max-height:420px;overflow-y:auto}
+.ax-pick-btn{display:inline-flex;align-items:center;gap:6px}
+.ax-pill{display:inline-block;min-width:18px;padding:1px 7px;border-radius:99px;background:rgba(99,102,241,.12);color:var(--brand);font-size:11px;font-weight:800;text-align:center}
+.ax-pick{border-bottom:1px solid var(--border);background:var(--surface)}
+.ax-pick[hidden],.ax-note[hidden]{display:none}
+.ax-pick-top{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:12px 16px}
+.ax-pick-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:6px;padding:0 16px 12px;max-height:260px;overflow-y:auto}
+.ax-chk{display:flex!important;align-items:center;gap:9px;margin:0!important;padding:8px 10px;border:1px solid var(--border);border-radius:9px;font-size:13px;font-weight:600;color:var(--ink);cursor:pointer;min-width:0}
+.ax-chk span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ax-chk input{width:16px;height:16px;flex:none;accent-color:var(--brand);margin:0}
+.ax-chk:has(input:checked){border-color:var(--brand);background:rgba(99,102,241,.06)}
+.ax-pick-foot{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:10px 16px;border-top:1px solid var(--border)}
+.ax-pick-foot .ax-hint{margin-right:auto}
+.ax-note{padding:10px 16px;font-size:12.5px;color:var(--muted);border-bottom:1px solid var(--border);background:rgba(99,102,241,.04)}
 .ax-row{display:grid;grid-template-columns:minmax(0,1fr) 200px 130px;gap:12px;align-items:center;padding:8px 16px;border-bottom:1px solid var(--border)}
 .ax-row:last-child{border-bottom:none}
 .ax-row.on{background:rgba(99,102,241,.08)}
@@ -688,11 +741,52 @@ function axCalc(){
     b.disabled = !filled;
   } else { b.textContent='Add Expense'; b.disabled=false; }
 }
-function axFilter(q){
-  q=(q||'').toLowerCase().trim();
-  document.querySelectorAll('#axAds .ax-row[data-name]').forEach(function(r){
-    r.style.display = (!q || r.getAttribute('data-name').indexOf(q)!==-1) ? '' : 'none';
+/* show only products ticked as "running ads" (all of them if none ticked), then apply the filter box */
+function axApply(){
+  var q=(document.getElementById('axFilter').value||'').toLowerCase().trim();
+  var rows=[].slice.call(document.querySelectorAll('#axAds .ax-row[data-name]'));
+  var anyOn=rows.some(function(r){return r.getAttribute('data-on')==='1';}), shown=0;
+  rows.forEach(function(r){
+    var inList=!anyOn || r.getAttribute('data-on')==='1';
+    if(!inList){ var i=r.querySelector('input[type=number]'); if(i.value){ i.value=''; } }
+    var vis=inList && (!q || r.getAttribute('data-name').indexOf(q)!==-1);
+    r.style.display=vis?'':'none';
+    if(inList) shown++;
   });
+  document.getElementById('axShown').textContent=shown;
+  document.getElementById('axOnCount').textContent=anyOn?shown:'all';
+  document.getElementById('axNoList').hidden=anyOn;
+  axCalc();
+}
+function axPickOpen(){ var p=document.getElementById('axPick'); p.hidden=!p.hidden; document.getElementById('axPickMsg').textContent=''; if(!p.hidden) document.getElementById('axPickSearch').focus(); }
+function axPickClose(){
+  /* put the ticks back to what's saved */
+  document.querySelectorAll('#axPick input[type=checkbox]').forEach(function(c){
+    var r=document.querySelector('#axAds .ax-row[data-id="'+c.getAttribute('data-id')+'"]');
+    c.checked = !!r && r.getAttribute('data-on')==='1';
+  });
+  document.getElementById('axPick').hidden=true;
+}
+function axPickFilter(q){
+  q=(q||'').toLowerCase().trim();
+  document.querySelectorAll('#axPick .ax-chk').forEach(function(l){ l.style.display=(!q||l.getAttribute('data-name').indexOf(q)!==-1)?'':'none'; });
+}
+function axPickAll(on){
+  document.querySelectorAll('#axPick .ax-chk').forEach(function(l){ if(l.style.display!=='none') l.querySelector('input').checked=on; });
+}
+function axPickSave(){
+  var ids=[], fd=new FormData();
+  document.querySelectorAll('#axPick input[type=checkbox]').forEach(function(c){ if(c.checked) ids.push(c.getAttribute('data-id')); });
+  fd.append('csrf',document.querySelector('#addExpForm input[name=csrf]').value);
+  fd.append('_action','ads_list');
+  ids.forEach(function(id){ fd.append('ids[]',id); });
+  var msg=document.getElementById('axPickMsg'); msg.textContent='Saving…';
+  fetch('expenses.php',{method:'POST',body:fd,credentials:'same-origin'}).then(function(r){return r.json();}).then(function(j){
+    if(!j.ok) throw new Error(j.error||'Save failed');
+    document.querySelectorAll('#axAds .ax-row[data-id]').forEach(function(r){ r.setAttribute('data-on', ids.indexOf(r.getAttribute('data-id'))>-1?'1':'0'); });
+    document.getElementById('axPick').hidden=true;
+    axApply();
+  }).catch(function(e){ msg.textContent='Could not save: '+e.message; });
 }
 function axClear(){
   document.querySelectorAll('#axAds .ax-list input[type=number]').forEach(function(i){ i.value=''; });
@@ -713,7 +807,7 @@ document.addEventListener('keydown',function(ev){
           .map(function(r){return r.querySelector('input[type=number]');});
   var i=all.indexOf(t); if(i>-1 && all[i+1]) all[i+1].focus();
 });
-document.addEventListener('DOMContentLoaded',expCatChange);
+document.addEventListener('DOMContentLoaded',function(){ expCatChange(); axApply(); });
 </script>
 
 <?php require __DIR__.'/includes/footer.php'; ?>

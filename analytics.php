@@ -36,7 +36,7 @@ $pName = $pid ? (string)val("SELECT name FROM products WHERE id=?",[$pid]) : '';
 
 /* ---- per-period aggregation ---- */
 $periods=[]; $prod=[]; $prodPeriod=[];
-$ensure=function(&$a,$k){ if(!isset($a[$k])) $a[$k]=['orders'=>0,'oqty'=>0,'ordval'=>0,'delivered'=>0,'units'=>0,'revenue'=>0,'cogs'=>0,'delivery'=>0,'profit'=>0,'ads'=>0,'returned'=>0,'runits'=>0,'rloss'=>0,'exchanged'=>0,'exloss'=>0]; };
+$ensure=function(&$a,$k){ if(!isset($a[$k])) $a[$k]=['orders'=>0,'oqty'=>0,'ordval'=>0,'delivered'=>0,'units'=>0,'revenue'=>0,'cogs'=>0,'delivery'=>0,'profit'=>0,'ads'=>0,'adsUsd'=>0,'returned'=>0,'runits'=>0,'rloss'=>0,'exchanged'=>0,'exloss'=>0]; };
 $Q=['pending'=>0,'processing'=>0,'shipped'=>0,'delivered'=>0,'returned'=>0,'cancelled'=>0,'exchanged'=>0];
 $deep=[];
 foreach($orders as $o){
@@ -79,6 +79,7 @@ foreach($orders as $o){
   }
 }
 /* ad spend per period */
+$adRate=max(1,(float)setting('usd_rate', defined('USD_RATE')?USD_RATE:140));
 $adRows = $ch === 'daraz' ? $darazAds($from,$to) : rows("SELECT expense_date, amount, category, COALESCE(usd_amount,0) usd_amount, COALESCE(product,'') product FROM expenses WHERE expense_date BETWEEN ? AND ?",[$from,$to]);
 /* when a product filter is on, count only ads TAGGED to that product */
 $adFits=function($e) use($pid,$pName){
@@ -92,7 +93,7 @@ foreach($adRows as $e){ $cat=strtolower((string)$e['category']); $isAd=false; fo
   $ep=trim((string)$e['product']);
   if($ep!==''){ foreach($deep as $dn=>&$dd){ if(strcasecmp($dn,$ep)===0){ $dd['ads']+=(float)$e['amount']; break; } } unset($dd); }
   if(!$adFits($e)){ $adsUntagged+=(float)$e['amount']; continue; }
-  $k=pkey($e['expense_date'],$g); $ensure($periods,$k); $periods[$k]['ads']+=(float)$e['amount']; }
+  $k=pkey($e['expense_date'],$g); $ensure($periods,$k); $periods[$k]['ads']+=(float)$e['amount']; $periods[$k]['adsUsd']+=((float)($e['usd_amount']??0)>0)?(float)$e['usd_amount']:(float)$e['amount']/$adRate; }
 ksort($periods);
 
 /* ---- range totals ---- */
@@ -259,7 +260,7 @@ require __DIR__.'/includes/header.php';
 <!-- period breakdown table -->
 <div class="panel" style="margin-top:20px"><div class="panel-head"><h2>📅 <?= ucfirst($g) ?> Breakdown</h2><span class="muted" style="font-size:12px"><?= count($periods) ?> <?= $g==='day'?'day':($g==='week'?'week':'month') ?><?= count($periods)==1?'':'s' ?></span></div>
 <div class="table-wrap"><table class="tbl num-tbl" id="periodTbl"><thead><tr>
-  <th><?= ucfirst($g) ?></th><th class="right">Orders</th><th class="right">Qty Ordered</th><th class="right">Order Value</th><th class="right">Delivered</th><th class="right">Units</th><th class="right">↩ Returned</th><th class="right">Return Loss</th><th class="right">Revenue</th><th class="right">COGS</th><th class="right">Delivery</th><th class="right">Gross Profit</th><th class="right">Ad Spend</th><th class="right">Ads/Unit</th><th class="right">Net (after ads)</th><th class="right">ROAS</th><th class="right">Ads/Order</th>
+  <th><?= ucfirst($g) ?></th><th class="right">Orders</th><th class="right">Qty Ordered</th><th class="right">Order Value</th><th class="right">Delivered</th><th class="right">Units</th><th class="right">↩ Returned</th><th class="right">Return Loss</th><th class="right">Revenue</th><th class="right">COGS</th><th class="right">Delivery</th><th class="right">Gross Profit</th><th class="right">Ad Spend</th><th class="right">Ad Spend ($)</th><th class="right">Ads/Unit</th><th class="right">Net (after ads)</th><th class="right">ROAS</th><th class="right">Ads/Order</th>
 </tr></thead><tbody>
 <?php foreach($periods as $k=>$p): $net=$p['profit']-$p['ads']; $ro=$p['ads']>0?$p['revenue']/$p['ads']:0; $apo=$p['orders']?$p['ads']/$p['orders']:0; ?>
   <tr<?= $k===$bestPeriod && $bestRev>0?' style="background:var(--green-bg)"':'' ?>>
@@ -276,12 +277,13 @@ require __DIR__.'/includes/header.php';
     <td class="num right muted"><?= money($p['delivery']) ?></td>
     <td class="num right" style="color:var(--green)"><?= money($p['profit']) ?></td>
     <td class="num right" style="color:var(--red)"><?= money($p['ads']) ?></td>
+    <td class="num right" style="color:var(--red);font-weight:700"><?= $p['adsUsd']>0?'$'.number_format($p['adsUsd'],2):'—' ?></td>
     <td class="num right muted"><?= $p['units']>0?money($p['ads']/$p['units']):'—' ?></td>
     <td class="num right" style="color:<?= $net>=0?'var(--green)':'var(--red)' ?>;font-weight:700"><?= money($net) ?></td>
     <td class="num right"><?= $ro>0?number_format($ro,2).'×':'—' ?></td>
     <td class="num right"><?= money(round($apo)) ?></td>
   </tr>
-<?php endforeach; if(!$periods) echo '<tr><td colspan="17"><div class="empty">No data in this range.</div></td></tr>'; ?>
+<?php endforeach; if(!$periods) echo '<tr><td colspan="18"><div class="empty">No data in this range.</div></td></tr>'; ?>
 </tbody></table></div></div>
 
 <!-- monthly report -->

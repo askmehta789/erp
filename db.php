@@ -269,6 +269,76 @@ function ensure_stock_samples() {
 function sample_stock($pid, $qty, $reason='') { ensure_stock_samples(); return _stock_pool_add('stock_samples', $pid, $qty, $reason); }
 function unsample_stock($sampleId) { ensure_stock_samples(); return _stock_pool_remove('stock_samples', $sampleId, 'Sample reversed'); }
 
+/* ---- Return to vendor: slow-moving stock sent back to the supplier.
+   Units leave the oldest FIFO batches at real cost (same pool mechanism as
+   damaged/sample) and the money side is recorded one of three ways:
+     credit = the vendor owes us / we owe them less → a NEGATIVE 'due' in their
+              Payee ledger (balance = due − paid, so it lowers what we owe)
+     cash   = they refunded us → money IN to the chosen Bank/Cash account
+     none   = no refund (returned for nothing / settled outside the ERP)
+   Fully reversible: undo puts the units back and removes the ledger / bank rows. ---- */
+function ensure_vendor_returns() {
+  static $done=false; if($done) return; $done=true;
+  try {
+    q("CREATE TABLE IF NOT EXISTS stock_vendor_returns(
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        product_id INT NOT NULL,
+        qty INT NOT NULL,
+        unit_cost DECIMAL(12,2) NOT NULL DEFAULT 0,
+        reason VARCHAR(160) DEFAULT '',
+        supplier_id INT NULL,
+        refund_amount DECIMAL(12,2) NOT NULL DEFAULT 0,
+        refund_mode VARCHAR(8) NOT NULL DEFAULT 'credit',
+        account_id INT NULL,
+        bank_txn_id INT NULL,
+        ledger_id INT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        INDEX(product_id), INDEX(supplier_id))");
+  } catch (Exception $e) {}
+}
+/* returns ['id','qty','unit_cost','value','refund','mode','credited'] or null */
+function vendor_return_stock($pid, $qty, $reason, $supplierId, $refund, $mode, $accountId) {
+  ensure_vendor_returns();
+  $mode = in_array($mode, ['credit','cash','none'], true) ? $mode : 'credit';
+  $res = _stock_pool_add('stock_vendor_returns', $pid, $qty, $reason);
+  if (!$res) return null;
+  $rid = (int)val("SELECT MAX(id) FROM stock_vendor_returns WHERE product_id=?", [(int)$pid]);
+  /* refund defaults to what the units cost us; a vendor may refund less (restocking fee etc.) */
+  $refund = ($refund === null || $refund === '' || (float)$refund < 0) ? (float)$res['value'] : round((float)$refund, 2);
+  if ($mode === 'none') $refund = 0;
+  $supplierId = (int)$supplierId ?: null;
+  $pname = (string)val("SELECT name FROM products WHERE id=?", [(int)$pid]);
+  $label = '↩ Returned: '.$pname.' ('.(int)$res['qty'].' pcs)';
+  $ledgerId = null; $txnId = null; $credited = false;
+  if ($mode === 'credit' && $refund > 0 && $supplierId) {
+    ensure_vendor_autobill();
+    $payeeId = (int)val("SELECT COALESCE(payee_id,0) FROM suppliers WHERE id=?", [$supplierId]);
+    if ($payeeId) {
+      try { q("ALTER TABLE payee_ledger ADD COLUMN IF NOT EXISTS ref_vreturn_id INT NULL"); } catch (Exception $e) {}
+      q("INSERT INTO payee_ledger(payee_id,entry_date,type,amount,label,product,ref_vreturn_id) VALUES(?,?,'due',?,?,?,?)",
+        [$payeeId, date('Y-m-d'), -$refund, $label, $pname, $rid]);
+      $ledgerId = (int)db()->lastInsertId(); $credited = true;
+    }
+  }
+  $accountId = (int)$accountId ?: null;
+  if ($mode === 'cash' && $refund > 0 && $accountId) {
+    q("INSERT INTO bank_txns(account_id,txn_date,direction,amount,category,remarks) VALUES(?,?,'in',?,?,?)",
+      [$accountId, date('Y-m-d'), $refund, 'Vendor refund', $label]);
+    $txnId = (int)db()->lastInsertId();
+  }
+  q("UPDATE stock_vendor_returns SET supplier_id=?, refund_amount=?, refund_mode=?, account_id=?, bank_txn_id=?, ledger_id=? WHERE id=?",
+    [$supplierId, $refund, $mode, $accountId, $txnId, $ledgerId, $rid]);
+  return $res + ['id'=>$rid, 'refund'=>$refund, 'mode'=>$mode, 'credited'=>$credited];
+}
+function unvendor_return($returnId) {
+  ensure_vendor_returns();
+  $r = row("SELECT * FROM stock_vendor_returns WHERE id=?", [(int)$returnId]);
+  if (!$r) return null;
+  if ((int)$r['ledger_id'])   { try { q("DELETE FROM payee_ledger WHERE id=?", [(int)$r['ledger_id']]); } catch (Exception $e) {} }
+  if ((int)$r['bank_txn_id']) { try { q("DELETE FROM bank_txns WHERE id=?", [(int)$r['bank_txn_id']]); } catch (Exception $e) {} }
+  return _stock_pool_remove('stock_vendor_returns', (int)$returnId, 'Vendor return reversed');
+}
+
 /* ============================================================
    BUSINESS ALERT CALCULATORS (shared by pages + cron)
    ============================================================ */

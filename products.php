@@ -7,6 +7,7 @@ $canManageStock = can_manage_stock_adjustments();   /* Admin/Manager only — da
 ensure_stock_batches();
 ensure_stock_damage();
 ensure_stock_samples();
+ensure_vendor_returns();
 if (function_exists('ensure_hh_stock')) ensure_hh_stock();
 if (function_exists('ensure_dropex_stock')) ensure_dropex_stock();
 try { q("CREATE TABLE IF NOT EXISTS suppliers (
@@ -160,6 +161,44 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && ($_POST['_action'] ?? '')==='unsample
   $d = unsample_stock($sid);
   if ($d) { log_activity("Reversed sample entry #$sid (product #{$d['product_id']}, +{$d['qty']} pcs restored)",'Stock'); flash('Sample entry removed — stock restored.'); }
   else flash('Sample entry not found — it may have already been removed.');
+  $returnTo = trim((string)($_POST['return_to'] ?? ''));
+  $returnTo = (str_starts_with($returnTo,'product_detail.php?') || str_starts_with($returnTo,'products.php?')) ? $returnTo : 'products.php';
+  header('Location: '.$returnTo); exit;
+}
+if ($_SERVER['REQUEST_METHOD']==='POST' && ($_POST['_action'] ?? '')==='vendor_return') {
+  check_csrf();
+  if (!can_manage_stock_adjustments()) { flash('Only Admins and Managers can return stock to a vendor.'); header('Location: products.php'); exit; }
+  $pid=(int)($_POST['id'] ?? 0);
+  $qty=max(0,(int)($_POST['qty'] ?? 0));
+  $reason=trim((string)($_POST['reason'] ?? ''));
+  $supplierId=(int)($_POST['supplier_id'] ?? 0);
+  $mode=(string)($_POST['refund_mode'] ?? 'credit');
+  $refundRaw=trim((string)($_POST['refund_amount'] ?? ''));
+  $accountId=(int)($_POST['account_id'] ?? 0);
+  if (!$supplierId) { flash('Pick the vendor you are returning the stock to.'); }
+  elseif ($mode==='cash' && !$accountId) { flash('Pick the account the refund was received in.'); }
+  else {
+    $res = vendor_return_stock($pid,$qty,$reason,$supplierId,$refundRaw===''?null:(float)$refundRaw,$mode,$accountId);
+    if ($res) {
+      $vname=(string)val("SELECT name FROM suppliers WHERE id=?",[$supplierId]);
+      $money = $res['mode']==='none' ? 'no refund'
+             : ($res['mode']==='cash' ? money($res['refund']).' refunded to account'
+             : ($res['credited'] ? money($res['refund']).' credited to '.$vname.'\'s ledger' : money($res['refund']).' credit noted ('.$vname.' has no linked Payee ledger)'));
+      log_activity("Returned {$res['qty']} pcs of product #$pid to vendor $vname (".money($res['value'])." at cost, $money)".($reason?" — $reason":''),'Stock');
+      flash("↩ Returned {$res['qty']} pcs to $vname — ".money($res['value'])." at cost · $money.".($res['qty']<$qty?' (capped to stock on hand)':''));
+    } else flash('Nothing to return — check the quantity and stock on hand.');
+  }
+  $returnTo = trim((string)($_POST['return_to'] ?? ''));
+  $returnTo = (str_starts_with($returnTo,'product_detail.php?') || str_starts_with($returnTo,'products.php?')) ? $returnTo : ('products.php?open='.$pid.'#batches-'.$pid);
+  header('Location: '.$returnTo); exit;
+}
+if ($_SERVER['REQUEST_METHOD']==='POST' && ($_POST['_action'] ?? '')==='unvendor_return') {
+  check_csrf();
+  if (!can_manage_stock_adjustments()) { flash('Only Admins and Managers can undo a vendor return.'); header('Location: products.php'); exit; }
+  $rid=(int)($_POST['return_id'] ?? 0);
+  $d = unvendor_return($rid);
+  if ($d) { log_activity("Reversed vendor return #$rid (product #{$d['product_id']}, +{$d['qty']} pcs restored)",'Stock'); flash('Vendor return undone — stock restored and the refund/credit removed.'); }
+  else flash('Vendor return not found — it may have already been removed.');
   $returnTo = trim((string)($_POST['return_to'] ?? ''));
   $returnTo = (str_starts_with($returnTo,'product_detail.php?') || str_starts_with($returnTo,'products.php?')) ? $returnTo : 'products.php';
   header('Location: '.$returnTo); exit;

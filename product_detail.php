@@ -4,6 +4,7 @@ repair_zero_cost_profit();
 ensure_stock_batches();
 ensure_stock_damage();
 ensure_stock_samples();
+ensure_vendor_returns();
 $canManageStock = can_manage_stock_adjustments();   /* Admin/Manager only — damage write-offs & sample set-asides */
 if (function_exists('ensure_hh_stock')) ensure_hh_stock();
 if (function_exists('ensure_dropex_stock')) ensure_dropex_stock();
@@ -77,6 +78,21 @@ $samples = rows("SELECT * FROM stock_samples WHERE product_id=? ORDER BY created
 $sampleQty = array_sum(array_column($samples,'qty'));
 $sampleVal = array_sum(array_map(fn($d)=>(int)$d['qty']*(float)$d['unit_cost'],$samples));
 
+/* ---- stock returned to vendors for this product ---- */
+$vReturns = rows("SELECT r.*, s.name AS vendor, ba.name AS account FROM stock_vendor_returns r
+                  LEFT JOIN suppliers s ON s.id=r.supplier_id LEFT JOIN bank_accounts ba ON ba.id=r.account_id
+                  WHERE r.product_id=? ORDER BY r.created_at DESC, r.id DESC",[$pid]);
+$vReturnQty = array_sum(array_column($vReturns,'qty'));
+$vReturnVal = array_sum(array_map(fn($d)=>(int)$d['qty']*(float)$d['unit_cost'],$vReturns));
+$vReturnRefund = array_sum(array_column($vReturns,'refund_amount'));
+/* default vendor = whoever supplied the most recent batch */
+$lastVendorId = (int)val("SELECT COALESCE(supplier_id,0) FROM stock_batches WHERE product_id=? AND supplier_id IS NOT NULL ORDER BY purchase_date DESC, id DESC LIMIT 1",[$pid]);
+/* cost of the next units out (oldest open batch first) — used to pre-fill the refund */
+$fifoUnits = [];
+foreach (rows("SELECT qty_left,unit_cost FROM stock_batches WHERE product_id=? AND qty_left>0 ORDER BY purchase_date,id",[$pid]) as $fb)
+  $fifoUnits[] = [(int)$fb['qty_left'], (float)$fb['unit_cost']];
+$vrAccounts = rows("SELECT id,name,kind FROM bank_accounts WHERE archived=0 ORDER BY kind='cash' DESC, name");
+
 /* ---- stock position (same logic as products.php, scoped to one product) ---- */
 $hhCid = function_exists('hh_courier_id') ? hh_courier_id() : 0;
 $dxCid = function_exists('dropex_courier_id') ? dropex_courier_id() : 0;
@@ -91,6 +107,21 @@ $dp = function_exists('dropex_position') ? dropex_position($pid) : ['sent'=>0,'d
 $sys=(int)$p['stock']; $out=$commit['out']; $res=$commit['res']; $hh=(int)($hp['left']??0); $dx=(int)($dp['left']??0);
 $onHand = max(0,$sys-$out); $st=$onHand; $free=max(0,$onHand-$res);
 $spTotal = max(1,$onHand+$out+$hh+$dx);
+
+/* ---- latest orders for this product (newest first, 50 per page, optional status filter) ---- */
+$poPer = 50;
+$poStatuses = ['pending','processing','shipped','delivered','returned','cancelled','exchanged'];
+$poSt = in_array($_GET['ost'] ?? '', $poStatuses, true) ? $_GET['ost'] : '';
+$poWhere = "o.product_id=?".($poSt!=='' ? " AND o.status=?" : "");
+$poArgs = $poSt!=='' ? [$pid,$poSt] : [$pid];
+$poCount = (int)val("SELECT COUNT(*) FROM orders o WHERE $poWhere", $poArgs);
+$poPages = max(1,(int)ceil($poCount/$poPer));
+$poPage = min($poPages, max(1,(int)($_GET['op'] ?? 1)));
+$poRows = rows("SELECT o.*, c.name AS courier_name FROM orders o LEFT JOIN couriers c ON c.id=o.courier_id
+                WHERE $poWhere ORDER BY o.order_date DESC, o.id DESC LIMIT $poPer OFFSET ".(($poPage-1)*$poPer), $poArgs);
+$poStCounts = [];
+foreach (rows("SELECT status, COUNT(*) n FROM orders WHERE product_id=? GROUP BY status",[$pid]) as $r) $poStCounts[$r['status']] = (int)$r['n'];
+function pd_po_url($pid,$page,$st){ return 'product_detail.php?'.http_build_query(array_filter(['id'=>$pid,'ost'=>$st,'op'=>$page>1?$page:null],fn($v)=>$v!==null&&$v!=='')).'#orders'; }
 
 /* ---- orders for this product: aggregate + delivered-by-channel ---- */
 $orders = rows("SELECT qty, sell_price, cost_price, delivery_charge, cancel_charge, status, COALESCE(courier_id,0) AS courier_id FROM orders WHERE product_id=?",[$pid]);
@@ -173,8 +204,7 @@ require __DIR__.'/includes/header.php';
 .pdd-card{background:var(--surface);border:1px solid var(--border);border-radius:16px;box-shadow:0 6px 18px rgba(30,41,80,.06);padding:17px 19px;margin-bottom:15px}
 .pdd-card h3{font-size:13.5px;font-weight:900;margin-bottom:11px;color:var(--ink);display:flex;align-items:center;gap:8px}
 .pdd-stockbar{height:9px;border-radius:99px;background:var(--surface-2);overflow:hidden;display:flex;max-width:360px;margin-bottom:8px}
-.pdd-stockbar i{display:block}
-.pdd-deliverline{background:var(--green-bg,#eefdf4);border:1px solid #86efac;border-radius:10px;padding:11px 15px;font-size:13px;margin-bottom:14px;color:var(--ink)}
+.pdd-stockbar i{display:block}.pdd-deliverline{background:var(--green-bg,#eefdf4);border:1px solid #86efac;border-radius:10px;padding:11px 15px;font-size:13px;margin-bottom:14px;color:var(--ink)}
 .pdd-spark{display:flex;align-items:flex-end;gap:3px;height:42px;max-width:260px}
 .pdd-spark div{flex:1;background:#93c5fd;border-radius:2px;min-height:3px}
 .pdd-hh-recon{background:var(--surface-2);border-radius:10px;padding:11px 15px;font-size:12.5px;margin-bottom:11px;color:var(--ink)}
@@ -216,7 +246,8 @@ require __DIR__.'/includes/header.php';
   <div class="pdd-acts">
     <button class="btn btn-sm" onclick="openStock(<?= (int)$p['id'] ?>,'<?= e(addslashes($p['name'])) ?>',<?= (float)$p['cost'] ?>)">📦+ Add Stock</button>
     <?php if($canManageStock): ?><button class="btn btn-sm" style="color:#dc2626" onclick="openDamage(<?= (int)$p['id'] ?>,'<?= e(addslashes($p['name'])) ?>',<?= (int)$st ?>)">💥 Mark Damaged</button>
-    <button class="btn btn-sm" onclick="openSample(<?= (int)$p['id'] ?>,'<?= e(addslashes($p['name'])) ?>',<?= (int)$st ?>)">🎁 Mark Sample</button><?php endif; ?>
+    <button class="btn btn-sm" onclick="openSample(<?= (int)$p['id'] ?>,'<?= e(addslashes($p['name'])) ?>',<?= (int)$st ?>)">🎁 Mark Sample</button>
+    <button class="btn btn-sm" style="color:#0369a1" onclick="openVReturn(<?= (int)$st ?>)">↩ Return to Vendor</button><?php endif; ?>
     <button class="btn btn-sm" data-rec="<?= e(json_encode($p)) ?>" onclick="crudEdit('products',this)">✏️ Edit</button>
     <form method="post" action="products.php" style="display:inline" onsubmit="return confirm('Delete this product?')"><input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="delete"><input type="hidden" name="id" value="<?= (int)$p['id'] ?>"><button class="btn btn-sm" style="color:var(--red)">🗑 Delete</button></form>
   </div>
@@ -245,10 +276,12 @@ require __DIR__.'/includes/header.php';
   <div class="muted" style="font-size:12px">
     <b style="color:var(--ink)"><?= $st ?></b> on shelf ·
     <b style="color:var(--ink)"><?= $out ?></b> with courier ·
-    <b style="color:var(--ink)"><?= $hh ?></b> at Hungry Hunter ·
-    <b style="color:var(--ink)"><?= $dx ?></b> at Dropex ·
+    <?php /* Hungry Hunter & Dropex are no longer used — only mention them if stock is still sitting there */ ?>
+    <?php if($hh>0): ?><b style="color:var(--ink)"><?= $hh ?></b> at Hungry Hunter · <?php endif; ?>
+    <?php if($dx>0): ?><b style="color:var(--ink)"><?= $dx ?></b> at Dropex · <?php endif; ?>
     <b style="color:var(--ink)"><?= $res ?></b> reserved
     <?= ($res && $free!==$st) ? ' · <b style="color:var(--ink)">'.$free.'</b> free to sell' : '' ?>
+    <?= $vReturnQty>0 ? ' · <b style="color:var(--ink)">'.number_format($vReturnQty).'</b> returned to vendor' : '' ?>
   </div>
   <?php if(array_sum($spk)>0): ?>
   <h3 style="margin-top:16px">📈 Sales Trend — last 6 weeks</h3>
@@ -260,9 +293,55 @@ require __DIR__.'/includes/header.php';
   <h3>✅ Delivered — All Channels</h3>
   <div class="pdd-deliverline">
     <b><?= number_format($sold) ?> delivered in total</b>
-    <?php if($deliveredByCourier): $parts=[]; foreach($deliveredByCourier as $cn=>$cq) $parts[]="{$cq} via ".e($cn); echo ' — '.implode(' · ',$parts); endif; ?>
+    <?php if($deliveredByCourier): $parts=[]; $oldCq=0;
+      foreach($deliveredByCourier as $cn=>$cq){ if(preg_match('/hungry|dropex/i',(string)$cn)){ $oldCq+=$cq; continue; } $parts[]="{$cq} via ".e($cn); }
+      if($oldCq>0) $parts[]=$oldCq.' via inactive couriers';
+      echo ' — '.implode(' · ',$parts); endif; ?>
   </div>
   <div class="muted" style="font-size:12px"><?= $returnedN ?> returned/cancelled of <?= $ordersN ?> total orders (<?= $returnRate ?>% rate)<?= $adsP>0?' · Rs. '.number_format($adsP).' spent on ads for this product':'' ?></div>
+</div>
+
+<div class="pdd-card" id="orders" style="scroll-margin-top:70px">
+  <h3>🧾 Latest Orders <span class="muted" style="font-size:11px;font-weight:600">— newest first · <?= number_format($poCount) ?> order<?= $poCount===1?'':'s' ?><?= $poSt!==''?' '.e(slug($poSt)):'' ?></span></h3>
+  <div class="chips" style="margin-bottom:10px">
+    <a class="chip <?= $poSt===''?'on':'' ?>" href="<?= e(pd_po_url($pid,1,'')) ?>">All <b><?= number_format(array_sum($poStCounts)) ?></b></a>
+    <?php foreach($poStatuses as $s): if(empty($poStCounts[$s])) continue; ?>
+      <a class="chip <?= $poSt===$s?'on':'' ?>" href="<?= e(pd_po_url($pid,1,$s)) ?>"><?= e(slug($s)) ?> <b><?= number_format($poStCounts[$s]) ?></b></a>
+    <?php endforeach; ?>
+  </div>
+  <div class="table-wrap"><table class="tbl">
+    <thead><tr><th>Order</th><th>Date</th><th>Customer</th><th>Phone</th><th>Address</th><th class="right">Qty</th><th class="right">Amount</th><th>Courier</th><th>Payment</th><th>Status</th></tr></thead>
+    <tbody>
+    <?php foreach($poRows as $o): $paid = strtolower((string)($o['payment_status'] ?? ''))==='paid'; ?>
+      <tr>
+        <td><b><?= e($o['code']?:('#'.$o['id'])) ?></b></td>
+        <td class="num muted" style="white-space:nowrap"><?= e($o['order_date']) ?></td>
+        <td><?= e($o['customer']?:'—') ?></td>
+        <td class="num muted"><?= e($o['phone']?:'—') ?></td>
+        <td class="muted" style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="<?= e($o['address'] ?? '') ?>"><?= e(($o['address'] ?? '')?:'—') ?></td>
+        <td class="num right"><?= (int)$o['qty'] ?></td>
+        <td class="num right"><b><?= money((float)$o['sell_price']*(int)$o['qty']) ?></b></td>
+        <td><?= e($o['courier_name']?:'—') ?></td>
+        <td><span class="pill <?= $paid?'p-green':'p-red' ?>" style="font-size:11px"><?= $paid?'Received':'Not Yet' ?></span></td>
+        <td><?= pill($o['status']) ?></td>
+      </tr>
+    <?php endforeach; if(!$poRows) echo '<tr><td colspan="10"><div class="empty">No orders'.($poSt!==''?' with this status':'').' for this product yet.</div></td></tr>'; ?>
+    </tbody>
+  </table></div>
+  <?php if($poPages>1): $from=($poPage-1)*$poPer+1; $to=min($poCount,$poPage*$poPer);
+    /* page numbers: first, last, and a window around the current page */
+    $nums=[]; for($i=1;$i<=$poPages;$i++){ if($i===1||$i===$poPages||abs($i-$poPage)<=2) $nums[]=$i; } ?>
+  <div class="pager">
+    <span class="pg-info muted">Showing <?= $from ?>–<?= $to ?> of <?= number_format($poCount) ?></span>
+    <span class="pg-btns">
+      <a class="btn btn-sm" href="<?= e(pd_po_url($pid,max(1,$poPage-1),$poSt)) ?>" <?= $poPage<=1?'style="pointer-events:none;opacity:.4"':'' ?>>‹ Prev</a>
+      <?php $prevN=0; foreach($nums as $n): if($prevN && $n-$prevN>1) echo '<span class="muted" style="padding:0 4px">…</span>'; ?>
+        <a class="btn btn-sm<?= $n===$poPage?' btn-primary':'' ?>" href="<?= e(pd_po_url($pid,$n,$poSt)) ?>"><?= $n ?></a>
+      <?php $prevN=$n; endforeach; ?>
+      <a class="btn btn-sm" href="<?= e(pd_po_url($pid,min($poPages,$poPage+1),$poSt)) ?>" <?= $poPage>=$poPages?'style="pointer-events:none;opacity:.4"':'' ?>>Next ›</a>
+    </span>
+  </div>
+  <?php endif; ?>
 </div>
 
 <div class="pdd-card">
@@ -372,7 +451,36 @@ require __DIR__.'/includes/header.php';
   <?php else: ?><span class="muted" style="font-size:12px">No sample stock recorded.<?= $canManageStock ? ' Click "🎁 Mark Sample" above for units kept aside as samples/demo stock.' : ' Only Admins and Managers can record this.' ?></span><?php endif; ?>
 </div>
 
-<?php if($hhMoves): ?>
+<div class="pdd-card">
+  <h3>↩ Returned to Vendor</h3>
+  <?php if($vReturns): ?>
+  <div class="muted" style="font-size:11.5px;margin-bottom:8px">Lifetime: <b style="color:var(--ink)"><?= number_format($vReturnQty) ?> pcs</b> sent back (<?= money($vReturnVal) ?> at cost) · <b style="color:var(--ink)"><?= money($vReturnRefund) ?></b> refunded / credited<?= $vReturnVal-$vReturnRefund>0.5 ? ' · <b style="color:var(--red)">'.money($vReturnVal-$vReturnRefund).'</b> not recovered' : '' ?>.</div>
+  <div class="table-wrap"><table class="tbl num-tbl"><thead><tr><th>Date</th><th style="text-align:left">Vendor</th><th>Qty</th><th>Cost</th><th>Refund</th><th style="text-align:left">How</th><th style="text-align:left">Reason</th><th></th></tr></thead><tbody>
+    <?php foreach($vReturns as $d): $cv=(int)$d['qty']*(float)$d['unit_cost']; ?>
+    <tr>
+      <td><?= e(date('d M Y',strtotime($d['created_at']))) ?></td>
+      <td style="text-align:left;font-weight:700"><?= e($d['vendor'] ?: '—') ?></td>
+      <td style="font-weight:800"><?= (int)$d['qty'] ?></td>
+      <td><?= money($cv) ?></td>
+      <td style="color:<?= (float)$d['refund_amount']+0.5<$cv?'var(--amber)':'var(--green)' ?>;font-weight:700"><?= (float)$d['refund_amount']>0?money($d['refund_amount']):'—' ?></td>
+      <td style="text-align:left" class="muted"><?= $d['refund_mode']==='cash' ? 'Refund → '.e($d['account'] ?: 'account') : ($d['refund_mode']==='none' ? 'No refund' : ((int)$d['ledger_id'] ? 'Vendor credit (ledger)' : 'Credit (no payee linked)')) ?></td>
+      <td style="text-align:left" class="muted"><?= e($d['reason']) ?></td>
+      <td style="text-align:right;white-space:nowrap">
+        <?php if($canManageStock): ?>
+        <form method="post" action="products.php" style="display:inline" onsubmit="return confirm('Undo this vendor return? The stock comes back and the refund/credit entry is removed.')">
+          <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="unvendor_return"><input type="hidden" name="return_id" value="<?= (int)$d['id'] ?>">
+          <input type="hidden" name="return_to" value="product_detail.php?id=<?= (int)$p['id'] ?>">
+          <button class="iact del" title="Undo — restore stock">↩</button>
+        </form>
+        <?php endif; ?>
+      </td>
+    </tr>
+    <?php endforeach; ?>
+  </tbody></table></div>
+  <?php else: ?><span class="muted" style="font-size:12px">Nothing returned to a vendor yet.<?= $canManageStock ? ' Click "↩ Return to Vendor" above to send slow-moving stock back to the supplier.' : ' Only Admins and Managers can record this.' ?></span><?php endif; ?>
+</div>
+
+<?php if($hhMoves && $hh>0): /* inactive courier — history only shown while it still holds stock */ ?>
 <div class="pdd-card">
   <h3>🐝 Hungry Hunter — movement history</h3>
   <div class="pdd-hh-recon">
@@ -398,7 +506,7 @@ require __DIR__.'/includes/header.php';
 </div>
 <?php endif; ?>
 
-<?php if($dxMoves): ?>
+<?php if($dxMoves && $dx>0): /* inactive courier — history only shown while it still holds stock */ ?>
 <div class="pdd-card">
   <h3>🚴 Dropex — movement history</h3>
   <div class="pdd-hh-recon">
@@ -510,6 +618,45 @@ require __DIR__.'/includes/header.php';
     </form>
   </div>
 </div>
+
+<!-- return to vendor modal (POSTs to products.php, returns here) -->
+<div class="modal-bg" id="vrModal" style="z-index:99990">
+  <div class="modal" style="width:480px;max-width:94vw">
+    <div class="modal-head"><span>↩ Return to Vendor — <?= e($p['name']) ?></span><span class="mx" onclick="closeVReturn()">✕</span></div>
+    <form method="post" action="products.php" style="padding:18px 22px" class="fgrid" onsubmit="return vrCheck()">
+      <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="vendor_return"><input type="hidden" name="id" value="<?= (int)$p['id'] ?>">
+      <input type="hidden" name="return_to" value="product_detail.php?id=<?= (int)$p['id'] ?>">
+      <div class="full muted" style="font-size:11.5px" id="vr_hint"></div>
+      <div><label>Quantity (pcs) *</label><input type="number" name="qty" id="vr_qty" min="1" required placeholder="e.g. 20" oninput="vrCalc()"></div>
+      <div><label>Vendor *</label><select name="supplier_id" id="vr_vendor" required><option value="">—</option>
+        <?php foreach($vendorList as $v): ?><option value="<?= (int)$v['id'] ?>"<?= (int)$v['id']===$lastVendorId?' selected':'' ?>><?= e($v['name']) ?></option><?php endforeach; ?></select></div>
+      <div class="full"><label>Money back from the vendor</label>
+        <div class="vr-modes">
+          <label><input type="radio" name="refund_mode" value="credit" checked onchange="vrMode()"> <span><b>Vendor credit</b><small>lowers what we owe them</small></span></label>
+          <label><input type="radio" name="refund_mode" value="cash" onchange="vrMode()"> <span><b>Refund received</b><small>money into an account</small></span></label>
+          <label><input type="radio" name="refund_mode" value="none" onchange="vrMode()"> <span><b>No refund</b><small>stock only</small></span></label>
+        </div></div>
+      <div id="vr_amt_wrap"><label>Refund amount (Rs.)</label><input type="number" step="any" min="0" name="refund_amount" id="vr_amt" placeholder="= stock cost"></div>
+      <div id="vr_acct_wrap" style="display:none"><label>Received in account *</label><select name="account_id" id="vr_acct"><option value="0">—</option>
+        <?php foreach($vrAccounts as $A): ?><option value="<?= (int)$A['id'] ?>"><?= $A['kind']==='cash'?'💵':'🏦' ?> <?= e($A['name']) ?></option><?php endforeach; ?></select></div>
+      <div class="full muted" style="font-size:12px;font-weight:700" id="vr_cost"></div>
+      <div class="full"><label>Reason</label><input name="reason" placeholder="e.g. not selling — returned unsold stock"></div>
+      <div class="full" style="display:flex;justify-content:flex-end;gap:10px;margin-top:4px">
+        <button type="button" class="btn" onclick="closeVReturn()">Cancel</button>
+        <button class="btn btn-primary">↩ Return Stock</button>
+      </div>
+    </form>
+  </div>
+</div>
+<style>
+.vr-modes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+.vr-modes label{display:flex!important;gap:7px;align-items:flex-start;margin:0!important;padding:8px 10px;border:1px solid var(--border);border-radius:10px;cursor:pointer;font-weight:600}
+.vr-modes label:has(input:checked){border-color:var(--brand);background:rgba(99,102,241,.07)}
+.vr-modes input{width:auto!important;margin-top:2px}
+.vr-modes span{display:flex;flex-direction:column;font-size:12.5px;color:var(--ink)}
+.vr-modes small{font-weight:500;color:var(--muted);font-size:11px}
+@media(max-width:520px){.vr-modes{grid-template-columns:1fr}}
+</style>
 <?php endif; ?>
 <script>
 function openStock(id,name,cost,suggestQty){
@@ -542,6 +689,40 @@ function openSample(id,name,onHand){
   document.getElementById('sampleModal').classList.add('open');
 }
 function closeSample(){document.getElementById('sampleModal').classList.remove('open');}
+
+/* ---- return to vendor ---- */
+var VR_FIFO=<?= json_encode($fifoUnits) ?>, VR_ONHAND=0;
+function vrFifoCost(q){ var c=0; for(var i=0;i<VR_FIFO.length&&q>0;i++){ var t=Math.min(q,VR_FIFO[i][0]); c+=t*VR_FIFO[i][1]; q-=t; } return c; }
+function vrRs(n){ return 'Rs. '+Math.round(n).toLocaleString('en-IN'); }
+function openVReturn(onHand){
+  VR_ONHAND=onHand||0;
+  document.getElementById('vr_qty').value=''; document.getElementById('vr_qty').max=VR_ONHAND||'';
+  document.getElementById('vr_amt').value='';
+  document.getElementById('vr_hint').textContent = VR_ONHAND+' pcs on the shelf. Units leave the oldest batches first, at what they cost you.';
+  document.querySelector('#vrModal input[name=refund_mode][value=credit]').checked=true; vrMode(); vrCalc();
+  document.getElementById('vrModal').classList.add('open');
+}
+function closeVReturn(){document.getElementById('vrModal').classList.remove('open');}
+function vrMode(){
+  var m=document.querySelector('#vrModal input[name=refund_mode]:checked').value;
+  document.getElementById('vr_amt_wrap').style.display = m==='none'?'none':'';
+  document.getElementById('vr_acct_wrap').style.display = m==='cash'?'':'none';
+  vrCalc();
+}
+function vrCalc(){
+  var q=parseInt(document.getElementById('vr_qty').value)||0, el=document.getElementById('vr_cost');
+  if(q<=0){ el.textContent=''; return; }
+  if(VR_ONHAND && q>VR_ONHAND){ el.style.color='var(--red)'; el.textContent='Only '+VR_ONHAND+' pcs on the shelf.'; return; }
+  var c=vrFifoCost(q); el.style.color='var(--muted)';
+  document.getElementById('vr_amt').placeholder=Math.round(c);
+  el.textContent='Stock cost of these '+q+' pcs: '+vrRs(c)+' — leave the refund blank to use this.';
+}
+function vrCheck(){
+  var m=document.querySelector('#vrModal input[name=refund_mode]:checked').value;
+  if(m==='cash' && document.getElementById('vr_acct').value==='0'){ alert('Pick the account the refund was received in.'); return false; }
+  return true;
+}
+if(document.getElementById('vrModal')) document.getElementById('vrModal').addEventListener('click',function(e){if(e.target===this)closeVReturn();});
 if(document.getElementById('sampleModal')) document.getElementById('sampleModal').addEventListener('click',function(e){if(e.target===this)closeSample();});
 
 function openEditBatch(rec){

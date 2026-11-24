@@ -47,8 +47,12 @@ foreach($orders as $o){
   $periods[$k]['oqty']+=$q; $periods[$k]['ordval']+=$line;
   if(isset($Q[$o['status']])) $Q[$o['status']]+=$q;
   $dn=$o['product_name']?:'(none)';
-  if(!isset($deep[$dn])) $deep[$dn]=['orders'=>0,'oq'=>0,'dq'=>0,'pq'=>0,'rq'=>0,'rev'=>0,'cogs'=>0,'prof'=>0,'ads'=>0];
+  /* *q = pieces, do/po/ro = number of ORDERS delivered / pending / returned (Product Performance "Pcs | Orders" toggle) */
+  if(!isset($deep[$dn])) $deep[$dn]=['orders'=>0,'oq'=>0,'dq'=>0,'pq'=>0,'rq'=>0,'do'=>0,'po'=>0,'ro'=>0,'rev'=>0,'cogs'=>0,'prof'=>0,'ads'=>0];
   $deep[$dn]['orders']++; $deep[$dn]['oq']+=$q;
+  if($o['status']==='delivered') $deep[$dn]['do']++;
+  elseif(in_array($o['status'],['returned','cancelled'],true)) $deep[$dn]['ro']++;
+  elseif($o['status']!=='exchanged') $deep[$dn]['po']++;
   if($o['status']==='delivered'){
     $deep[$dn]['dq']+=$q; $deep[$dn]['rev']+=$line;
     $deep[$dn]['cogs']+=(float)$o['cost_price']*$q;
@@ -365,23 +369,36 @@ function tblCsvX(id,name){
 </script>
 
 <!-- product performance -->
-<div class="panel" style="margin-top:20px"><div class="panel-head"><h2>🏷️ Product Performance</h2><button class="btn btn-sm" onclick="exportProducts()">⬇ CSV</button></div>
+<div class="panel" style="margin-top:20px"><div class="panel-head" style="flex-wrap:wrap;gap:10px"><h2>🏷️ Product Performance</h2>
+  <div style="display:flex;gap:8px;align-items:center">
+    <label class="rr-toggle-label" title="Count pieces or orders">
+      <span id="ppLabelPcs" class="on">Pcs</span>
+      <span class="mini-switch"><input type="checkbox" id="ppToggleInput" aria-label="Show orders instead of pieces" onchange="ppUnit(this.checked?'ord':'pcs')"><span class="mini-slider"></span></span>
+      <span id="ppLabelOrd">Orders</span>
+    </label>
+    <button class="btn btn-sm" onclick="exportProducts()">⬇ CSV</button>
+  </div></div>
+<p class="muted" id="ppNote" style="font-size:12px;margin:-4px 18px 10px"></p>
+<style>
+#prodTbl th small.pp-u{display:block;font-size:9.5px;font-weight:600;text-transform:none;letter-spacing:0;opacity:.75;margin-top:1px}
+</style>
 <div class="table-wrap"><table class="tbl num-tbl" id="prodTbl"><thead><tr>
-  <th>Product</th><th class="right">Orders</th><th class="right">Qty Ordered</th><th class="right">Delivered</th><th class="right">Pending</th><th class="right">Returned</th><th class="right">Revenue</th><th class="right">COGS</th><th class="right">Profit (no Ads)</th><th class="right">Ads Spend</th><th class="right">Net Profit</th><th class="right">Net Margin</th><th class="right">% of Revenue</th>
+  <th>Product</th><th class="right">Ordered<small class="pp-u">pcs</small></th><th class="right">Delivered<small class="pp-u">pcs</small></th><th class="right" title="pending / processing / shipped">Pending<small class="pp-u">pcs</small></th><th class="right" title="returned / cancelled">Returned<small class="pp-u">pcs</small></th><th class="right">Revenue</th><th class="right">COGS</th><th class="right">Profit (no Ads)</th><th class="right">Ads Spend</th><th class="right">Net Profit</th><th class="right">Net Margin</th><th class="right">% of Revenue</th>
 </tr></thead><tbody>
 <?php uasort($deep, fn($x,$y)=>$y['rev']<=>$x['rev']);
-$dT=['orders'=>0,'oq'=>0,'dq'=>0,'pq'=>0,'rq'=>0,'rev'=>0,'cogs'=>0,'prof'=>0,'ads'=>0];
+$dT=['orders'=>0,'oq'=>0,'dq'=>0,'pq'=>0,'rq'=>0,'do'=>0,'po'=>0,'ro'=>0,'rev'=>0,'cogs'=>0,'prof'=>0,'ads'=>0];
+/* a count cell that can show pieces OR orders — switched by the Pcs | Orders toggle */
+$ppCell=function($pcs,$ord,$style=''){ return '<td class="num right pp-n" data-pcs="'.(int)$pcs.'" data-ord="'.(int)$ord.'" data-unit="pcs"'.($style?' style="'.$style.'"':'').'>'.number_format($pcs).'</td>'; };
 foreach($deep as $n=>$pd): $share=$T['revenue']>0?round($pd['rev']/$T['revenue']*100,1):0;
   $netProf=$pd['prof']-$pd['ads'];
   $netMar=$pd['rev']>0?round($netProf/$pd['rev']*100,1):0;
   foreach($dT as $k=>$v) $dT[$k]+=$pd[$k]; ?>
   <tr>
     <td><b><?= e($n) ?></b></td>
-    <td class="num right"><?= (int)$pd['orders'] ?></td>
-    <td class="num right"><?= number_format($pd['oq']) ?></td>
-    <td class="num right" style="font-weight:700;color:var(--green)"><?= number_format($pd['dq']) ?></td>
-    <td class="num right" style="color:var(--amber)"><?= number_format($pd['pq']) ?></td>
-    <td class="num right" style="color:var(--red)"><?= number_format($pd['rq']) ?></td>
+    <?= $ppCell($pd['oq'],$pd['orders']) ?>
+    <?= $ppCell($pd['dq'],$pd['do'],'font-weight:700;color:var(--green)') ?>
+    <?= $ppCell($pd['pq'],$pd['po'],'color:var(--amber)') ?>
+    <?= $ppCell($pd['rq'],$pd['ro'],'color:var(--red)') ?>
     <td class="num right"><?= money($pd['rev']) ?></td>
     <td class="num right muted"><?= money($pd['cogs']) ?></td>
     <td class="num right"><?= money($pd['prof']) ?></td>
@@ -390,16 +407,15 @@ foreach($deep as $n=>$pd): $share=$T['revenue']>0?round($pd['rev']/$T['revenue']
     <td class="num right"><?= $netMar ?>%</td>
     <td class="num right"><?= $share ?>%</td>
   </tr>
-<?php endforeach; if(!$deep) echo '<tr><td colspan="13"><div class="empty">No orders in this range.</div></td></tr>'; ?>
+<?php endforeach; if(!$deep) echo '<tr><td colspan="12"><div class="empty">No orders in this range.</div></td></tr>'; ?>
 </tbody>
 <?php if($deep): $dNetProf=$dT['prof']-$dT['ads']; $dNetMar=$dT['rev']>0?round($dNetProf/$dT['rev']*100,1):0; ?>
 <tfoot><tr style="font-weight:800;background:var(--surface-2)">
   <td>Total</td>
-  <td class="num right"><?= number_format($dT['orders']) ?></td>
-  <td class="num right"><?= number_format($dT['oq']) ?></td>
-  <td class="num right" style="color:var(--green)"><?= number_format($dT['dq']) ?></td>
-  <td class="num right" style="color:var(--amber)"><?= number_format($dT['pq']) ?></td>
-  <td class="num right" style="color:var(--red)"><?= number_format($dT['rq']) ?></td>
+  <?= $ppCell($dT['oq'],$dT['orders']) ?>
+  <?= $ppCell($dT['dq'],$dT['do'],'color:var(--green)') ?>
+  <?= $ppCell($dT['pq'],$dT['po'],'color:var(--amber)') ?>
+  <?= $ppCell($dT['rq'],$dT['ro'],'color:var(--red)') ?>
   <td class="num right"><?= money($dT['rev']) ?></td>
   <td class="num right"><?= money($dT['cogs']) ?></td>
   <td class="num right"><?= money($dT['prof']) ?></td>
@@ -424,8 +440,26 @@ new Chart(cRoas,{type:'line',data:{labels:LB,datasets:[{data:<?= json_encode($se
 new Chart(cStack,{type:'bar',data:{labels:LB,datasets:<?= json_encode($stackDs) ?>},options:Object.assign({},base,{plugins:{legend:{display:true,position:'bottom',labels:{boxWidth:10,font:{size:10}}}},scales:{x:{stacked:true,grid:{display:false}},y:{stacked:true,beginAtZero:true,grid:{color:CH_GRID},ticks:{callback:v=>v>=1000?(v/1000)+'K':v}}}})});
 
 function dl(name,rows){var csv=rows.map(r=>r.map(c=>'"'+String(c==null?'':c).replace(/"/g,'""')+'"').join(',')).join('\n');var b=new Blob([csv],{type:'text/csv'});var a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=name;a.click();}
-function tblRows(id){return Array.from(document.querySelectorAll('#'+id+' tr')).map(tr=>Array.from(tr.querySelectorAll('th,td')).map(td=>td.textContent.trim()));}
+function tblRows(id){return Array.from(document.querySelectorAll('#'+id+' tr')).map(tr=>Array.from(tr.querySelectorAll('th,td')).map(td=>{var c=td.cloneNode(true);c.querySelectorAll('small').forEach(function(s){s.textContent=' ('+s.textContent.trim()+')';});return c.textContent.replace(/\s+/g,' ').trim();}));}
 function exportPeriods(){dl('analytics_<?= $g ?>.csv',tblRows('periodTbl'));}
-function exportProducts(){dl('product_performance.csv',tblRows('prodTbl'));}
+function exportProducts(){dl('product_performance_'+(window.PP_UNIT==='ord'?'orders':'pcs')+'.csv',tblRows('prodTbl'));}
+/* Product Performance: show the Ordered / Delivered / Pending / Returned columns as pieces or as orders */
+function ppUnit(u){
+  u = u==='ord' ? 'ord' : 'pcs'; window.PP_UNIT=u;
+  try{ localStorage.setItem('pp_unit',u); }catch(e){}
+  var sw=document.getElementById('ppToggleInput'); if(sw) sw.checked=(u==='ord');
+  var lp=document.getElementById('ppLabelPcs'), lo=document.getElementById('ppLabelOrd');
+  if(lp&&lo){ lp.classList.toggle('on',u!=='ord'); lo.classList.toggle('on',u==='ord'); }
+  document.querySelectorAll('#prodTbl td.pp-n').forEach(function(td){
+    var n=parseInt(td.getAttribute(u==='ord'?'data-ord':'data-pcs'),10)||0;
+    td.textContent=n.toLocaleString('en-IN'); td.setAttribute('data-unit', u==='ord'?(n===1?'order':'orders'):'pcs');
+  });
+  document.querySelectorAll('#prodTbl th small.pp-u').forEach(function(s){ s.textContent = u==='ord'?'orders':'pcs'; });
+  var note=document.getElementById('ppNote');
+  if(note) note.innerHTML = u==='ord'
+    ? 'Counting <b style="color:var(--ink)">orders</b> — each order counts once, however many pieces it has. Switch to <b style="color:var(--ink)">Pcs</b> to count pieces.'
+    : 'Counting <b style="color:var(--ink)">pieces (pcs)</b> — one order can have 2+ pcs, so pcs can be higher than orders. Ordered = Delivered + Pending + Returned (+ exchanged).';
+}
+(function(){ var u='pcs'; try{ u=localStorage.getItem('pp_unit')||'pcs'; }catch(e){} if(document.getElementById('prodTbl')) ppUnit(u); })();
 </script>
 <?php require __DIR__.'/includes/footer.php'; ?>

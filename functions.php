@@ -752,7 +752,50 @@ function lunch_sync_salary_entry($employeeId, $ym) {
     q("INSERT INTO salary_entries(employee_id,ym,type,amount,entry_date,note,source) VALUES(?,?,?,?,?,?,?)",
       [$employeeId, $ym, 'lunch', $amount, date('Y-m-d'), 'Auto-synced from Lunch Management', 'lunch_mgmt']);
   }
+  /* the same attendance drives the extra-leave salary cut */
+  leave_sync_salary_entry($employeeId, $ym);
   return $amount;
+}
+
+/* ===== Leave deduction =====
+   Each staff member gets lunch_leave_days_setting() (default 4) paid leave days per
+   Nepali month. Leave days logged in Lunch Management beyond that are cut from salary
+   at base ÷ days-in-that-BS-month per day. Kept as ONE auto 'deduction' row per
+   employee/month (source='leave_auto'), always replaced on re-sync, never stacked.
+   Holidays and work-from-home never count as leave. Excluded staff (owners) are skipped. */
+function leave_deduction_info($employeeId, $ym) {
+  $employeeId=(int)$employeeId;
+  $parts = array_map('intval', explode('-', (string)$ym));
+  $range = bs_month_range($parts[0] ?? 0, $parts[1] ?? 0);
+  $free = lunch_leave_days_setting();
+  $out = ['leave'=>0,'free'=>$free,'extra'=>0,'per_day'=>0.0,'amount'=>0.0,'month_days'=>0];
+  if (!$employeeId || !$range) return $out;
+  [$mStart,$mEnd] = $range;
+  $out['month_days'] = (int)round((strtotime($mEnd)-strtotime($mStart))/86400)+1;
+  $agg = lunch_monthly_agg($mStart, $mEnd, $employeeId);
+  $out['leave'] = (int)($agg[$employeeId]['days_leave'] ?? 0);
+  $out['extra'] = max(0, $out['leave'] - $free);
+  $emp = row("SELECT salary FROM employees WHERE id=?",[$employeeId]);
+  $base = salary_base_for($employeeId, $ym, (float)($emp['salary'] ?? 0));
+  $out['per_day'] = $out['month_days'] ? round($base / $out['month_days'], 2) : 0.0;
+  $out['amount'] = round($out['extra'] * $out['per_day'], 2);
+  return $out;
+}
+function leave_sync_salary_entry($employeeId, $ym) {
+  $employeeId=(int)$employeeId;
+  if (!$employeeId || !preg_match('/^\d{4}-\d{2}$/', $ym)) return 0.0;
+  $i = leave_deduction_info($employeeId, $ym);
+  $cur = row("SELECT id,amount,note FROM salary_entries WHERE employee_id=? AND ym=? AND type='deduction' AND source='leave_auto' ORDER BY id LIMIT 1",[$employeeId,$ym]);
+  $note = $i['extra'].' extra leave day'.($i['extra']==1?'':'s').' ('.$i['leave'].' taken, '.$i['free'].' free) × '.money($i['per_day']).'/day';
+  if ($i['amount'] > 0.009) {
+    if ($cur && abs((float)$cur['amount']-$i['amount'])<0.009 && $cur['note']===$note) return $i['amount'];
+    q("DELETE FROM salary_entries WHERE employee_id=? AND ym=? AND type='deduction' AND source='leave_auto'", [$employeeId, $ym]);
+    q("INSERT INTO salary_entries(employee_id,ym,type,amount,entry_date,note,source) VALUES(?,?,?,?,?,?,?)",
+      [$employeeId, $ym, 'deduction', $i['amount'], date('Y-m-d'), $note, 'leave_auto']);
+  } elseif ($cur) {
+    q("DELETE FROM salary_entries WHERE employee_id=? AND ym=? AND type='deduction' AND source='leave_auto'", [$employeeId, $ym]);
+  }
+  return $i['amount'];
 }
 
 /* one-time fix: salary_entries.ym used to be stamped with the AD calendar month.

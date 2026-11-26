@@ -90,7 +90,7 @@ $groups = [
     'expense_categories' => ['Expense Categories','text'],
   ],
   'Lunch Management' => [
-    'lunch_leave_days'  => ['Standard Leave Days / month','number'],
+    'lunch_leave_days'  => ['Free Leave Days / month (extra leave is cut from salary)','number'],
     'lunch_month_days'  => ['Standard Month Days','number'],
     'lunch_pay_unused'  => ['Pay unused Rs.150 when no lunch is ordered','select',['yes','no']],
     'lunch_over_allowance' => ['When lunch exceeds the allowance','select',['review','deduct','ignore']],

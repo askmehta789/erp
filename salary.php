@@ -214,6 +214,11 @@ foreach($linkAccounts as $A){
 }
 $empFilter = (int)($_GET['emp'] ?? 0);
 
+/* extra-leave deduction for this month — re-synced on every view so a hike, a
+   changed leave allowance or a late attendance edit is always reflected */
+$leaveInfo=[];
+foreach (rows("SELECT id FROM employees") as $le) { $leId=(int)$le['id']; leave_sync_salary_entry($leId,$m); $leaveInfo[$leId]=leave_deduction_info($leId,$m); }
+
 $emps = rows("SELECT * FROM employees".($empFilter?" WHERE id=".$empFilter:"")." ORDER BY name");
 $allEmps = rows("SELECT id,name,lunch_rate FROM employees ORDER BY name");
 $empName=[]; $empLunchRate=[]; foreach($allEmps as $ae) { $empName[(int)$ae['id']]=$ae['name']; $empLunchRate[(int)$ae['id']]=(float)$ae['lunch_rate']; }
@@ -312,7 +317,7 @@ $stPill=fn($s)=>['Paid'=>'p-green','Partial'=>'p-yellow','Pending'=>'p-red'][$s]
 <?php if($fl=flash()) echo '<div class="flash">'.e($fl).'</div>'; ?>
 
 <div class="mgrid">
-  <div class="metric blue"><div><div class="mv" style="font-size:19px"><?= money($tPayable) ?></div><div class="ml">Payable This Month</div><div class="ms">base + bonus + lunch − deduction</div></div><div class="mi">🧾</div></div>
+  <div class="metric blue"><div><div class="mv" style="font-size:19px"><?= money($tPayable) ?></div><div class="ml">Payable This Month</div><div class="ms">base + bonus + lunch − deduction · <?= (int)lunch_leave_days_setting() ?> free leave days/month</div></div><div class="mi">🧾</div></div>
   <div class="metric green"><div><div class="mv" style="font-size:19px"><?= money($tPaid) ?></div><div class="ml">Paid</div><div class="ms">payments + advances</div></div><div class="mi">✅</div></div>
   <div class="metric <?= $tDue>0.5?'amber':'teal' ?>"><div><div class="mv" style="font-size:19px"><?= money($tDue) ?></div><div class="ml">Remaining Due</div><div class="ms"><?= e(bs_ym_label($m)) ?></div></div><div class="mi">⏳</div></div>
   <div class="metric orange"><div><div class="mv" style="font-size:19px"><?= money($tLunch) ?></div><div class="ml">Lunch Allowance</div><div class="ms">paid out this month</div></div><div class="mi">🍱</div></div>
@@ -332,7 +337,8 @@ $stPill=fn($s)=>['Paid'=>'p-green','Partial'=>'p-yellow','Pending'=>'p-red'][$s]
       <td class="num right"><?= money($r['base']) ?><?php if(abs($r['hikeDiff'])>0.009): ?><br><span class="pill <?= $r['hikeDiff']>0?'p-green':'p-red' ?>" style="font-size:10px" title="Salary changed from this month"><?= $r['hikeDiff']>0?'▲ +':'▼ −' ?><?= money(abs($r['hikeDiff'])) ?></span><?php endif; ?></td>
       <td class="num right" style="color:var(--green)"><?= $r['bon']>0?'+'.money($r['bon']):'—' ?></td>
       <td class="num right" style="color:<?= $r['lun']<-0.009?'var(--red)':'var(--orange)' ?>"><?= $r['lun']>0.009?'+'.money($r['lun']):($r['lun']<-0.009?money($r['lun']):'—') ?></td>
-      <td class="num right" style="color:var(--red)"><?= $r['ded']>0?'−'.money($r['ded']):'—' ?></td>
+      <?php $li=$leaveInfo[$r['id']] ?? null; ?>
+      <td class="num right" style="color:var(--red)"><?= $r['ded']>0?'−'.money($r['ded']):'—' ?><?php if($li && $li['leave']>0): ?><br><span class="pill <?= $li['extra']>0?'p-red':'p-green' ?>" style="font-size:10px;white-space:nowrap" title="<?= $li['extra']>0?e($li['extra'].' day(s) over the '.$li['free'].' free leave days × '.money($li['per_day']).'/day'):'Within the '.$li['free'].' free leave days' ?>">🏖 <?= (int)$li['leave'] ?>/<?= (int)$li['free'] ?> leave<?= $li['extra']>0?' · −'.money($li['amount']):'' ?></span><?php endif; ?></td>
       <td class="num right" style="font-weight:700"><?= money($r['payable']) ?></td>
       <td class="num right"><?= $r['adv']>0?money($r['adv']):'—' ?></td>
       <td class="num right"><?= $r['pay']>0?money($r['pay']):'—' ?></td>

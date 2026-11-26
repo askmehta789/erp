@@ -444,7 +444,7 @@ $lunchLabel = fn($s) => ['ok'=>'Completed','leave'=>'Leave','review'=>'Requires 
       <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="save_settings"><input type="hidden" name="m" value="<?= e($m) ?>">
       <div class="panel-body">
         <div class="form-grid" style="grid-template-columns:1fr 1fr">
-          <div><label>Standard Leave Days / month</label><input type="number" name="lunch_leave_days" value="<?= (int)lunch_leave_days_setting() ?>"></div>
+          <div><label>Free Leave Days / month <small class="muted">(extra leave is cut from salary)</small></label><input type="number" name="lunch_leave_days" value="<?= (int)lunch_leave_days_setting() ?>"></div>
           <div><label>Standard Month Days</label><input type="number" name="lunch_month_days" value="<?= (int)lunch_month_days_setting() ?>"></div>
           <div><label>Pay unused daily lunch allowance when no lunch is ordered</label>
             <select name="lunch_pay_unused"><option value="yes"<?= lunch_pay_unused()?' selected':'' ?>>Yes</option><option value="no"<?= !lunch_pay_unused()?' selected':'' ?>>No</option></select></div>

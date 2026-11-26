@@ -338,7 +338,7 @@ $stPill=fn($s)=>['Paid'=>'p-green','Partial'=>'p-yellow','Pending'=>'p-red'][$s]
       <td class="num right" style="color:var(--green)"><?= $r['bon']>0?'+'.money($r['bon']):'—' ?></td>
       <td class="num right" style="color:<?= $r['lun']<-0.009?'var(--red)':'var(--orange)' ?>"><?= $r['lun']>0.009?'+'.money($r['lun']):($r['lun']<-0.009?money($r['lun']):'—') ?></td>
       <?php $li=$leaveInfo[$r['id']] ?? null; ?>
-      <td class="num right" style="color:var(--red)"><?= $r['ded']>0?'−'.money($r['ded']):'—' ?><?php if($li && $li['leave']>0): ?><br><span class="pill <?= $li['extra']>0?'p-red':'p-green' ?>" style="font-size:10px;white-space:nowrap" title="<?= $li['extra']>0?e($li['extra'].' day(s) over the '.$li['free'].' free leave days × '.money($li['per_day']).'/day'):'Within the '.$li['free'].' free leave days' ?>">🏖 <?= (int)$li['leave'] ?>/<?= (int)$li['free'] ?> leave<?= $li['extra']>0?' · −'.money($li['amount']):'' ?></span><?php endif; ?></td>
+      <td class="num right" style="color:var(--red)"><?= $r['ded']>0?'−'.money($r['ded']):'—' ?><?php if($li && $li['leave']>0): ?><br><span class="pill <?= $li['extra']>0?'p-red':'p-green' ?>" style="font-size:10px;white-space:nowrap" title="<?= $li['extra']>0?e($li['extra'].' day(s) over the '.$li['free'].' free leave days × ('.money($li['base']).' ÷ '.$li['month_days'].' days)'):'Within the '.$li['free'].' free leave days' ?>">🏖 <?= (int)$li['leave'] ?>/<?= (int)$li['free'] ?> leave<?= $li['extra']>0?' · −'.money($li['amount']):'' ?></span><?php endif; ?></td>
       <td class="num right" style="font-weight:700"><?= money($r['payable']) ?></td>
       <td class="num right"><?= $r['adv']>0?money($r['adv']):'—' ?></td>
       <td class="num right"><?= $r['pay']>0?money($r['pay']):'—' ?></td>

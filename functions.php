@@ -777,8 +777,11 @@ function leave_deduction_info($employeeId, $ym) {
   $out['extra'] = max(0, $out['leave'] - $free);
   $emp = row("SELECT salary FROM employees WHERE id=?",[$employeeId]);
   $base = salary_base_for($employeeId, $ym, (float)($emp['salary'] ?? 0));
-  $out['per_day'] = $out['month_days'] ? round($base / $out['month_days'], 2) : 0.0;
-  $out['amount'] = round($out['extra'] * $out['per_day'], 2);
+  /* per-day rate uses the fixed "Standard Month Days" setting (30), not the 29–32 day BS month */
+  $out['month_days'] = max(1, lunch_month_days_setting());
+  $out['base'] = $base;
+  $out['per_day'] = round($base / $out['month_days'], 2);
+  $out['amount'] = round($out['extra'] * $base / $out['month_days'], 2);
   return $out;
 }
 function leave_sync_salary_entry($employeeId, $ym) {
@@ -786,7 +789,7 @@ function leave_sync_salary_entry($employeeId, $ym) {
   if (!$employeeId || !preg_match('/^\d{4}-\d{2}$/', $ym)) return 0.0;
   $i = leave_deduction_info($employeeId, $ym);
   $cur = row("SELECT id,amount,note FROM salary_entries WHERE employee_id=? AND ym=? AND type='deduction' AND source='leave_auto' ORDER BY id LIMIT 1",[$employeeId,$ym]);
-  $note = $i['extra'].' extra leave day'.($i['extra']==1?'':'s').' ('.$i['leave'].' taken, '.$i['free'].' free) × '.money($i['per_day']).'/day';
+  $note = $i['extra'].' extra leave day'.($i['extra']==1?'':'s').' ('.$i['leave'].' taken, '.$i['free'].' free) × '.money($i['base'] ?? 0).' ÷ '.$i['month_days'].' days';
   if ($i['amount'] > 0.009) {
     if ($cur && abs((float)$cur['amount']-$i['amount'])<0.009 && $cur['note']===$note) return $i['amount'];
     q("DELETE FROM salary_entries WHERE employee_id=? AND ym=? AND type='deduction' AND source='leave_auto'", [$employeeId, $ym]);

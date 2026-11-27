@@ -111,15 +111,18 @@ $comp = [
   ['Cash in hand',       $cashInHand,        '#16a34a'],
   ['Still with couriers',$stillWithCouriers, '#f59e0b'],
 ];
-$outList = [['Courier charges', $codCharges, 'kept by couriers', 'cod.php']];
-foreach ($expByCat as $ec) $outList[] = [$ec['category'] ?: 'Uncategorised', (float)$ec['amt'], 'expense', 'expenses.php'];
+/* every row opens its own data, filtered, all-time (not just the page) */
+$codFirst = (string)val("SELECT COALESCE(MIN(entry_date),CURDATE()) FROM cod_ledger");
+$codAll   = 'from='.urlencode($codFirst).'&to='.date('Y-m-d');
+$outList = [['Courier charges', $codCharges, 'kept by couriers', 'cod.php?'.$codAll]];
+foreach ($expByCat as $ec) $outList[] = [$ec['category'] ?: 'Uncategorised', (float)$ec['amt'], 'expense', 'expenses.php'.(($ec['category'] ?? '') !== '' ? '?hcat='.urlencode($ec['category']) : '').'#expense-history'];
 $outList[] = ['Salary', $salTotal, 'payments, advances & bonuses', 'salary.php'];
-if ($adsPayeeId) $outList[] = ['Ads payment', $adsPayTotal, 'paid to your Ads payee', 'payees.php'];
+if ($adsPayeeId) $outList[] = ['Ads payment', $adsPayTotal, 'paid to your Ads payee', 'payees.php?id='.$adsPayeeId.'&type=paid'];
 $outList[] = ['Vendor payments', $vendorPayTotal, 'paid to vendors', 'payees.php'];
-$outList[] = ['COD direct payouts', $codOut, 'money out of COD', 'cod.php'];
+$outList[] = ['COD direct payouts', $codOut, 'money out of COD', 'cod.php?t=out&'.$codAll.'#ledTbl'];
 usort($outList, fn($a,$b) => $b[1] <=> $a[1]);
 $outSum = max(1, array_sum(array_map(fn($r) => max(0,$r[1]), $outList)));
-$inList = [['COD released by couriers', $codReleased, 'cod.php'], ['Other bank deposits', $otherDeposits, 'banks.php']];
+$inList = [['COD released by couriers', $codReleased, 'cod.php?t=in&'.$codAll.'#ledTbl'], ['Other bank deposits', $otherDeposits, 'banks.php']];
 $inSum = max(1, $codReleased + $otherDeposits);
 $acctPos = max(1, array_sum(array_map(fn($v) => max(0,$v), $acctBal)));
 $moLabels = array_map(fn($mo) => date('M y', strtotime($mo.'-01')), $months);
@@ -223,7 +226,7 @@ body.dark .mx-note.info .ic{color:#60a5fa}
   <div class="mx-card">
     <h3>Where money came from <span class="sub"><?= money($codReleased + $otherDeposits) ?></span></h3>
     <?php foreach($inList as $r): ?>
-      <div class="mx-row"><a class="nm" href="<?= $r[2] ?>"><?= e($r[0]) ?></a><div class="amt"><?= money($r[1]) ?><small><?= $pct($r[1],$inSum) ?>%</small></div><div class="bar"><i style="width:<?= $pct($r[1],$inSum) ?>%;--c:var(--mx-in)"></i></div></div>
+      <div class="mx-row"><a class="nm" href="<?= e($r[2]) ?>"><?= e($r[0]) ?></a><div class="amt"><?= money($r[1]) ?><small><?= $pct($r[1],$inSum) ?>%</small></div><div class="bar"><i style="width:<?= $pct($r[1],$inSum) ?>%;--c:var(--mx-in)"></i></div></div>
     <?php endforeach; ?>
   </div>
 </div>
@@ -232,7 +235,7 @@ body.dark .mx-note.info .ic{color:#60a5fa}
   <div class="mx-card">
     <h3>Where money went <span class="sub"><?= money($totalOutAllTime) ?> total</span></h3>
     <?php foreach($outList as $r): ?>
-      <div class="mx-row"><a class="nm" href="<?= $r[3] ?>"><?= e($r[0]) ?><small><?= e($r[2]) ?></small></a><div class="amt"><?= money($r[1]) ?><small><?= $pct($r[1],$outSum) ?>%</small></div><div class="bar"><i style="width:<?= $pct($r[1],$outSum) ?>%;--c:#64748b"></i></div></div>
+      <div class="mx-row"><a class="nm" href="<?= e($r[3]) ?>"><?= e($r[0]) ?><small><?= e($r[2]) ?></small></a><div class="amt"><?= money($r[1]) ?><small><?= $pct($r[1],$outSum) ?>%</small></div><div class="bar"><i style="width:<?= $pct($r[1],$outSum) ?>%;--c:#64748b"></i></div></div>
     <?php endforeach; ?>
   </div>
   <div class="mx-card">
@@ -244,7 +247,7 @@ body.dark .mx-note.info .ic{color:#60a5fa}
         (SELECT COUNT(*) FROM cod_ledger WHERE account_id=?) +
         (SELECT COUNT(*) FROM payee_ledger WHERE account_id=?)",[$A['id'],$A['id'],$A['id'],$A['id']]);
       $bal = $acctBal[$A['id']] ?? 0; ?>
-      <div class="mx-row"><a class="nm" href="banks.php"><?= $A['kind']==='cash'?'💵':'🏦' ?> <?= e($A['name']) ?><small><?= $linkedN ?> linked entr<?= $linkedN===1?'y':'ies' ?></small></a><div class="amt" style="<?= $bal < 0 ? 'color:var(--mx-out)' : '' ?>"><?= money($bal) ?></div><div class="bar"><i style="width:<?= $pct($bal,$acctPos) ?>%;--c:<?= $A['kind']==='cash' ? '#16a34a' : '#2563eb' ?>"></i></div></div>
+      <div class="mx-row"><a class="nm" href="banks.php?a=<?= (int)$A['id'] ?>"><?= $A['kind']==='cash'?'💵':'🏦' ?> <?= e($A['name']) ?><small><?= $linkedN ?> linked entr<?= $linkedN===1?'y':'ies' ?></small></a><div class="amt" style="<?= $bal < 0 ? 'color:var(--mx-out)' : '' ?>"><?= money($bal) ?></div><div class="bar"><i style="width:<?= $pct($bal,$acctPos) ?>%;--c:<?= $A['kind']==='cash' ? '#16a34a' : '#2563eb' ?>"></i></div></div>
     <?php endforeach; if(!$accounts): ?><div class="mx-empty">No accounts yet — add one on the <a href="banks.php" style="text-decoration:underline">Bank Accounts</a> page.</div><?php endif; ?>
   </div>
 </div>

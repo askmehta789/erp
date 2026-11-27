@@ -284,11 +284,14 @@ function daraz_compare(array $dz): array {
             'money'=>false, 'diff'=>(bool)$to, 'sync'=>true];
     if ($to) $out['diffs']++;
     /* price follows what the customer actually paid on Daraz */
-    $priceDiff = $L['unit_paid'] > 0 && abs((float)$r['sell_price'] - $L['unit_paid']) > 0.009;
-    $f[] = ['label'=>'Price per unit (you earn)', 'erp'=>(float)$r['sell_price'], 'daraz'=>$L['unit_paid'], 'money'=>true, 'diff'=>$priceDiff, 'sync'=>true];
+    /* a multi-pack listing: ERP keeps pieces, Daraz counts packs */
+    $pk = max(1, (int)($r['daraz_pack'] ?? 1));
+    $unitPc = $pk > 1 ? round($L['unit_paid'] / $pk, 2) : $L['unit_paid'];
+    $priceDiff = $L['unit_paid'] > 0 && abs((float)$r['sell_price'] - $unitPc) > 0.009;
+    $f[] = ['label'=>'Price per '.($pk > 1 ? 'piece' : 'unit').' (you earn)', 'erp'=>(float)$r['sell_price'], 'daraz'=>$unitPc, 'money'=>true, 'diff'=>$priceDiff, 'sync'=>true];
     if ($priceDiff) $out['diffs']++;
     /* qty is the ERP's own (booked by hand) — shown for information only */
-    $f[] = ['label'=>'Qty (info only)', 'erp'=>(int)$r['qty'], 'daraz'=>$L['qty'], 'money'=>false, 'diff'=>false, 'sync'=>false, 'warn'=>(int)$r['qty'] !== $L['qty']];
+    $f[] = ['label'=>'Qty (info only)'.($pk > 1 ? " · {$pk}-pack" : ''), 'erp'=>(int)$r['qty'], 'daraz'=>$L['qty'] * $pk, 'money'=>false, 'diff'=>false, 'sync'=>false, 'warn'=>(int)$r['qty'] !== $L['qty'] * $pk];
     $out['lines'][] = ['sku'=>$L['sku'], 'name'=>$L['name'], 'erp_id'=>(int)$r['id'], 'erp_code'=>$r['code'], 'erp_product'=>$r['product_name'] ?? null, 'fields'=>$f, 'info'=>$info];
   }
   foreach ($extraErp as $j) $out['extra_erp'][] = ['id'=>(int)$erp[$j]['id'], 'code'=>$erp[$j]['code'], 'product'=>$erp[$j]['product_name'] ?: $erp[$j]['daraz_item_name'], 'qty'=>(int)$erp[$j]['qty'], 'status'=>$erp[$j]['status']];
@@ -322,7 +325,9 @@ function daraz_apply(array $dz): array {
             'daraz_platform_voucher'=>round($L['platform_voucher'],2), 'daraz_paid'=>round($L['paid'],2),
             'daraz_ship_customer'=>round($L['ship_customer'],2)];
     if (empty($r['daraz_sku']) && $L['sku'] !== '') $set['daraz_sku'] = $L['sku'];
-    if ($L['unit_paid'] > 0 && abs((float)$r['sell_price'] - $L['unit_paid']) > 0.009) { $set['sell_price'] = $L['unit_paid']; $res['price_changed']++; }
+    $pk = max(1, (int)($r['daraz_pack'] ?? 1));
+    $unitPc = $pk > 1 ? round($L['unit_paid'] / $pk, 2) : $L['unit_paid'];
+    if ($L['unit_paid'] > 0 && abs((float)$r['sell_price'] - $unitPc) > 0.009) { $set['sell_price'] = $unitPc; $res['price_changed']++; }
     $to = daraz_status_to_apply($r['status'], $L['status']);
     if ($to) {
       $set['status'] = $to;
@@ -548,5 +553,57 @@ function daraz_tabs(string $current): string {
   foreach ($tabs as $p => $l) if (can_see($p)) $h .= '<a href="'.$p.'"'.($p===$current?' class="on"':'').'>'.$l.'</a>';
   return $h.'</nav>';
 }
+
+/* ---------- 7) LIVE SYNC (cron every 10–15 min, or "⟳ Sync now") ----------
+   a) imports new Daraz orders — only ones created after live sync was first switched on,
+      so the history staff booked by hand is never re-imported; a hand-booked order with
+      the same phone is linked instead of duplicated
+   b) re-checks open linked orders (status → stock, price, Daraz charges) — oldest-checked
+      first, each order at most once an hour; delivered ones keep being checked for 30 days
+      until Daraz's finance fees land */
+function daraz_auto_enabled(): bool { return strtolower((string)setting('daraz_auto_sync','yes')) !== 'no'; }
+function daraz_auto_sync(int $maxCheck = 25): array {
+  $log = [];
+  if (!daraz_auto_enabled()) return ['Daraz live sync is switched off (Settings → Automation).'];
+  if (!(new Daraz())->connected()) return ['Daraz live sync skipped: Daraz API not connected.'];
+  if (function_exists('set_time_limit')) @set_time_limit(240);
+  daraz_ensure_cols();
+  $since = (string)setting('daraz_auto_since', '');
+  if ($since === '') { $since = date('Y-m-d H:i:s'); set_setting('daraz_auto_since', $since); }
+  $sum = ['at'=>date('Y-m-d H:i:s'), 'created'=>0, 'linked'=>0, 'checked'=>0, 'changed'=>0, 'errors'=>0, 'error'=>''];
+
+  try {
+    $r = daraz_sync_orders(5, $since);
+    $sum['created'] = (int)($r['created'] ?? 0); $sum['linked'] = (int)($r['linked'] ?? 0);
+    $log[] = "Daraz import: {$sum['created']} new line(s), {$sum['linked']} hand-booked order(s) linked".(!empty($r['unmatched']) ? ", {$r['unmatched']} unmatched SKU(s)" : '');
+  } catch (Exception $e) { $sum['errors']++; $sum['error'] = $e->getMessage(); $log[] = 'Daraz import error: '.$e->getMessage(); }
+
+  $dzId = daraz_courier_id();
+  $open = rows("SELECT daraz_order_id, MIN(COALESCE(daraz_checked_at,'2000-01-01')) AS chk FROM orders
+                WHERE courier_id=? AND daraz_order_id IS NOT NULL AND daraz_order_id<>''
+                  AND ( status IN ('pending','processing','shipped')
+                     OR (status='delivered' AND COALESCE(daraz_fee_source,'')<>'finance' AND order_date>=?) )
+                GROUP BY daraz_order_id
+                HAVING chk < ?
+                ORDER BY chk ASC LIMIT ".max(1, (int)$maxCheck),
+               [$dzId, date('Y-m-d', strtotime('-30 days')), date('Y-m-d H:i:s', strtotime('-60 minutes'))]);
+  foreach ($open as $o) {
+    $id = (string)$o['daraz_order_id'];
+    try {
+      $dz = daraz_fetch_order($id, true);
+      $res = daraz_apply($dz);
+      $sum['checked']++;
+      if ($res['status_changed'] || $res['price_changed']) $sum['changed']++;
+    } catch (Exception $e) {
+      $sum['errors']++; $sum['error'] = "#$id: ".$e->getMessage();
+      /* stamp it anyway so one broken order doesn't block the queue every run */
+      try { q("UPDATE orders SET daraz_checked_at=? WHERE daraz_order_id=?", [date('Y-m-d H:i:s'), $id]); } catch (Exception $e2) {}
+    }
+  }
+  $log[] = "Daraz re-check: {$sum['checked']} order(s) checked, {$sum['changed']} updated".($sum['errors'] ? ", {$sum['errors']} error(s)" : '');
+  set_setting('daraz_auto_last', json_encode($sum));
+  return $log;
+}
+function daraz_auto_last(): array { $j = json_decode((string)setting('daraz_auto_last', ''), true); return is_array($j) ? $j : []; }
 
 require_once __DIR__.'/daraz_link_ui.php';

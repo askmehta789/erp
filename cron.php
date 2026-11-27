@@ -6,7 +6,7 @@
    or URL style:
      wget -qO- "https://luprah.online/erp/cron.php?token=YOUR_TOKEN"
    The token is shown in Settings → Automation.
-   Does: NCM auto-sync (every run) · daily DB backup · weekly email report
+   Does: NCM + Daraz auto-sync (every run) · daily DB backup · weekly email report
    ============================================================ */
 require_once __DIR__.'/db.php';
 require_once __DIR__.'/ncm_api.php';
@@ -150,6 +150,14 @@ try {
     } else csay("Pick & Drop sync: no courier row yet");
   } else csay("Pick & Drop sync skipped: no API key");
 } catch (Exception $e) { csay("Pick & Drop sync error: ".$e->getMessage()); }
+
+/* ============ 1d) DARAZ LIVE SYNC (every run) ============
+   imports new Daraz orders + re-checks open ones (status, price, Daraz charges) —
+   see daraz_auto_sync() in daraz_common.php */
+try {
+  require_once __DIR__.'/daraz_common.php';
+  foreach (daraz_auto_sync() as $line) csay($line);
+} catch (Throwable $e) { csay("Daraz sync error: ".$e->getMessage()); }
 
 /* ============ 2) DAILY DATABASE BACKUP ============ */
 try {

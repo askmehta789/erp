@@ -3,6 +3,8 @@
    sheet). Edit status / Daraz fees per row or in bulk, link or re-check orders against
    Daraz by order number, filter, sort and export. */
 require_once __DIR__.'/daraz_common.php';
+/* multi-pack listings (e.g. 2 pack heel guard) → real pieces, for lines synced by cron too */
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') { try { daraz_pack_normalize(); } catch (Exception $e) {} }
 /* Daraz Sales opens as the same spreadsheet as main Sales, Daraz orders only (sales.php in
    Daraz mode). ?view=list keeps this filterable list with bulk tools, import and the order form. */
 if (($_GET['view'] ?? '') !== 'list' && !isset($_POST['_action'])) {
@@ -135,6 +137,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       if ($pid) fifo_status_change($newId, $pid, $o['qty'], '', $status);
       $made++;
     }
+    daraz_pack_normalize();
     log_activity("Daraz paste import: $made line(s) added".($dup ? ", $dup already in the ERP (skipped)" : '').($unmatched ? ", $unmatched without a matched product" : ''), 'Daraz');
     flash("Imported $made order line(s)".($dup ? " · $dup skipped (Daraz number already in the ERP)" : '').($unmatched ? " · $unmatched need a product — use ✏ Edit on those rows" : '').($bad ? " · $bad empty line(s) ignored" : '').'.');
     header('Location: '.$back); exit;
@@ -298,7 +301,7 @@ body.dark .dzs-fee{background:rgba(2,6,23,.5);color:var(--ink);border-color:rgba
         <?php if ($ph !== ''): ?><div class="dz-sub"><?= e($o['phone']) ?><?php if (strlen($ph)===10 && $ph[0]==='9'): ?> · <a href="https://wa.me/977<?= e($ph) ?>" target="_blank" rel="noopener">WhatsApp</a><?php endif; ?></div><?php endif; ?>
         <div class="dz-sub"><?= ($o['payment_type'] ?? '')==='prepaid' ? 'Prepaid' : 'COD' ?></div>
       </td>
-      <td><b><?= e($pl) ?></b> × <?= (int)$o['qty'] ?>
+      <td><b><?= e($pl) ?></b> × <?= (int)$o['qty'] ?><?php if ((int)($o['daraz_pack'] ?? 1) > 1): ?> <span class="pill p-green" style="font-size:10px" title="Daraz <?= (int)$o['daraz_pack'] ?>-pack listing — <?= (int)round($o['qty']/$o['daraz_pack']) ?> Daraz unit(s)"><?= (int)$o['daraz_pack'] ?>-pack</span><?php endif; ?>
         <?php if (!empty($o['daraz_sku'])): ?><div class="dz-sub">SKU <?= e($o['daraz_sku']) ?></div><?php endif; ?>
         <?php if ($warn): ?><span class="dz-warn">⚠ SKU not mapped — map it on the Dashboard</span><?php endif; ?>
       </td>

@@ -253,6 +253,7 @@ function daraz_ensure_cols(): void {
     "daraz_fee_source VARCHAR(12) NULL", "daraz_status_raw VARCHAR(40) NULL",
     "daraz_checked_at DATETIME NULL",
   ] as $col) { try { q("ALTER TABLE orders ADD COLUMN IF NOT EXISTS $col"); } catch (Exception $e) {} }
+  daraz_pack_ensure();
   $done = true;
 }
 
@@ -290,8 +291,85 @@ function daraz_map_sku_to_product(string $sku, int $productId): array {
     stock_on_status_change($productId, (int)$o['qty'], '', $o['status'], (int)$o['id']);
     $fixed++;
   }
+  daraz_pack_normalize();
   log_activity("Mapped Daraz SKU \"$sku\" to product #$productId — fixed $fixed existing order line(s)", 'Daraz');
   return ['fixed' => $fixed];
+}
+
+/* ===== Daraz pack listings =====
+   One Daraz listing can be a multi-pack ("2 pack heel guard"): 1 Daraz unit = N real pieces.
+   Pack size is set per listing — keyed by the Daraz SKU, or by the item name when a line has
+   no SKU — so a 1 pc listing and a 2-pack listing of the same product each count correctly.
+   orders.daraz_pack remembers the multiplier already applied to that line, which makes
+   daraz_pack_normalize() idempotent and reversible: qty is stored in real PIECES and
+   sell_price per piece, so stock, FIFO cost, profit and analytics all just work. */
+function daraz_pack_ensure(): void {
+  static $done = false; if ($done) return; $done = true;
+  try { q("CREATE TABLE IF NOT EXISTS daraz_packs(
+    lkey VARCHAR(190) NOT NULL PRIMARY KEY,
+    pack_qty INT NOT NULL DEFAULT 1,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)"); } catch (Exception $e) {}
+  try { q("ALTER TABLE orders ADD COLUMN IF NOT EXISTS daraz_pack INT NOT NULL DEFAULT 1"); } catch (Exception $e) {}
+}
+function daraz_pack_key($sku, $name): string {
+  $k = trim((string)$sku) !== '' ? trim((string)$sku) : trim((string)$name);
+  return mb_strtolower(mb_substr($k, 0, 190));
+}
+function daraz_pack_map(): array {
+  daraz_pack_ensure();
+  $m = [];
+  foreach (rows("SELECT lkey,pack_qty FROM daraz_packs WHERE pack_qty>1") as $r) $m[$r['lkey']] = (int)$r['pack_qty'];
+  return $m;
+}
+/* bring every Daraz order line in line with its listing's pack size; returns lines changed */
+function daraz_pack_normalize(): int {
+  daraz_ensure_cols(); daraz_pack_ensure();
+  $map = daraz_pack_map();
+  $dzId = (int)val("SELECT id FROM couriers WHERE LOWER(name)='daraz' LIMIT 1");
+  if (!$dzId) return 0;
+  /* only lines that could need a change: already multiplied, or on a pack listing */
+  $cand = rows("SELECT id,product_id,qty,sell_price,cost_price,status,daraz_sku,daraz_item_name,daraz_pack FROM orders
+                WHERE courier_id=? AND (daraz_pack<>1".($map ? " OR (daraz_sku IS NOT NULL AND daraz_sku<>'') OR (daraz_item_name IS NOT NULL AND daraz_item_name<>'')" : '').")", [$dzId]);
+  $n = 0;
+  foreach ($cand as $o) {
+    $want = $map[daraz_pack_key($o['daraz_sku'], $o['daraz_item_name'])] ?? 1;
+    $have = max(1, (int)$o['daraz_pack']);
+    if ($want === $have) continue;
+    $units = max(1, (int)round((int)$o['qty'] / $have));        /* Daraz units (packs) on this line */
+    $qty   = $units * $want;
+    $price = round((float)$o['sell_price'] * $have / $want, 2);  /* per-piece price; line total unchanged */
+    /* cost_price is already per piece (product cost / FIFO batches), so it stays as is */
+    q("UPDATE orders SET qty=?, sell_price=?, daraz_pack=? WHERE id=?", [$qty, $price, $want, (int)$o['id']]);
+    /* delivered lines: re-take the right number of pieces out of stock (restore + consume) */
+    if ((int)$o['product_id'] && $o['status'] === 'delivered') fifo_status_change((int)$o['id'], (int)$o['product_id'], $qty, 'delivered', 'delivered');
+    $n++;
+  }
+  if ($n) log_activity("Daraz pack sizes applied to $n order line(s)", 'Daraz');
+  return $n;
+}
+/* every Daraz listing seen on orders, for the pack-size panel */
+function daraz_pack_listings(): array {
+  daraz_ensure_cols(); daraz_pack_ensure();
+  $map = daraz_pack_map(); $out = [];
+  $dzId = (int)val("SELECT id FROM couriers WHERE LOWER(name)='daraz' LIMIT 1");
+  foreach (rows("SELECT o.daraz_sku, o.daraz_item_name, p.name AS product_name, COUNT(*) AS line_count, MAX(o.order_date) AS last_seen
+                 FROM orders o LEFT JOIN products p ON p.id=o.product_id
+                 WHERE o.courier_id=? AND ((o.daraz_sku IS NOT NULL AND o.daraz_sku<>'') OR (o.daraz_item_name IS NOT NULL AND o.daraz_item_name<>''))
+                 GROUP BY o.daraz_sku, o.daraz_item_name, p.name ORDER BY last_seen DESC", [$dzId]) as $r) {
+    $k = daraz_pack_key($r['daraz_sku'], $r['daraz_item_name']);
+    if (!isset($out[$k])) $out[$k] = ['key'=>$k, 'sku'=>(string)$r['daraz_sku'], 'name'=>(string)$r['daraz_item_name'], 'product'=>(string)$r['product_name'], 'lines'=>0, 'last'=>$r['last_seen'], 'pack'=>$map[$k] ?? 1];
+    $out[$k]['lines'] += (int)$r['line_count'];
+    if ($out[$k]['name'] === '' && $r['daraz_item_name']) $out[$k]['name'] = $r['daraz_item_name'];
+    if ($out[$k]['product'] === '' && $r['product_name']) $out[$k]['product'] = $r['product_name'];
+  }
+  return array_values($out);
+}
+function daraz_pack_set(string $key, int $pack): void {
+  daraz_pack_ensure();
+  $key = mb_strtolower(trim($key)); $pack = max(1, min(50, $pack));
+  if ($key === '') return;
+  if ($pack <= 1) q("DELETE FROM daraz_packs WHERE lkey=?", [$key]);
+  else q("INSERT INTO daraz_packs(lkey,pack_qty) VALUES(?,?) ON DUPLICATE KEY UPDATE pack_qty=VALUES(pack_qty)", [$key, $pack]);
 }
 
 /* Pull recent Daraz orders into Sales (orders table, Courier = Daraz). Idempotent — an order
@@ -327,7 +405,7 @@ function daraz_fix_existing_phones(int $dzId): int {
   return $fixed;
 }
 
-function daraz_sync_orders(int $days = 14): array {
+function daraz_sync_orders(int $days = 14, ?string $notBefore = null): array {
   $daraz = new Daraz();
   if (!$daraz->connected()) throw new Exception('Daraz is not connected yet — authorize the app first.');
 
@@ -338,7 +416,8 @@ function daraz_sync_orders(int $days = 14): array {
   if (!$dzId) throw new Exception('Daraz courier not found.');
   daraz_fix_existing_phones($dzId);
 
-  $createdAfter = date('c', strtotime("-{$days} days"));
+  /* $notBefore: never reach back before this moment (auto sync starts from when it was switched on) */
+  $createdAfter = date('c', max(strtotime("-{$days} days"), $notBefore ? (int)strtotime($notBefore) : 0));
 
   /* 1) collect order headers, paginated (hard cap 1000 to bound one run) */
   $orders = []; $offset = 0; $limit = 100; $total = 0;
@@ -392,7 +471,7 @@ function daraz_sync_orders(int $days = 14): array {
   }
   $nextNum = function() use (&$used) { $n=1; while (isset($used[$n])) $n++; $used[$n]=1; return $n; };
 
-  $created = 0; $unmatched = 0; $cancelledSkipped = 0;
+  $created = 0; $unmatched = 0; $cancelledSkipped = 0; $linked = 0;
   foreach ($byId as $orderId => $o) {
     $lineItems = $items[$orderId] ?? [];
     if (!$lineItems) continue;
@@ -421,6 +500,18 @@ function daraz_sync_orders(int $days = 14): array {
     $phone    = daraz_clean_phone((string)($addr['phone'] ?? ''));
     $address  = trim(implode(', ', array_filter([$addr['address1'] ?? '', $addr['address2'] ?? '', $addr['city'] ?? ''])));
     $orderDate = date('Y-m-d', strtotime($o['created_at'] ?? 'now'));
+    /* booked by hand in Sales already (same phone, around the same day, no Daraz # yet)?
+       link that order instead of importing a duplicate — the re-check then syncs it */
+    if ($phone !== '') {
+      $hand = rows("SELECT id FROM orders WHERE courier_id=? AND (daraz_order_id IS NULL OR daraz_order_id='')
+                    AND RIGHT(phone,10)=RIGHT(?,10) AND order_date BETWEEN ? AND ? AND status<>'cancelled'",
+                   [$dzId, $phone, date('Y-m-d', strtotime($orderDate.' -1 day')), date('Y-m-d', strtotime($orderDate.' +3 days'))]);
+      if ($hand) {
+        q("UPDATE orders SET daraz_order_id=? WHERE id IN (".implode(',', array_map(fn($h) => (int)$h['id'], $hand)).")", [$orderId]);
+        $linked++;
+        continue;
+      }
+    }
     $payType   = stripos((string)($o['payment_method'] ?? ''), 'cod') !== false ? 'cod' : 'prepaid';
     /* shipping_fee is what the CUSTOMER paid for delivery — it is not a cost to you, so it
        must never land in delivery_charge (which order_profit subtracts as your cost). Daraz
@@ -466,5 +557,6 @@ function daraz_sync_orders(int $days = 14): array {
   }
 
   log_activity("Daraz sync: $created line(s) imported from ".count($byId)." order(s)".($unmatched ? ", $unmatched unmatched SKU(s)" : '').($cancelledSkipped ? ", $cancelledSkipped cancelled line(s) skipped" : ''), 'Daraz');
-  return ['fetched'=>count($orders), 'created'=>$created, 'skipped'=>count($orders)-count($byId), 'unmatched'=>$unmatched, 'cancelled_skipped'=>$cancelledSkipped];
+  daraz_pack_normalize();   /* 2-pack listings → real pieces */
+  return ['fetched'=>count($orders), 'created'=>$created, 'linked'=>$linked, 'skipped'=>count($orders)-count($byId), 'unmatched'=>$unmatched, 'cancelled_skipped'=>$cancelledSkipped];
 }

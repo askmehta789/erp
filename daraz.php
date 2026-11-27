@@ -32,8 +32,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       flash($r['fixed'] > 0 ? "Mapped — fixed {$r['fixed']} existing order line(s); new orders with this SKU match automatically." : 'Mapped — new orders with this SKU match automatically.');
     } catch (Exception $ex) { flash('Could not map: '.$ex->getMessage()); }
   }
+  if ($act === 'sync_now') {
+    try { $lines = daraz_auto_sync(40); flash('Daraz synced — '.implode(' · ', $lines)); }
+    catch (Throwable $ex) { flash('Daraz sync failed: '.$ex->getMessage()); }
+    header('Location: daraz.php'); exit;
+  }
+  if ($act === 'set_packs') {
+    $ch = 0;
+    foreach ((array)($_POST['pack'] ?? []) as $k => $v) {
+      $k = ctype_xdigit((string)$k) ? (string)hex2bin((string)$k) : ""; $v = max(1, (int)$v);
+      if ($k === "") continue;
+      $cur = (int)(daraz_pack_map()[mb_strtolower(trim($k))] ?? 1);
+      if ($v !== $cur) { daraz_pack_set($k, $v); $ch++; }
+    }
+    $n = daraz_pack_normalize();
+    flash($ch ? "Pack sizes saved — $n order line(s) updated to real pieces." : 'No pack size changed.');
+    header('Location: daraz.php?packs=1#packs'); exit;
+  }
   header('Location: daraz.php'); exit;
 }
+try { daraz_pack_normalize(); } catch (Exception $e) {}
+$packListings = daraz_pack_listings();
 
 $today = date('Y-m-d'); $yday = date('Y-m-d', strtotime('-1 day'));
 $mStart = date('Y-m-01'); $mEnd = date('Y-m-t');
@@ -118,13 +137,22 @@ body.dark .dz-map-head h2{color:#fbbf24}
 <div class="ncm-hero">
   <div class="nh-left">
     <h1><img src="assets/daraz-icon.ico" alt="Daraz" style="height:28px;vertical-align:-6px;margin-right:6px"><span class="grad">Daraz Dashboard</span></h1>
-    <p>Today at a glance · orders are booked in Sales, then linked to their Daraz order number so status and Daraz charges sync from Daraz</p>
+    <p>Today at a glance · new Daraz orders come in automatically, and status, price &amp; Daraz charges keep syncing on their own</p>
     <div class="nh-status">
       <?php if ($darazConnected): ?><span class="live"><span class="d"></span> LIVE · Connected as <?= e($darazAccount) ?></span>
       <?php else: ?><span class="live off"><span class="d"></span> Not connected — <a href="settings.php">authorize in Settings → Channel / Daraz API</a></span><?php endif; ?>
+      <?php $AL = daraz_auto_last(); $alAge = !empty($AL['at']) ? time() - strtotime($AL['at']) : null; ?>
+      <?php if (!daraz_auto_enabled()): ?>
+        <span class="live off" style="margin-left:6px"><span class="d"></span> Live sync off — <a href="settings.php">turn on in Settings → Automation</a></span>
+      <?php elseif ($alAge === null): ?>
+        <span class="live off" style="margin-left:6px" title="Runs from the cPanel cron job (Settings → Automation Setup)"><span class="d"></span> Auto sync: not run yet</span>
+      <?php else: $mins = (int)floor($alAge / 60); ?>
+        <span class="live<?= $alAge > 3600 ? ' off' : '' ?>" style="margin-left:6px" title="<?= e("Last run ".$AL['at']." — {$AL['created']} new line(s), {$AL['linked']} linked, {$AL['checked']} checked, {$AL['changed']} updated".(!empty($AL['error']) ? ' · last error: '.$AL['error'] : '')) ?>"><span class="d"></span> Auto sync <?= $mins < 1 ? 'just now' : ($mins < 60 ? "$mins min ago" : (int)floor($mins/60).' h ago') ?><?= $alAge > 3600 ? ' — check the cron job' : '' ?></span>
+      <?php endif; ?>
     </div>
   </div>
   <div class="nh-actions">
+    <?php if ($darazConnected): ?><form method="post" style="display:inline"><input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="sync_now"><button class="btn" title="Import new Daraz orders and re-check open ones right now">⟳ Sync now</button></form><?php endif; ?>
     <button type="button" class="btn nh-cta" onclick="dzlOpen('')">🔗 Check a Daraz order by ID</button>
   </div>
 </div>
@@ -165,6 +193,27 @@ body.dark .dz-map-head h2{color:#fbbf24}
     </form>
   <?php endforeach; ?>
 </div>
+<?php endif; ?>
+
+<?php if ($packListings): $nPacks = count(array_filter($packListings, fn($l) => $l['pack'] > 1)); ?>
+<details class="panel" id="packs" style="margin-bottom:16px;padding:12px 18px"<?= isset($_GET['packs']) ? ' open' : '' ?>>
+  <summary style="cursor:pointer;font-weight:800;font-size:14px">📦 Pack listings <span class="muted" style="font-weight:600;font-size:12px">— <?= $nPacks ? "$nPacks multi-pack listing(s)" : 'set pack size for listings like "2 pack"' ?></span></summary>
+  <p class="muted" style="font-size:12px;margin:8px 0 10px">If a Daraz listing sells more than one piece per order unit (e.g. <b>2 pack heel guard</b>), set its pack size here. Each Daraz unit then counts as that many pieces in the ERP — stock, cost and profit — at the price split per piece. Existing orders are updated too.</p>
+  <form method="post">
+    <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="set_packs">
+    <div class="table-wrap" style="max-height:420px;overflow:auto"><table class="tbl"><thead><tr><th>Daraz listing</th><th>ERP product</th><th class="right">Order lines</th><th style="width:120px">Pieces per unit</th></tr></thead><tbody>
+    <?php foreach ($packListings as $l): ?>
+      <tr<?= $l['pack'] > 1 ? ' style="background:var(--green-bg)"' : '' ?>>
+        <td><b style="font-size:12.5px"><?= e($l['name'] ?: $l['sku']) ?></b><?php if ($l['sku'] !== ''): ?><div class="muted" style="font-size:11px">SKU <?= e($l['sku']) ?></div><?php endif; ?></td>
+        <td><?= $l['product'] !== '' ? e($l['product']) : '<span class="muted">not mapped</span>' ?></td>
+        <td class="right"><?= (int)$l['lines'] ?></td>
+        <td><input type="number" min="1" max="50" name="pack[<?= bin2hex($l['key']) ?>]" value="<?= (int)$l['pack'] ?>" style="width:80px"><?= $l['pack'] > 1 ? ' <span class="pill p-green" style="font-size:10px">'.(int)$l['pack'].'-pack</span>' : '' ?></td>
+      </tr>
+    <?php endforeach; ?>
+    </tbody></table></div>
+    <div style="text-align:right;margin-top:10px"><button class="btn btn-primary">Save pack sizes</button></div>
+  </form>
+</details>
 <?php endif; ?>
 
 <div class="dzd-grid">

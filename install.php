@@ -33,7 +33,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 ?>
 <!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Install — MyStore ERP</title><link rel="stylesheet" href="assets/style.css?v=<?= @filemtime(__DIR__."/assets/style.css") ?>"></head>
+<title>Install — Luprah ERP</title><link rel="stylesheet" href="assets/style.css?v=<?= @filemtime(__DIR__."/assets/style.css") ?>"></head>
 <body><div class="login-wrap"><div class="login-card">
 <div class="brand" style="border-radius:12px"><span class="logo">🛠️</span> ERP Installer</div>
 <?php if ($done): ?>

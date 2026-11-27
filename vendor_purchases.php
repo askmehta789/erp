@@ -125,21 +125,26 @@ require __DIR__.'/includes/header.php';
 .vp-picker a{background:rgba(255,255,255,.15);border-radius:99px;padding:6px 14px;font-size:11.5px;font-weight:700;color:#fff;text-decoration:none}
 .vp-picker a.on{background:#fff;color:#0f172a}
 .vp-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}
-.vp-stat{background:#fff;border-radius:14px;padding:13px;box-shadow:0 6px 16px rgba(30,41,80,.07);border-top:3px solid #ddd}
+.vp-stat{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:13px;box-shadow:0 6px 16px rgba(30,41,80,.07);border-top:3px solid var(--border)}
 .vp-stat.b{border-top-color:#0369a1}.vp-stat.g{border-top-color:#16a34a}.vp-stat.t{border-top-color:#0d9488}.vp-stat.p{border-top-color:#7c3aed}
 .vp-stat b{font-size:17px;font-weight:900;display:block;overflow-wrap:anywhere}
-.vp-stat span{font-size:9px;color:#8a93a8;font-weight:700;text-transform:uppercase}
-.vp-card{background:#fff;border-radius:16px;padding:16px 18px;box-shadow:0 6px 18px rgba(30,41,80,.07);margin-bottom:14px}
+.vp-stat span{font-size:9px;color:var(--muted);font-weight:700;text-transform:uppercase}
+.vp-card{background:var(--surface);border:1px solid var(--border);color:var(--ink);border-radius:16px;padding:16px 18px;box-shadow:0 6px 18px rgba(30,41,80,.07);margin-bottom:14px}
 .vp-card h3{font-size:13px;font-weight:900;margin-bottom:10px}
-.vp-prow{display:flex;align-items:center;gap:12px;padding:9px 0;border-bottom:1px solid #f1f4f9;font-size:12.5px}
+.vp-prow{display:flex;align-items:center;gap:12px;padding:9px 0;border-bottom:1px solid var(--border);font-size:12.5px}
 .vp-prow:last-child{border-bottom:0}
 .vp-prow .nm{width:140px;font-weight:800;flex:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.vp-pbar-bg{flex:1;height:8px;background:#eef1f5;border-radius:99px;overflow:hidden;min-width:40px}
+.vp-pbar-bg{flex:1;height:8px;background:var(--surface-2);border-radius:99px;overflow:hidden;min-width:40px}
 .vp-pbar{height:100%;background:linear-gradient(90deg,#60a5fa,#0369a1)}
 .vp-prow .amt{width:150px;text-align:right;font-weight:800;flex:none}
-.vp-empty{padding:26px 18px;text-align:center;color:#8a93a8;font-size:12px;background:#fff;border-radius:16px}
-.vp-unlinked{background:#fff7ed;border:1px solid #fed7aa;border-radius:12px;padding:11px 15px;font-size:11.5px;color:#9a3412;margin-bottom:14px}
+.vp-empty{padding:26px 18px;text-align:center;color:var(--muted);font-size:12px;background:var(--surface);border:1px solid var(--border);border-radius:16px}
+.vp-unlinked{background:var(--orange-bg);border:1px solid #fed7aa;border-radius:12px;padding:11px 15px;font-size:11.5px;color:#9a3412;margin-bottom:14px}
 @media(max-width:640px){ .vp-stats{grid-template-columns:repeat(2,1fr)} .vp-prow .nm{width:100px} .vp-prow .amt{width:110px} }
+body.dark .vp-hero{background:linear-gradient(120deg,#111a2e,#1e293b);border:1px solid var(--border)}
+body.dark .vp-stat,body.dark .vp-card{box-shadow:none}
+body.dark .vp-unlinked{border-color:#7c2d12;color:#fdba74}
+body.dark .vp-unlinked a{color:#fdba74 !important}
+.vp-filterbar{background:var(--surface-2);border:1px solid var(--border)}
 </style>
 
 <div class="vp-hero">
@@ -165,7 +170,7 @@ require __DIR__.'/includes/header.php';
   <form method="post" id="assignForm">
     <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="assign_vendor"><input type="hidden" name="back" value="unlinked">
     <input type="hidden" name="batch_ids" id="assignIds">
-    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px;background:#f8fafc;border-radius:10px;padding:10px 14px">
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px;border-radius:10px;padding:10px 14px" class="vp-filterbar">
       <span style="font-size:12px;font-weight:700"><b id="assignCount">0</b> selected</span>
       <select name="supplier_id" style="border:1px solid var(--border);border-radius:8px;padding:7px 11px;font-size:12px">
         <option value="">— pick vendor to assign —</option>
@@ -216,7 +221,7 @@ document.getElementById('assignForm').addEventListener('submit', function(e){
 <div class="vp-card" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
   <form method="get" style="display:flex;gap:8px;align-items:center">
     <input type="hidden" name="vendor" value="<?= (int)$vid ?>">
-    <label style="font-size:12px;font-weight:700;color:#8a93a8">📅 Filter by month</label>
+    <label style="font-size:12px;font-weight:700;color:var(--muted)">📅 Filter by month</label>
     <input type="month" name="pmonth" value="<?= e($pmonth) ?>">
     <button class="btn btn-sm btn-primary">Apply</button>
     <?php if($pmonth!==''): ?><a class="btn btn-sm" href="?vendor=<?= (int)$vid ?>">✕ Clear</a><?php endif; ?>

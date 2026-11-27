@@ -102,170 +102,171 @@ $otherDeposits = (float)val("SELECT COALESCE(SUM(amount),0) FROM bank_txns WHERE
 
 require __DIR__.'/includes/header.php';
 ?>
+<?php
+/* ---------- view data (visual only — every figure comes from the queries above) ---------- */
+$netAllTime = $codCollected - $totalOutAllTime;
+$compTotal  = max(1, max(0,$totalInBanks) + max(0,$cashInHand) + max(0,$stillWithCouriers));
+$comp = [
+  ['In banks & wallets', $totalInBanks,      '#2563eb'],
+  ['Cash in hand',       $cashInHand,        '#16a34a'],
+  ['Still with couriers',$stillWithCouriers, '#f59e0b'],
+];
+$outList = [['Courier charges', $codCharges, 'kept by couriers', 'cod.php']];
+foreach ($expByCat as $ec) $outList[] = [$ec['category'] ?: 'Uncategorised', (float)$ec['amt'], 'expense', 'expenses.php'];
+$outList[] = ['Salary', $salTotal, 'payments, advances & bonuses', 'salary.php'];
+if ($adsPayeeId) $outList[] = ['Ads payment', $adsPayTotal, 'paid to your Ads payee', 'payees.php'];
+$outList[] = ['Vendor payments', $vendorPayTotal, 'paid to vendors', 'payees.php'];
+$outList[] = ['COD direct payouts', $codOut, 'money out of COD', 'cod.php'];
+usort($outList, fn($a,$b) => $b[1] <=> $a[1]);
+$outSum = max(1, array_sum(array_map(fn($r) => max(0,$r[1]), $outList)));
+$inList = [['COD released by couriers', $codReleased, 'cod.php'], ['Other bank deposits', $otherDeposits, 'banks.php']];
+$inSum = max(1, $codReleased + $otherDeposits);
+$acctPos = max(1, array_sum(array_map(fn($v) => max(0,$v), $acctBal)));
+$moLabels = array_map(fn($mo) => date('M y', strtotime($mo.'-01')), $months);
+$pct = fn($v,$t) => $t > 0 ? max(0, min(100, round($v / $t * 100))) : 0;
+?>
 <style>
-.md-hero{position:relative;overflow:hidden;background:linear-gradient(125deg,#0b1220,#132239 55%,#1c2f4a);border-radius:24px;padding:28px 32px;color:#fff;margin-bottom:18px;box-shadow:0 22px 48px rgba(11,18,32,.35)}
-.md-hero:before{content:'';position:absolute;inset:0;background:radial-gradient(560px 260px at 88% -10%,rgba(250,204,21,.14),transparent 60%),radial-gradient(420px 220px at 8% 110%,rgba(52,211,153,.12),transparent 60%);pointer-events:none}
-.md-hero>*{position:relative}
-.md-hero h1{font-size:23px;font-weight:900;margin:0;display:flex;align-items:center;gap:10px;letter-spacing:-.01em}
-.md-hero p{opacity:.72;font-size:12.5px;margin:4px 0 0}
-.md-recon{display:inline-flex;align-items:center;gap:8px;border-radius:99px;padding:7px 16px;font-size:11.5px;font-weight:800;margin-top:14px;margin-right:8px;backdrop-filter:blur(6px)}
-.md-recon.ok{background:rgba(52,211,153,.14);border:1px solid rgba(52,211,153,.35);color:#6ee7b7}
-.md-recon.warn{background:rgba(251,191,36,.14);border:1px solid rgba(251,191,36,.35);color:#fcd34d}
-
-.md-bigrow{display:grid;grid-template-columns:1.35fr 1fr 1fr;gap:14px;margin-bottom:16px}
-.md-big{background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:22px 24px;box-shadow:0 10px 28px rgba(30,41,80,.06);transition:transform .18s ease,box-shadow .18s ease}
-.md-big:hover{transform:translateY(-2px);box-shadow:0 16px 36px rgba(30,41,80,.1)}
-.md-big.total{position:relative;overflow:hidden;background:linear-gradient(140deg,#0f2540,#143a5c 55%,#0f2540);border:1px solid rgba(255,255,255,.08);color:#fff}
-.md-big.total:before{content:'';position:absolute;inset:0;background:radial-gradient(320px 180px at 100% 0%,rgba(250,204,21,.16),transparent 65%);pointer-events:none}
-.md-big.total>*{position:relative}
-.md-big .l{font-size:10.5px;font-weight:800;opacity:.6;text-transform:uppercase;letter-spacing:.06em;display:flex;align-items:center;gap:6px}
-.md-big .v{font-size:27px;font-weight:900;margin-top:8px;letter-spacing:-.01em;font-variant-numeric:tabular-nums}
-.md-big .s{font-size:11px;opacity:.6;margin-top:4px}
-.md-split{display:flex;gap:16px;margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,.12)}
-.md-split div{flex:1}
-.md-split b{font-size:15px;display:block;font-variant-numeric:tabular-nums}
-.md-split span{font-size:9.5px;opacity:.62;text-transform:uppercase;letter-spacing:.03em;font-weight:700}
-
-.md-flow{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px}
-.md-card{background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:20px 22px;box-shadow:0 8px 24px rgba(30,41,80,.05)}
-.md-card h3{font-size:13px;font-weight:900;margin-bottom:12px;display:flex;align-items:center;gap:8px;color:var(--ink)}
-.md-row{position:relative;display:flex;justify-content:space-between;align-items:center;padding:10px 4px;border-radius:10px;font-size:12.5px;overflow:hidden}
-.md-row+.md-row{margin-top:2px}
-.md-row:hover{background:var(--surface-2)}
-.md-row .fill{position:absolute;left:0;top:0;bottom:0;background:currentColor;opacity:.06;border-radius:10px;z-index:0}
-.md-row .nm{position:relative;z-index:1;display:flex;align-items:center;gap:9px;color:var(--ink);font-weight:600}
-.md-row .amt{position:relative;z-index:1;font-weight:800;font-variant-numeric:tabular-nums;color:var(--ink)}
-.md-dot{width:9px;height:9px;border-radius:99px;flex:none;box-shadow:0 0 0 3px currentColor,0 0 0 3px transparent;opacity:1}
-
-.md-accounts{background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:20px 22px;box-shadow:0 8px 24px rgba(30,41,80,.05);margin-bottom:16px}
-.md-accounts h3{font-size:13px;font-weight:900;margin-bottom:14px;color:var(--ink)}
-.md-acctgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}
-.md-acct{background:var(--surface-2);border-radius:15px;padding:14px 16px;border-left:4px solid #6366f1;transition:transform .15s ease}
-.md-acct:hover{transform:translateY(-2px)}
-.md-acct.cash{border-left-color:#16a34a}
-.md-acct .an{font-size:11px;font-weight:800;color:var(--ink)}
-.md-acct .av{font-size:17px;font-weight:900;margin-top:4px;color:var(--ink);font-variant-numeric:tabular-nums}
-.md-acct .src{font-size:9.5px;color:var(--muted);margin-top:5px;font-weight:600}
-
-.md-timeline{background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:20px 22px;box-shadow:0 8px 24px rgba(30,41,80,.05)}
-.md-timeline h3{font-size:13px;font-weight:900;margin-bottom:16px;display:flex;align-items:center;gap:14px;color:var(--ink)}
-.md-legend{display:flex;gap:14px;font-size:10.5px;font-weight:700;color:var(--muted)}
-.md-legend span{display:inline-flex;align-items:center;gap:5px}
-.md-bars{display:flex;align-items:flex-end;gap:10px;height:140px;padding-top:6px}
-.md-bargroup{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;height:100%;justify-content:flex-end}
-.md-barpair{display:flex;gap:4px;align-items:flex-end;width:100%;height:100%;justify-content:center}
-.md-bar{width:15px;border-radius:6px 6px 2px 2px;transition:opacity .15s ease}
-.md-bar:hover{opacity:.75}
-.md-bar.in{background:linear-gradient(180deg,#4ade80,#16a34a)}
-.md-bar.out{background:linear-gradient(180deg,#fb7185,#dc2626)}
-.md-barlbl{font-size:9.5px;color:var(--muted);margin-top:6px;font-weight:700}
-
-body.dark .md-hero{background:linear-gradient(125deg,#070c16,#0d1830 55%,#132239);box-shadow:0 22px 48px rgba(0,0,0,.5)}
-body.dark .md-big.total{background:linear-gradient(140deg,#0a1930,#0f2b46 55%,#0a1930)}
-body.dark .md-row .fill{opacity:.14}
-
-@media(max-width:820px){ .md-bigrow{grid-template-columns:1fr} .md-flow{grid-template-columns:1fr} }
-@media(max-width:520px){ .md-hero{padding:20px 20px} .md-hero h1{font-size:19px} .md-big .v{font-size:22px} }
+.mx{container-type:inline-size;--mx-in:#16a34a;--mx-out:#e11d48;--mx-soft:var(--surface-2)}
+.mx-head{display:flex;justify-content:space-between;align-items:flex-end;gap:14px;flex-wrap:wrap;margin-bottom:14px}
+.mx-head h1{margin:0;font-size:22px;font-weight:850;letter-spacing:-.02em;color:var(--ink)}
+.mx-head p{margin:3px 0 0;font-size:12.5px;color:var(--muted)}
+.mx-links{display:flex;gap:6px;flex-wrap:wrap}
+.mx-links a{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border-radius:10px;border:1px solid var(--border);background:var(--surface);color:var(--ink);font-size:12px;font-weight:650}
+.mx-links a:hover{border-color:var(--muted-2)}
+.mx-note{display:flex;align-items:flex-start;gap:10px;padding:10px 14px;border-radius:12px;font-size:12.5px;margin-bottom:10px;border:1px solid var(--border);background:var(--surface);color:var(--ink)}
+.mx-note .ic{width:22px;height:22px;border-radius:7px;display:grid;place-items:center;flex:none;font-size:12px;font-weight:900}
+.mx-note.ok .ic{background:var(--green-bg);color:var(--mx-in)}
+.mx-note.warn .ic{background:var(--amber-bg);color:#b45309}
+.mx-note.info .ic{background:var(--blue-bg);color:#2563eb}
+.mx-note small{display:block;color:var(--muted);font-size:11.5px;margin-top:1px}
+.mx-card{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:18px 20px}
+.mx-card h3{margin:0 0 14px;font-size:13px;font-weight:800;color:var(--ink);display:flex;justify-content:space-between;align-items:center;gap:10px}
+.mx-card h3 .sub{font-size:11.5px;font-weight:600;color:var(--muted)}
+.mx-lbl{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.mx-top{display:grid;grid-template-columns:1.5fr 1fr;gap:14px;margin:14px 0}
+.mx-pos .v{font-size:34px;font-weight:850;letter-spacing:-.02em;color:var(--ink);margin-top:6px;font-variant-numeric:tabular-nums}
+.mx-pos .s{font-size:12px;color:var(--muted);margin-top:2px}
+.mx-stack{display:flex;height:10px;border-radius:99px;overflow:hidden;background:var(--mx-soft);margin:18px 0 14px;gap:2px}
+.mx-stack i{display:block;height:100%}
+.mx-legend{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.mx-legend div{padding:10px 12px;border-radius:12px;background:var(--mx-soft)}
+.mx-legend b{display:block;font-size:15px;font-weight:800;color:var(--ink);font-variant-numeric:tabular-nums;margin-top:3px}
+.mx-legend span{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:650;color:var(--muted)}
+.mx-legend span:before{content:'';width:8px;height:8px;border-radius:3px;background:var(--c)}
+.mx-tiles{display:grid;grid-template-rows:repeat(3,1fr);gap:10px}
+.mx-tile{display:flex;justify-content:space-between;align-items:center;gap:10px;background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:14px 18px}
+.mx-tile .v{font-size:20px;font-weight:850;font-variant-numeric:tabular-nums;margin-top:3px}
+.mx-tile .s{font-size:11px;color:var(--muted);margin-top:2px}
+.mx-tile .ico{width:38px;height:38px;border-radius:11px;display:grid;place-items:center;font-size:17px;font-weight:900;flex:none}
+.mx-mid{display:grid;grid-template-columns:2fr 1fr;gap:14px;margin-bottom:14px}
+.mx-bot{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
+.mx-row{display:grid;grid-template-columns:1fr auto;gap:4px 12px;padding:10px 0;border-bottom:1px solid var(--border);align-items:center}
+.mx-row:last-child{border-bottom:0;padding-bottom:0}
+.mx-row .nm{font-size:13px;font-weight:650;color:var(--ink);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mx-row .nm small{font-weight:500;color:var(--muted);font-size:11px;margin-left:6px}
+.mx-row .amt{font-size:13px;font-weight:800;color:var(--ink);text-align:right;font-variant-numeric:tabular-nums}
+.mx-row .amt small{display:inline-block;min-width:34px;font-weight:600;color:var(--muted);font-size:11px;margin-left:6px}
+.mx-row .bar{grid-column:1/-1;height:5px;border-radius:99px;background:var(--mx-soft);overflow:hidden}
+.mx-row .bar i{display:block;height:100%;border-radius:99px;background:var(--c,#64748b)}
+.mx-row a.nm:hover{text-decoration:underline}
+.mx-chart{height:250px}
+.mx-empty{padding:18px;text-align:center;color:var(--muted);font-size:12.5px}
+body.dark .mx-note.warn .ic{color:#fbbf24}
+body.dark .mx-note.info .ic{color:#60a5fa}
+@container (max-width:900px){.mx-top,.mx-mid,.mx-bot{grid-template-columns:1fr}.mx-tiles{grid-template-rows:none;grid-template-columns:repeat(3,1fr)}}
+@container (max-width:560px){.mx-tiles,.mx-legend{grid-template-columns:1fr}.mx-pos .v{font-size:28px}}
 </style>
 
-<?php
-/* proportional fill-bar widths for the two flow cards (visual only) */
-$inMax = max(1, $codReleased, $otherDeposits);
-$outRows = array_merge([$codCharges], array_column(array_slice($expByCat,0,4),'amt'), [$salTotal, $adsPayeeId?$adsPayTotal:0, $vendorPayTotal, $codOut]);
-$outMax = max(1, ...array_map('floatval',$outRows));
-?>
-<div class="md-hero">
-  <h1>💰 Money Dashboard</h1>
-  <p>Every rupee, all-time — pulled from COD Ledger, Bank Accounts, Expenses, and Salary together</p>
-  <?php if($integrityIssues>0): ?>
-    <div class="md-recon warn">⚠ <?= $integrityIssues ?> broken link(s) found — a linked entry points to a bank transaction that no longer exists</div>
-  <?php elseif($oldSalaryExpAmt>0): ?>
-    <div class="md-recon warn">⚠ <?= money($oldSalaryExpAmt) ?> in old "Salary"-category expenses excluded from this page — Staff &amp; Salary is now the one source for that. See Expenses to clean these up.</div>
-  <?php elseif($totalUnlinked>0): ?>
-    <div class="md-recon warn">ℹ️ <?= money($totalUnlinked) ?> across COD/Expenses/Salary/Vendor Payments isn't linked to a bank account yet — everything else checks out</div>
-  <?php else: ?>
-    <div class="md-recon ok">✓ Everything is linked and consistent — no mismatches found</div>
-  <?php endif; ?>
-  <?php if($adsExpAmt>0): ?>
-    <div class="md-recon" style="background:rgba(236,72,153,.15);border:1px solid rgba(236,72,153,.4);color:#ec4899">ℹ️ <?= money($adsExpAmt) ?> recorded under the "Ads" expense category isn't counted separately here — 📣 Ads Payment below (what's actually paid to your Ads payee) is the one cash-out figure for ads on this page.</div>
-  <?php endif; ?>
+<div class="mx">
+<div class="mx-head">
+  <div><h1>Money Dashboard</h1><p>All-time · bank accounts, COD ledger, expenses, salary &amp; vendor payments in one place</p></div>
+  <div class="mx-links">
+    <a href="banks.php">🏦 Bank Accounts</a><a href="cod.php">💵 COD Ledger</a><a href="expenses.php">🧾 Expenses</a>
+  </div>
 </div>
 
-<div class="md-bigrow">
-  <div class="md-big total">
-    <div class="l">Total Cash Position</div>
+<?php if($integrityIssues>0): ?>
+  <div class="mx-note warn"><span class="ic">!</span><div><b><?= $integrityIssues ?> broken link(s) found</b><small>A linked entry points to a bank transaction that no longer exists.</small></div></div>
+<?php elseif($oldSalaryExpAmt>0): ?>
+  <div class="mx-note warn"><span class="ic">!</span><div><b><?= money($oldSalaryExpAmt) ?> in old "Salary" expenses is left out</b><small>Staff &amp; Salary is the one source for salary now — clean these up on the Expenses page.</small></div></div>
+<?php elseif($totalUnlinked>0): ?>
+  <div class="mx-note warn"><span class="ic">i</span><div><b><?= money($totalUnlinked) ?> isn't linked to a bank account yet</b><small>Across COD payouts, expenses, salary and vendor payments — everything else checks out.</small></div></div>
+<?php else: ?>
+  <div class="mx-note ok"><span class="ic">✓</span><div><b>Everything is linked and consistent</b><small>No mismatches found.</small></div></div>
+<?php endif; ?>
+<?php if($adsExpAmt>0): ?>
+  <div class="mx-note info"><span class="ic">i</span><div><b><?= money($adsExpAmt) ?> in "Ads" expenses isn't counted twice</b><small>Ads payment (what's actually paid to your Ads payee) is the one cash-out figure for ads here.</small></div></div>
+<?php endif; ?>
+
+<div class="mx-top">
+  <div class="mx-card mx-pos">
+    <div class="mx-lbl">Cash position · right now</div>
     <div class="v"><?= money($totalPosition) ?></div>
-    <div class="s">what you actually have, right now</div>
-    <div class="md-split">
-      <div><b><?= money($totalInBanks) ?></b><span>In Banks &amp; Wallets</span></div>
-      <div><b><?= money($cashInHand) ?></b><span>Cash In Hand</span></div>
-      <div><b><?= money($stillWithCouriers) ?></b><span>Still With Couriers</span></div>
+    <div class="s">banks &amp; wallets + cash in hand<?= $stillWithCouriers > 0 ? ' · '.money($stillWithCouriers).' more is still with couriers' : '' ?></div>
+    <div class="mx-stack"><?php foreach($comp as $c): if($c[1] > 0): ?><i style="width:<?= round($c[1]/$compTotal*100,2) ?>%;background:<?= $c[2] ?>" title="<?= e($c[0].': '.money($c[1])) ?>"></i><?php endif; endforeach; ?></div>
+    <div class="mx-legend">
+      <?php foreach($comp as $c): ?><div><span style="--c:<?= $c[2] ?>"><?= e($c[0]) ?></span><b><?= money($c[1]) ?></b></div><?php endforeach; ?>
     </div>
   </div>
-  <div class="md-big">
-    <div class="l">Total In, All-Time</div>
-    <div class="v" style="color:#16a34a"><?= money($codCollected) ?></div>
-    <div class="s">COD collected (gross), before courier charges</div>
-  </div>
-  <div class="md-big">
-    <div class="l">Total Out, All-Time</div>
-    <div class="v" style="color:#dc2626"><?= money($totalOutAllTime) ?></div>
-    <div class="s">courier charges + expenses + salary + vendor payments + direct payouts</div>
+  <div class="mx-tiles">
+    <div class="mx-tile"><div><div class="mx-lbl">Money in</div><div class="v" style="color:var(--mx-in)"><?= money($codCollected) ?></div><div class="s">COD collected, before courier charges</div></div><div class="ico" style="background:var(--green-bg);color:var(--mx-in)">↓</div></div>
+    <div class="mx-tile"><div><div class="mx-lbl">Money out</div><div class="v" style="color:var(--mx-out)"><?= money($totalOutAllTime) ?></div><div class="s">charges, expenses, salary, vendors &amp; payouts</div></div><div class="ico" style="background:var(--red-bg);color:var(--mx-out)">↑</div></div>
+    <div class="mx-tile"><div><div class="mx-lbl">Net</div><div class="v" style="color:<?= $netAllTime >= 0 ? 'var(--mx-in)' : 'var(--mx-out)' ?>"><?= ($netAllTime < 0 ? '−' : '').money(abs($netAllTime)) ?></div><div class="s">money in − money out</div></div><div class="ico" style="background:var(--blue-bg);color:#2563eb">=</div></div>
   </div>
 </div>
 
-<div class="md-flow">
-  <div class="md-card">
-    <h3>📥 Where Money Came From</h3>
-    <div class="md-row" style="color:#16a34a"><span class="fill" style="width:<?= round($codReleased/$inMax*100) ?>%"></span><span class="nm"><span class="md-dot" style="background:#4ade80"></span>COD Released by Couriers</span><span class="amt"><?= money($codReleased) ?></span></div>
-    <div class="md-row" style="color:#0891b2"><span class="fill" style="width:<?= round($otherDeposits/$inMax*100) ?>%"></span><span class="nm"><span class="md-dot" style="background:#22d3ee"></span>Other Bank Deposits (non-COD)</span><span class="amt"><?= money($otherDeposits) ?></span></div>
+<div class="mx-mid">
+  <div class="mx-card">
+    <h3>Money in vs out <span class="sub">last 6 months · from bank &amp; cash accounts</span></h3>
+    <div class="mx-chart"><canvas id="mxFlow"></canvas></div>
   </div>
-  <div class="md-card">
-    <h3>📤 Where Money Went — by Category</h3>
-    <div class="md-row" style="color:#dc2626"><span class="fill" style="width:<?= round($codCharges/$outMax*100) ?>%"></span><span class="nm"><span class="md-dot" style="background:#f87171"></span>Courier Charges (kept by couriers)</span><span class="amt"><?= money($codCharges) ?></span></div>
-    <?php foreach(array_slice($expByCat,0,4) as $ec): ?>
-    <div class="md-row" style="color:#ea580c"><span class="fill" style="width:<?= round($ec['amt']/$outMax*100) ?>%"></span><span class="nm"><span class="md-dot" style="background:#fb923c"></span><?= e($ec['category']) ?></span><span class="amt"><?= money($ec['amt']) ?></span></div>
+  <div class="mx-card">
+    <h3>Where money came from <span class="sub"><?= money($codReleased + $otherDeposits) ?></span></h3>
+    <?php foreach($inList as $r): ?>
+      <div class="mx-row"><a class="nm" href="<?= $r[2] ?>"><?= e($r[0]) ?></a><div class="amt"><?= money($r[1]) ?><small><?= $pct($r[1],$inSum) ?>%</small></div><div class="bar"><i style="width:<?= $pct($r[1],$inSum) ?>%;--c:var(--mx-in)"></i></div></div>
     <?php endforeach; ?>
-    <div class="md-row" style="color:#7c3aed"><span class="fill" style="width:<?= round($salTotal/$outMax*100) ?>%"></span><span class="nm"><span class="md-dot" style="background:#a78bfa"></span>Salary</span><span class="amt"><?= money($salTotal) ?></span></div>
-    <?php if($adsPayeeId): ?><div class="md-row" style="color:#db2777"><span class="fill" style="width:<?= round($adsPayTotal/$outMax*100) ?>%"></span><span class="nm"><span class="md-dot" style="background:#ec4899"></span>📣 Ads Payment</span><span class="amt"><?= money($adsPayTotal) ?></span></div><?php endif; ?>
-    <div class="md-row" style="color:#db2777"><span class="fill" style="width:<?= round($vendorPayTotal/$outMax*100) ?>%"></span><span class="nm"><span class="md-dot" style="background:#f472b6"></span>🏭 Vendor Payment</span><span class="amt"><?= money($vendorPayTotal) ?></span></div>
-    <div class="md-row" style="color:#64748b"><span class="fill" style="width:<?= round($codOut/$outMax*100) ?>%"></span><span class="nm"><span class="md-dot" style="background:#94a3b8"></span>COD Money Out (direct payouts)</span><span class="amt"><?= money($codOut) ?></span></div>
   </div>
 </div>
 
-<div class="md-accounts">
-  <h3>🏦 Every Account, Right Now</h3>
-  <div class="md-acctgrid">
+<div class="mx-bot">
+  <div class="mx-card">
+    <h3>Where money went <span class="sub"><?= money($totalOutAllTime) ?> total</span></h3>
+    <?php foreach($outList as $r): ?>
+      <div class="mx-row"><a class="nm" href="<?= $r[3] ?>"><?= e($r[0]) ?><small><?= e($r[2]) ?></small></a><div class="amt"><?= money($r[1]) ?><small><?= $pct($r[1],$outSum) ?>%</small></div><div class="bar"><i style="width:<?= $pct($r[1],$outSum) ?>%;--c:#64748b"></i></div></div>
+    <?php endforeach; ?>
+  </div>
+  <div class="mx-card">
+    <h3>Accounts <span class="sub"><?= count($accounts) ?> active</span></h3>
     <?php foreach($accounts as $A):
       $linkedN = (int)val("SELECT
         (SELECT COUNT(*) FROM expenses WHERE account_id=?) +
         (SELECT COUNT(*) FROM salary_entries WHERE account_id=?) +
         (SELECT COUNT(*) FROM cod_ledger WHERE account_id=?) +
-        (SELECT COUNT(*) FROM payee_ledger WHERE account_id=?)",[$A['id'],$A['id'],$A['id'],$A['id']]); ?>
-    <div class="md-acct<?= $A['kind']==='cash'?' cash':'' ?>">
-      <div class="an"><?= $A['kind']==='cash'?'💵':'🏦' ?> <?= e($A['name']) ?></div>
-      <div class="av"><?= money($acctBal[$A['id']] ?? 0) ?></div>
-      <div class="src"><?= $linkedN ?> linked entr<?= $linkedN===1?'y':'ies' ?></div>
-    </div>
-    <?php endforeach; if(!$accounts): ?><div class="empty">No accounts yet — add one on the Bank Accounts page.</div><?php endif; ?>
+        (SELECT COUNT(*) FROM payee_ledger WHERE account_id=?)",[$A['id'],$A['id'],$A['id'],$A['id']]);
+      $bal = $acctBal[$A['id']] ?? 0; ?>
+      <div class="mx-row"><a class="nm" href="banks.php"><?= $A['kind']==='cash'?'💵':'🏦' ?> <?= e($A['name']) ?><small><?= $linkedN ?> linked entr<?= $linkedN===1?'y':'ies' ?></small></a><div class="amt" style="<?= $bal < 0 ? 'color:var(--mx-out)' : '' ?>"><?= money($bal) ?></div><div class="bar"><i style="width:<?= $pct($bal,$acctPos) ?>%;--c:<?= $A['kind']==='cash' ? '#16a34a' : '#2563eb' ?>"></i></div></div>
+    <?php endforeach; if(!$accounts): ?><div class="mx-empty">No accounts yet — add one on the <a href="banks.php" style="text-decoration:underline">Bank Accounts</a> page.</div><?php endif; ?>
   </div>
+</div>
 </div>
 
-<div class="md-timeline">
-  <h3>📊 Money In vs Out — Last 6 Months
-    <span class="md-legend"><span><span class="md-dot" style="background:#4ade80;display:inline-block"></span>In</span><span><span class="md-dot" style="background:#f87171;display:inline-block"></span>Out</span></span>
-  </h3>
-  <div class="md-bars">
-    <?php foreach($months as $mo): ?>
-    <div class="md-bargroup">
-      <div class="md-barpair">
-        <div class="md-bar in" style="height:<?= max(3,round($monthIn[$mo]/$maxMonthVal*100)) ?>%" title="In: <?= money($monthIn[$mo]) ?>"></div>
-        <div class="md-bar out" style="height:<?= max(3,round($monthOut[$mo]/$maxMonthVal*100)) ?>%" title="Out: <?= money($monthOut[$mo]) ?>"></div>
-      </div>
-      <div class="md-barlbl"><?= e(date('M',strtotime($mo.'-01'))) ?></div>
-    </div>
-    <?php endforeach; ?>
-  </div>
-</div>
+<script>
+(function(){
+  var el=document.getElementById('mxFlow'); if(!el||!window.Chart) return;
+  var ink='#94a3b8', grid='rgba(148,163,184,.18)';   /* neutral — reads well in light and dark */
+  var inD=<?= json_encode(array_values(array_map(fn($v)=>round($v,2),$monthIn))) ?>, outD=<?= json_encode(array_values(array_map(fn($v)=>round($v,2),$monthOut))) ?>;
+  new Chart(el,{type:'bar',
+    data:{labels:<?= json_encode($moLabels) ?>,datasets:[
+      {label:'In',data:inD,backgroundColor:'#16a34a',borderRadius:6,maxBarThickness:26},
+      {label:'Out',data:outD,backgroundColor:'#e11d48',borderRadius:6,maxBarThickness:26},
+      {label:'Net',type:'line',data:inD.map(function(v,i){return Math.round((v-outD[i])*100)/100;}),borderColor:'#2563eb',backgroundColor:'#2563eb',borderWidth:2,pointRadius:3,tension:.35}
+    ]},
+    options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'index',intersect:false},
+      plugins:{legend:{position:'bottom',labels:{color:ink,boxWidth:10,boxHeight:10,usePointStyle:true}},
+        tooltip:{callbacks:{label:function(c){return ' '+c.dataset.label+': Rs. '+Math.round(c.parsed.y).toLocaleString('en-IN');}}}},
+      scales:{x:{grid:{display:false},ticks:{color:ink}},
+        y:{beginAtZero:true,suggestedMax:1000,grid:{color:grid},border:{display:false},ticks:{color:ink,precision:0,callback:function(v){return Math.abs(v)>=1000?(v/1000)+'k':v;}}}}}});
+})();
+</script>
 
 <?php require __DIR__.'/includes/footer.php'; ?>

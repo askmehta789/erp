@@ -4,7 +4,7 @@ require_once __DIR__ . '/auth.php';
 require_login();
 if (!in_array(($_SESSION['user']['role'] ?? ''), ['Super Admin','Admin','Owner'], true)) { http_response_code(403); die('Admins only.'); }
 /* ============================================================
-   MyStore ERP — Diagnostic & Repair (v2)
+   Luprah ERP — Diagnostic & Repair (v2)
    Upload to your /erp/ folder, open in browser:
      https://yourdomain.com/erp/check.php
    Diagnoses the server + database, repairs missing tables AND

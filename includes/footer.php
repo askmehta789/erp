@@ -1,5 +1,5 @@
     </main>
-    <div class="foot"><span>© <?= date('Y') ?> <?= e(setting('store_name', APP_NAME)) ?></span><span>MyStore ERP</span></div>
+    <div class="foot"><span>© <?= date('Y') ?> <?= e(setting('store_name', APP_NAME)) ?></span><span>Luprah ERP</span></div>
   </div>
 </div>
 <nav class="bottomnav">

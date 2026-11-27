@@ -17,10 +17,12 @@ $helpLine  = setting('help_line', '01-5970736');
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
 <title><?= e($PAGE_TITLE) ?> — <?= e($storeName) ?></title>
-<link rel="icon" type="image/png" href="assets/luprah-logo.png">
+<link rel="icon" type="image/png" sizes="32x32" href="assets/luprah-icon-32.png?v=<?= @filemtime(__DIR__."/../assets/luprah-icon-64.png") ?>">
+<link rel="icon" type="image/png" sizes="64x64" href="assets/luprah-icon-64.png?v=<?= @filemtime(__DIR__."/../assets/luprah-icon-64.png") ?>">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500&display=swap" rel="stylesheet">
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#3b82f6">
-<link rel="apple-touch-icon" href="assets/luprah-logo.png">
+<link rel="apple-touch-icon" sizes="180x180" href="assets/luprah-icon-180.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <link rel="stylesheet" href="assets/style.css?v=<?= @filemtime(__DIR__.'/../assets/style.css') ?>">
 <?php $brandColor = trim(setting('brand_color','')); if ($brandColor !== ''): ?>
@@ -37,7 +39,10 @@ $helpLine  = setting('help_line', '01-5970736');
 <div class="layout">
   <aside class="sidebar" id="sidebar">
     <div class="biz">
-      <div class="biz-logo"><img src="assets/luprah-logo.png" alt="Luprah" class="brand-logo"> <span class="brand-name"><?= e($storeName) ?></span></div>
+      <?php $brandRest = preg_match('/^\s*luprah\b\s*(.*)$/i', (string)$storeName, $bm) ? trim($bm[1]) : null; ?>
+      <div class="biz-logo"><span class="brand-tile"><img src="assets/luprah-mark.png" alt="" class="brand-logo"></span>
+        <?php if ($brandRest !== null): ?><span class="brand-word"><img src="assets/luprah-wordmark.png?v=<?= @filemtime(__DIR__.'/../assets/luprah-wordmark.png') ?>" alt="<?= e($storeName) ?>"><?php if ($brandRest !== ''): ?><small><?= e(preg_replace('/\.(?=\S)/', '. ', $brandRest)) ?></small><?php endif; ?></span>
+        <?php else: ?><span class="brand-name"><?= e($storeName) ?></span><?php endif; ?></div>
       <?php $tag = trim(setting('store_tagline','')); if ($tag !== ''): ?><div class="biz-tag"><?= e($tag) ?></div><?php endif; ?>
     </div>
     <nav class="nav" id="sideNav">

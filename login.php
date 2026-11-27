@@ -53,11 +53,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Sign in — <?= e(setting('store_name', APP_NAME)) ?></title>
-<link rel="icon" type="image/png" href="assets/luprah-logo.png">
+<link rel="icon" type="image/png" sizes="32x32" href="assets/luprah-icon-32.png?v=<?= @filemtime(__DIR__."/assets/luprah-icon-64.png") ?>">
+<link rel="icon" type="image/png" sizes="64x64" href="assets/luprah-icon-64.png?v=<?= @filemtime(__DIR__."/assets/luprah-icon-64.png") ?>">
 <link rel="stylesheet" href="assets/style.css?v=<?= @filemtime(__DIR__."/assets/style.css") ?>"></head>
 <body><div class="login-wrap"><form class="login-card" method="post">
   <input type="hidden" name="csrf" value="<?= csrf() ?>">
-  <div class="brand" style="border-radius:12px"><img src="assets/luprah-logo.png" alt="" style="height:30px;vertical-align:middle"> <?= e(setting('store_name', APP_NAME)) ?></div>
+  <div class="brand" style="border-radius:12px"><img src="assets/luprah-mark.png" alt="" style="height:30px;vertical-align:middle;background:#fff;border-radius:8px;padding:3px"> <?= e(setting('store_name', APP_NAME)) ?></div>
   <h2>Sign in</h2><p>Log in to access your dashboard</p>
   <?php if ($err): ?><div class="login-err"><?= e($err) ?></div><?php endif; ?>
   <label>Username</label><input name="username" autofocus required autocomplete="username">

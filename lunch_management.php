@@ -346,6 +346,9 @@ $lunchLabel = fn($s) => ['ok'=>'Completed','leave'=>'Leave','review'=>'Requires 
       <button type="button" class="btn btn-sm" onclick="bulkSetAll('present')">Present</button>
       <button type="button" class="btn btn-sm" onclick="bulkSetAll('holiday')">🎉 Holiday</button>
       <button type="button" class="btn btn-sm" onclick="bulkSetAll('wfh')">🏠 WFH</button>
+      <span class="muted" style="font-size:12px;margin-left:10px">Lunch:</span>
+      <button type="button" class="btn btn-sm" onclick="bulkLunchAll('1')" title="Everyone present ordered lunch">🍱 Lunch for all</button>
+      <button type="button" class="btn btn-sm" onclick="bulkLunchAll('0')" title="Nobody present ordered lunch today">🚫 No lunch for all</button>
     </div>
     <div style="padding:8px 0 4px"><button class="btn btn-primary">💾 Save All (<?= count($dayStaff) ?> staff)</button></div>
   </form>
@@ -517,6 +520,13 @@ function bulkSetAll(att){
   });
 }
 
+/* "Lunch for all" / "No lunch for all" — only rows marked Present have lunch at all */
+function bulkLunchAll(v){
+  document.querySelectorAll('.bulk-ord').forEach(function(sel){
+    var tr=sel.closest('tr'); if(tr.querySelector('.bulk-att').value!=='present') return;
+    sel.value=v; bulkRowToggle(sel);
+  });
+}
 function bulkRowToggle(el){
   var tr=el.closest('tr'), rate=parseFloat(tr.getAttribute('data-rate')||'0');
   var attSel=tr.querySelector('.bulk-att'), ordSel=tr.querySelector('.bulk-ord'), amtEl=tr.querySelector('.bulk-amt');

@@ -236,7 +236,7 @@ require __DIR__.'/includes/header.php';
 <?php if($fl=flash()) echo '<div class="flash">'.e($fl).'</div>'; ?>
 
 <div class="pdd-hero">
-  <div class="pdd-av"><?php if($p['image']): ?><img src="<?= e($p['image']) ?>" alt="<?= e($p['name']) ?>"><?php else: ?><?= e(mb_strtoupper(mb_substr($p['name'],0,2))) ?><?php endif; ?></div>
+  <div class="pdd-av"><?php if($p['image']): ?><a href="<?= e($p['image']) ?>" target="_blank" title="Open full-size photo"><img src="<?= e(img_thumb($p['image'], 320)) ?>" alt="<?= e($p['name']) ?>" decoding="async"></a><?php else: ?><?= e(mb_strtoupper(mb_substr($p['name'],0,2))) ?><?php endif; ?></div>
   <div>
     <div class="pdd-nm"><?= e($p['name']) ?></div>
     <div class="pdd-sub"><?= e($p['sku']) ?><?= $p['category']?' · '.e($p['category']):'' ?></div>

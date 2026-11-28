@@ -660,7 +660,7 @@ body.dark .pd3-foot a.view{background:rgba(59,130,246,.18);color:#7dd3fc}
 <div class="pd3-card <?= $cardCls ?>" data-name="<?= e(mb_strtolower($p['name'].' '.$p['sku'])) ?>" data-dispname="<?= e($p['name']) ?>" data-sku="<?= e($p['sku']) ?>" data-category="<?= e($p['category']) ?>" data-stock="<?= $stockFilter ?>" data-profit="<?= $profitFilter ?>" data-dead="<?= $deadStock?'1':'0' ?>" data-aging="<?= $agingFlag?'1':'0' ?>" data-onhand="<?= (int)$st ?>" data-courier="<?= (int)$sp['out'] ?>" data-hh="<?= (int)$sp['hh'] ?>" data-dx="<?= (int)$sp['dx'] ?>" data-reserved="<?= (int)$sp['res'] ?>" data-value="<?= round($stockValue,2) ?>" data-sold="<?= (int)$a['sold'] ?>" data-profitval="<?= round($prof,2) ?>" data-roas="<?= $roas!==null?$roas:'' ?>" data-age="<?= $ageDays ?>" data-cover="<?= $coverDays ?>" data-retrate="<?= $retRate ?>" data-highrto="<?= $highRto?'1':'0' ?>">
   <input type="checkbox" class="pd3-chk pd3-sel" value="<?= (int)$p['id'] ?>">
   <div class="pd3-imgband<?= $p['image']?' has-photo':'' ?>" style="<?= $p['image']?'':'background:linear-gradient(135deg,'.$hueBg[0].','.$hueBg[1].')' ?>">
-    <?php if($p['image']): ?><img src="<?= e($p['image']) ?>" alt="<?= e($p['name']) ?>" loading="lazy">
+    <?php if($p['image']): ?><img src="<?= e(img_thumb($p['image'], 320)) ?>" alt="<?= e($p['name']) ?>" loading="lazy" decoding="async" width="320" height="130">
     <?php else: ?><?= e($initial) ?><?php endif; ?>
     <?php if($bestMarginPid===(int)$p['id'] || ($worstReturnPid===(int)$p['id'] && $worstReturnVal>0)): ?>
     <div class="flags">

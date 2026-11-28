@@ -232,6 +232,53 @@ function handle_image_field_upload($fieldKey, $subdir) {
   return $rel;
 }
 
+/* Small thumbnail for an uploaded image, for lists and cards. Product photos are
+   uploaded as full-size PNGs (often 1–4 MB); showing those in a 130px card is what
+   made the Products page slow. This makes a $w-px-wide WebP (PNG if the server has
+   no WebP support) next to the original under …/thumbs/, once, and reuses it after.
+   Thumbnails are created lazily, at most 8 per page load so a first visit never
+   times out; until one exists, the original is returned. No GD → original. */
+/* uploads/ is excluded from the git deploy, so its .htaccess can't ship through git —
+   append long browser caching for images to it once, from here. Uploaded files get
+   random names (a new photo = a new file), so caching them for a year is safe. */
+function upload_cache_rules() {
+  static $done = false; if ($done) return; $done = true;
+  $f = __DIR__ . '/uploads/.htaccess';
+  $cur = is_file($f) ? (string)@file_get_contents($f) : '';
+  if (strpos($cur, '# erp-image-cache') !== false) return;
+  @file_put_contents($f, rtrim($cur) . "\n\n# erp-image-cache — uploaded images never change under the same name\n"
+    . "<IfModule mod_expires.c>\n  ExpiresActive On\n  ExpiresByType image/png \"access plus 1 year\"\n  ExpiresByType image/webp \"access plus 1 year\"\n  ExpiresByType image/jpeg \"access plus 1 year\"\n</IfModule>\n"
+    . "<IfModule mod_headers.c>\n  <FilesMatch \"\\.(png|webp|jpe?g|gif)$\">\n    Header set Cache-Control \"public, max-age=31536000, immutable\"\n  </FilesMatch>\n</IfModule>\n");
+}
+function img_thumb($rel, $w = 320) {
+  $rel = (string)$rel;
+  if ($rel === '' || strpos($rel, '..') !== false || strpos($rel, 'uploads/') !== 0) return $rel;
+  $src = __DIR__ . '/' . $rel;
+  if (!is_file($src)) return $rel;
+  $webp = function_exists('imagewebp');
+  $thumbRel = dirname($rel) . '/thumbs/' . pathinfo($rel, PATHINFO_FILENAME) . '-' . (int)$w . ($webp ? '.webp' : '.png');
+  $dst = __DIR__ . '/' . $thumbRel;
+  upload_cache_rules();
+  if (is_file($dst) && filemtime($dst) >= filemtime($src)) return $thumbRel;
+  static $made = 0;
+  if ($made >= 8 || !function_exists('imagecreatefromstring')) return $rel;
+  $made++;
+  try {
+    $im = @imagecreatefromstring((string)@file_get_contents($src));
+    if (!$im) return $rel;
+    $sw = imagesx($im); $sh = imagesy($im);
+    $tw = min((int)$w, $sw); $th = max(1, (int)round($sh * $tw / $sw));
+    $t = imagecreatetruecolor($tw, $th);
+    imagealphablending($t, false); imagesavealpha($t, true);
+    imagefill($t, 0, 0, imagecolorallocatealpha($t, 0, 0, 0, 127));
+    imagecopyresampled($t, $im, 0, 0, 0, 0, $tw, $th, $sw, $sh);
+    if (!is_dir(dirname($dst))) @mkdir(dirname($dst), 0755, true);
+    $ok = $webp ? @imagewebp($t, $dst, 82) : @imagepng($t, $dst, 8);
+    imagedestroy($im); imagedestroy($t);
+    return $ok ? $thumbRel : $rel;
+  } catch (Throwable $e) { return $rel; }
+}
+
 function handle_crud($name) {
   if ($_SERVER['REQUEST_METHOD'] !== 'POST') return;
   $def = entity_def($name); if (!$def) return;

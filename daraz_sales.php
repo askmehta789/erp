@@ -191,17 +191,93 @@ echo delivery_disabled_banner('daraz.php');
 echo daraz_shared_css();
 ?>
 <style>
-.dzs-bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:0 18px 12px}
-.dzs-bar .ncm-search{flex:1;min-width:200px;max-width:300px;border-radius:999px;padding:8px 14px}
-.dzs-bar select{border-radius:999px;padding:8px 12px;font-size:12.5px;border:1px solid rgba(148,163,184,.35);max-width:220px}
-.dz-tog{padding:6px 12px;border-radius:999px;font-size:12px;font-weight:700;cursor:pointer;border:1px dashed rgba(148,163,184,.6);background:transparent;color:var(--ink)}
-.dz-tog.on{border-style:solid;border-color:#f85606;background:rgba(248,86,6,.12);color:#c2410c}
-body.dark .dz-tog.on{color:#fdba74}
-.dzs-sum{margin-left:auto;font-size:12.5px;color:var(--muted)}
 .dzs-bulk{display:none;gap:8px;align-items:center;flex-wrap:wrap;margin:0 18px 12px;padding:10px 14px;border-radius:14px;background:rgba(248,86,6,.08);border:1px solid rgba(248,86,6,.25)}
 .dzs-bulk select,.dzs-bulk input{border-radius:999px;padding:6px 10px;font-size:12.5px;border:1px solid rgba(148,163,184,.35)}
-.dzs-fee{font-size:11.5px;padding:5px 7px;border-radius:8px;border:1px solid rgba(148,163,184,.4);width:76px;background:rgba(255,255,255,.75)}
-body.dark .dzs-fee{background:rgba(2,6,23,.5);color:var(--ink);border-color:rgba(148,163,184,.25)}
+/* ---- toolbar ---- */
+.dzt-head{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:18px 20px 14px}
+.dzt-title{display:flex;align-items:center;gap:10px}
+.dzt-title h2{margin:0;font-size:15px;font-weight:800;letter-spacing:-.01em;color:var(--ink);text-transform:none}
+.dzt-count{font-size:11.5px;font-weight:700;color:var(--muted);background:var(--surface-2);border:1px solid var(--border);border-radius:99px;padding:2px 9px}
+.dzt-count:empty{display:none}
+.dzt-actions{display:flex;gap:8px;flex-wrap:wrap}
+.dzt-btn{display:inline-flex;align-items:center;gap:7px;height:36px;padding:0 14px;border-radius:10px;border:1px solid var(--border);background:var(--surface);color:var(--ink);font-size:12.5px;font-weight:650;cursor:pointer;transition:all .15s}
+.dzt-btn svg{color:var(--muted)}
+.dzt-btn:hover{border-color:var(--muted-2);background:var(--surface-2)}
+.dzt-filters{display:flex;gap:8px;flex-wrap:wrap;padding:0 20px 14px}
+.dzt-search{flex:1 1 240px;max-width:340px;display:flex;align-items:center;gap:8px;height:38px;padding:0 12px;border-radius:10px;border:1px solid var(--border);background:var(--surface);color:var(--muted);cursor:text}
+.dzt-search:focus-within,.dzt-sel:focus-within{border-color:#f85606;box-shadow:0 0 0 3px rgba(248,86,6,.12)}
+.dzt-search input{flex:1;min-width:0;border:0 !important;outline:0;background:transparent !important;box-shadow:none !important;padding:0 !important;height:auto;font-size:13px;color:var(--ink)}
+.dzt-sel{position:relative;display:inline-flex;height:38px;border-radius:10px;border:1px solid var(--border);background:var(--surface)}
+.dzt-sel:after{content:'';position:absolute;right:13px;top:50%;width:6px;height:6px;margin-top:-5px;border-right:2px solid var(--muted);border-bottom:2px solid var(--muted);transform:rotate(45deg);pointer-events:none}
+.dzt-sel select{appearance:none;-webkit-appearance:none;border:0 !important;background:transparent !important;box-shadow:none !important;outline:0;height:100%;padding:0 34px 0 12px !important;font-size:12.5px;font-weight:600;color:var(--ink);cursor:pointer;max-width:220px;border-radius:10px}
+.dzt-sel select option{color:#0f172a;background:#fff}
+.dzt-chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding:12px 20px;border-top:1px solid var(--border);border-bottom:1px solid var(--border);background:var(--surface-2)}
+.dzt-lbl{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-right:4px}
+.dz-tog{display:inline-flex;align-items:center;gap:7px;height:30px;padding:0 12px;border-radius:99px;font-size:12px;font-weight:650;cursor:pointer;border:1px solid var(--border);background:var(--surface);color:var(--ink);transition:all .15s}
+.dz-tog i{width:7px;height:7px;border-radius:99px;background:var(--d)}
+.dz-tog:hover{border-color:var(--muted-2)}
+.dz-tog.on{border-color:#f85606;background:rgba(248,86,6,.1);color:#c2410c}
+body.dark .dz-tog.on{color:#fdba74}
+.dzt-clear{border:0;background:transparent;color:var(--muted);font-size:12px;font-weight:650;cursor:pointer;padding:0 6px;height:30px}
+.dzt-clear:hover{color:var(--ink);text-decoration:underline}
+.dzs-sum{margin-left:auto;display:flex;gap:14px;font-size:12px;color:var(--muted)}
+.dzs-sum b{color:var(--ink);font-variant-numeric:tabular-nums}
+/* ---- status menu ---- */
+.dzc-sel select{display:none}
+.dzc-selbtn{border:0;background:transparent;color:inherit;font:inherit;padding:0;height:100%;cursor:pointer;outline:0}
+.dzc-sel:focus-within{box-shadow:0 0 0 3px color-mix(in srgb,var(--c) 22%,transparent)}
+.dzc-menu{position:fixed;z-index:9999;min-width:168px;padding:6px;border-radius:12px;background:var(--surface);border:1px solid var(--border);box-shadow:0 14px 34px rgba(15,23,42,.18);display:flex;flex-direction:column;gap:2px}
+.dzc-mi{display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;border:0;border-radius:8px;background:transparent;color:var(--ink);font-size:12.5px;font-weight:600;text-align:left;cursor:pointer;outline:0}
+.dzc-mi i{width:8px;height:8px;border-radius:99px;background:var(--c,#64748b)}
+.dzc-mi:hover,.dzc-mi:focus{background:var(--surface-2)}
+.dzc-mi.on{font-weight:800}
+.dzc-mi.on:after{content:'';margin-left:auto;width:9px;height:5px;border-left:2px solid #f85606;border-bottom:2px solid #f85606;transform:rotate(-45deg) translateY(-2px)}
+.dzc-mi.st-pending,.dzc-mi.st-processing{--c:#64748b}.dzc-mi.st-shipped{--c:#d97706}.dzc-mi.st-delivered{--c:#0f9d63}
+.dzc-mi.st-returned,.dzc-mi.st-cancelled,.dzc-mi.st-exchanged{--c:#dc4437}
+body.dark .dzc-menu{box-shadow:0 14px 34px rgba(0,0,0,.5)}
+/* ---- row cells: fees · profit · status · actions ---- */
+.dzs-tbl td.dzc-fee,.dzs-tbl td.dzc-profit,.dzs-tbl td.dzc-status,.dzs-tbl td.dzc-acts{padding:14px 16px;vertical-align:top}
+.dzc-stack{display:flex;flex-direction:column;align-items:flex-end;gap:5px}
+.dzf{display:inline-flex;align-items:center;gap:6px;height:34px;padding:0 12px;border-radius:10px;border:1px solid var(--border);background:var(--surface);transition:border-color .15s,box-shadow .15s;cursor:text}
+.dzf:hover{border-color:var(--muted-2)}
+.dzf:focus-within{border-color:#f85606;box-shadow:0 0 0 3px rgba(248,86,6,.14)}
+.dzf-cur{font-size:11px;font-weight:700;color:var(--muted)}
+.dzf input.dzs-fee{width:62px;border:0 !important;outline:0;background:transparent !important;box-shadow:none !important;border-radius:0;height:auto;padding:0 !important;font-size:13px;font-weight:700;color:var(--ink);text-align:right;font-variant-numeric:tabular-nums;-moz-appearance:textfield;appearance:textfield}
+.dzf .dzs-fee::-webkit-outer-spin-button,.dzf .dzs-fee::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+.dzf .dzs-fee::placeholder{color:var(--muted-2);font-weight:500}
+.dzf-empty{border-style:dashed}
+.dzf-miss{border-color:rgba(245,158,11,.6);background:rgba(245,158,11,.07)}
+.dzf-real{border-color:rgba(15,157,99,.4);background:rgba(15,157,99,.06)}
+.dzf-tag{font-size:10.5px;font-weight:700;padding:1px 8px;border-radius:99px;line-height:16px}
+.dzf-t-real{color:#0f9d63;background:rgba(15,157,99,.1)}.dzf-t-miss{color:#b45309;background:rgba(245,158,11,.12)}.dzf-t-typed{color:var(--muted);background:var(--surface-2)}
+.dzf-ro{font-weight:700;font-variant-numeric:tabular-nums}
+.dzc-profit b{font-size:13.5px;font-weight:800;font-variant-numeric:tabular-nums;line-height:34px}
+.dzc-profit b.pos{color:var(--green)}.dzc-profit b.neg{color:var(--red)}
+.dzc-hint{font-size:10.5px;color:var(--muted);font-weight:600;margin-top:-6px}
+.dzc-stform{display:flex;align-items:center;gap:6px;margin:0}
+.dzc-sel{position:relative;display:inline-flex;align-items:center;height:34px;border-radius:10px;padding:0 30px 0 26px;font-size:12px;font-weight:700;--c:#64748b;background:color-mix(in srgb,var(--c) 11%,transparent);color:var(--c);border:1px solid color-mix(in srgb,var(--c) 28%,transparent)}
+.dzc-sel:before{content:'';position:absolute;left:11px;top:50%;width:7px;height:7px;margin-top:-3.5px;border-radius:99px;background:var(--c)}
+.dzc-sel:after{content:'';position:absolute;right:12px;top:50%;width:6px;height:6px;margin-top:-5px;border-right:2px solid currentColor;border-bottom:2px solid currentColor;transform:rotate(45deg);opacity:.7;pointer-events:none}
+.dzc-sel.ro{padding-right:12px}.dzc-sel.ro:after{display:none}
+.dzc-sel select{appearance:none;-webkit-appearance:none;border:0 !important;background:transparent !important;box-shadow:none !important;color:inherit;font:inherit;padding:0 !important;height:100%;cursor:pointer;outline:0}
+.dzc-sel select option{color:#0f172a;background:#fff}
+.dzc-sel.st-pending,.dzc-sel.st-processing{--c:#64748b}.dzc-sel.st-shipped{--c:#d97706}.dzc-sel.st-delivered{--c:#0f9d63}
+.dzc-sel.st-returned,.dzc-sel.st-cancelled,.dzc-sel.st-exchanged{--c:#dc4437}
+body.dark .dzc-sel.st-pending,body.dark .dzc-sel.st-processing{--c:#94a3b8}body.dark .dzc-sel.st-delivered{--c:#34d399}body.dark .dzc-sel.st-shipped{--c:#fbbf24}
+body.dark .dzc-sel.st-returned,body.dark .dzc-sel.st-cancelled,body.dark .dzc-sel.st-exchanged{--c:#f87171}
+.dzc-save{display:inline-flex;align-items:center;gap:5px;height:34px;padding:0 10px;border-radius:10px;border:1px solid var(--border);background:var(--surface);color:var(--muted);font-size:12px;font-weight:700;cursor:pointer;transition:all .15s}
+.dzc-save span{display:none}
+.dzc-save:hover{color:var(--ink);border-color:var(--muted-2)}
+.dzc-save.dirty{background:#f85606;border-color:#f85606;color:#fff;box-shadow:0 4px 12px rgba(248,86,6,.28)}
+.dzc-save.dirty span{display:inline}
+.dzc-actrow{display:flex;align-items:center;gap:6px;justify-content:flex-end}
+.dzc-ib{width:34px;height:34px;display:grid;place-items:center;border-radius:10px;border:1px solid var(--border);background:var(--surface);color:var(--muted);cursor:pointer;padding:0;transition:all .15s}
+.dzc-ib:hover{color:var(--ink);border-color:var(--muted-2);background:var(--surface-2)}
+.dzc-ib.del:hover{color:#dc4437;border-color:rgba(220,68,55,.4);background:rgba(220,68,55,.07)}
+.dzc-link{display:inline-flex;align-items:center;gap:6px;height:34px;padding:0 12px;border-radius:10px;border:1px solid rgba(248,86,6,.35);background:rgba(248,86,6,.08);color:#c2410c;font-size:12px;font-weight:700;cursor:pointer}
+.dzc-link:hover{background:rgba(248,86,6,.14)}
+body.dark .dzc-link{color:#fdba74}
+body.dark .dzf-t-miss{color:#fbbf24}body.dark .dzf-t-real{color:#34d399}
 .dzs-tbl td{vertical-align:top}
 .dzs-more{text-align:center;padding:12px}
 </style>
@@ -221,35 +297,36 @@ body.dark .dzs-fee{background:rgba(2,6,23,.5);color:var(--ink);border-color:rgba
 <?= daraz_range_bar($R, 'daraz_sales.php?view=list') ?>
 <?php if($fl=flash()) echo '<div class="flash">'.e($fl).'</div>'; ?>
 
-<div class="panel" style="margin-top:16px">
-  <div class="panel-head" style="flex-wrap:wrap;gap:10px">
-    <h2>🧾 Daraz orders <span id="dzsShowing" class="muted" style="font-size:12px;font-weight:600"></span></h2>
-    <div style="display:flex;gap:6px;flex-wrap:wrap">
-      <button type="button" class="btn btn-sm" onclick="dzsRecheckShown()" title="Get the latest status and Daraz charges for every linked order shown below">🔄 Sync shown with Daraz</button>
-      <?php if ($perm['edit']): ?><button type="button" class="btn btn-sm" onclick="dzlResyncAll()" title="Check EVERY linked Daraz order (not just the ones shown) and sync status, price and charges where they differ">🔁 Re-sync ALL Daraz orders</button><?php endif; ?>
-      <button type="button" class="btn btn-sm" onclick="dzsExport()">⬇ Export CSV</button>
+<div class="panel dzt-panel" style="margin-top:16px">
+  <div class="dzt-head">
+    <div class="dzt-title"><h2>Daraz orders</h2><span id="dzsShowing" class="dzt-count"></span></div>
+    <div class="dzt-actions">
+      <button type="button" class="dzt-btn" onclick="dzsRecheckShown()" title="Get the latest status and Daraz charges for every linked order shown below"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 0 0-14.9-3.9L4 8.5M4 4v4.5h4.5M4 13a8 8 0 0 0 14.9 3.9l1.1-1.4M20 20v-4.5h-4.5"/></svg>Sync shown</button>
+      <?php if ($perm['edit']): ?><button type="button" class="dzt-btn" onclick="dzlResyncAll()" title="Check EVERY linked Daraz order (not just the ones shown) and sync status, price and charges where they differ"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15.5-6.2L21 8M21 3v5h-5M21 12a9 9 0 0 1-15.5 6.2L3 16M3 21v-5h5"/></svg>Re-sync all</button><?php endif; ?>
+      <button type="button" class="dzt-btn" onclick="dzsExport()" title="Download the orders shown as a CSV file"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/></svg>Export CSV</button>
     </div>
   </div>
-  <div class="dzs-bar">
-    <input id="dzsSearch" class="ncm-search" placeholder="🔍 Order id, customer, phone, product…" oninput="dzsFilter()">
-    <select id="dzsProd" onchange="dzsFilter()" aria-label="Product"><option value="">All products</option>
-      <?php foreach ($prodOpts as $pl => $pc): ?><option value="<?= e($pl) ?>"><?= e($pl) ?> (<?= $pc ?>)</option><?php endforeach; ?></select>
-    <select id="dzsStatus" onchange="dzsFilter()" aria-label="Status"><option value="">All status</option>
+  <div class="dzt-filters">
+    <label class="dzt-search"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg><input id="dzsSearch" placeholder="Order id, customer, phone, product…" oninput="dzsFilter()"></label>
+    <span class="dzt-sel"><select id="dzsProd" onchange="dzsFilter()" aria-label="Product"><option value="">All products</option>
+      <?php foreach ($prodOpts as $pl => $pc): ?><option value="<?= e($pl) ?>"><?= e($pl) ?> (<?= $pc ?>)</option><?php endforeach; ?></select></span>
+    <span class="dzt-sel"><select id="dzsStatus" onchange="dzsFilter()" aria-label="Status"><option value="">All status</option>
       <option value="pack">To pack (pending + processing)</option>
-      <?php foreach ($STATUSES as $s): ?><option value="<?= $s ?>"><?= ucfirst($s) ?></option><?php endforeach; ?></select>
-    <select id="dzsPay" onchange="dzsFilter()" aria-label="Payment"><option value="">COD + prepaid</option><option value="cod">COD only</option><option value="prepaid">Prepaid only</option></select>
-    <select id="dzsSort" onchange="dzsSort()" aria-label="Sort">
+      <?php foreach ($STATUSES as $s): ?><option value="<?= $s ?>"><?= ucfirst($s) ?></option><?php endforeach; ?></select></span>
+    <span class="dzt-sel"><select id="dzsPay" onchange="dzsFilter()" aria-label="Payment"><option value="">COD + prepaid</option><option value="cod">COD only</option><option value="prepaid">Prepaid only</option></select></span>
+    <span class="dzt-sel"><select id="dzsSort" onchange="dzsSort()" aria-label="Sort">
       <option value="new">Newest first</option><option value="old">Oldest first</option>
       <option value="profit_hi">Highest profit</option><option value="profit_lo">Lowest profit / loss</option><option value="val_hi">Highest order value</option>
-    </select>
+    </select></span>
   </div>
-  <div class="dzs-bar" style="padding-top:0">
-    <button type="button" class="dz-tog" data-k="loss" onclick="dzsTog(this)">🔻 Loss only</button>
-    <button type="button" class="dz-tog" data-k="nofee" onclick="dzsTog(this)" title="Delivered orders with no Daraz fees yet">💸 Delivered, no fees</button>
-    <button type="button" class="dz-tog" data-k="warn" onclick="dzsTog(this)">⚠ Unmapped SKU</button>
-    <button type="button" class="dz-tog" data-k="unlinked" onclick="dzsTog(this)" title="Booked in the ERP but no Daraz order number linked yet">🔗 Not linked</button>
-    <button type="button" class="dz-tog" data-k="unchk" onclick="dzsTog(this)" title="Linked but never synced with Daraz">❔ Not synced yet</button>
-    <a href="#" class="muted" style="font-size:12px;text-decoration:none" onclick="dzsClear();return false">✕ Clear filters</a>
+  <div class="dzt-chips">
+    <span class="dzt-lbl">Quick filters</span>
+    <button type="button" class="dz-tog" data-k="loss" onclick="dzsTog(this)" title="Orders losing money"><i style="--d:#dc4437"></i>Loss only</button>
+    <button type="button" class="dz-tog" data-k="nofee" onclick="dzsTog(this)" title="Delivered orders with no Daraz fees yet"><i style="--d:#f59e0b"></i>Delivered, no fees</button>
+    <button type="button" class="dz-tog" data-k="warn" onclick="dzsTog(this)" title="Daraz SKU not matched to a product"><i style="--d:#e0851b"></i>Unmapped SKU</button>
+    <button type="button" class="dz-tog" data-k="unlinked" onclick="dzsTog(this)" title="Booked in the ERP but no Daraz order number linked yet"><i style="--d:#6366f1"></i>Not linked</button>
+    <button type="button" class="dz-tog" data-k="unchk" onclick="dzsTog(this)" title="Linked but never synced with Daraz"><i style="--d:#94a3b8"></i>Not synced yet</button>
+    <button type="button" class="dzt-clear" onclick="dzsClear()">Clear</button>
     <span class="dzs-sum" id="dzsSum"></span>
   </div>
 
@@ -269,7 +346,7 @@ body.dark .dzs-fee{background:rgba(2,6,23,.5);color:var(--ink);border-color:rgba
   <div class="table-wrap"><table class="tbl led-tbl dzs-tbl" id="dzsTbl"><thead><tr>
     <th style="width:28px"><input type="checkbox" id="dzsAll" onclick="dzsSelAll(this.checked)" aria-label="Select all shown"></th>
     <th>Daraz order</th><th>Customer</th><th>Product</th><th style="text-align:right">Price (you earn)</th>
-    <th style="text-align:right">Daraz fees</th><th style="text-align:right">Profit</th><th>Status</th><th></th>
+    <th style="text-align:right">Daraz fees</th><th style="text-align:right">Profit</th><th>Status</th><th style="text-align:right">Actions</th>
   </tr></thead><tbody>
   <?php foreach ($orders as $o):
     $isDel = $o['status']==='delivered';
@@ -308,26 +385,36 @@ body.dark .dzs-fee{background:rgba(2,6,23,.5);color:var(--ink);border-color:rgba
       <td style="text-align:right"><?= money((float)$o['sell_price']) ?>
         <?php if ($o['daraz_list_price'] !== null && ((float)$o['daraz_seller_discount'] > 0 || (float)$o['daraz_platform_voucher'] > 0)): ?><div class="dz-sub" title="Daraz list price and vouchers on this line">list <?= money($o['daraz_list_price']) ?><?= (float)$o['daraz_seller_discount'] > 0 ? ' · your voucher −'.money($o['daraz_seller_discount']) : '' ?><?= (float)$o['daraz_platform_voucher'] > 0 ? ' · Daraz voucher −'.money($o['daraz_platform_voucher']) : '' ?></div><?php endif; ?>
         <div class="dz-sub">cost <?= money((float)$o['cost_price']) ?></div></td>
-      <td style="text-align:right">
-        <?php if ($perm['edit']): ?><input form="f<?= (int)$o['id'] ?>" type="number" name="fees" class="dzs-fee" step="any" min="0" value="<?= (float)$o['delivery_charge']>0 ? e((float)$o['delivery_charge']) : '' ?>" placeholder="fees"><?php else: ?><?= money($o['delivery_charge']) ?><?php endif; ?>
-        <div class="dz-sub"><?= $src==='finance' ? '<span class="dz-badge dz-b-fin">real</span>' : ($src==='manual' ? 'typed' : '') ?></div></td>
-      <td style="text-align:right;font-weight:800;color:<?= $rowProfit>=0?'var(--green)':'var(--red)' ?>"><?= ($isDel||$closed) ? money($prof) : '≈ '.money($pot) ?></td>
-      <td>
+      <?php $feeV = (float)$o['delivery_charge']; $feeMiss = $isDel && $feeV <= 0 && $src !== 'finance';
+            $feeSt = $src === 'finance' ? 'real' : ($feeMiss ? 'miss' : ($feeV > 0 ? 'typed' : 'empty')); ?>
+      <td class="dzc-fee">
+        <div class="dzc-stack">
+        <?php if ($perm['edit']): ?><label class="dzf dzf-<?= $feeSt ?>" title="<?= $feeSt==='real' ? 'Real Daraz charges from the finance report' : ($feeSt==='miss' ? 'Delivered but no Daraz charges yet — profit looks too high' : 'Daraz charges for this order') ?>"><span class="dzf-cur">Rs</span><input form="f<?= (int)$o['id'] ?>" type="number" name="fees" class="dzs-fee" step="any" min="0" inputmode="decimal" value="<?= $feeV>0 ? e(rtrim(rtrim(number_format($feeV,2,'.',''),'0'),'.')) : '' ?>" placeholder="—" oninput="dzsDirty(<?= (int)$o['id'] ?>)"></label>
+        <?php else: ?><span class="dzf-ro"><?= money($feeV) ?></span><?php endif; ?>
+        <?php if ($feeSt !== 'empty'): ?><span class="dzf-tag dzf-t-<?= $feeSt ?>"><?= ['real'=>'✓ from Daraz','miss'=>'● missing','typed'=>'typed'][$feeSt] ?></span><?php endif; ?>
+        </div></td>
+      <td class="dzc-profit">
+        <div class="dzc-stack"><b class="<?= $rowProfit>=0 ? 'pos' : 'neg' ?>"><?= ($isDel||$closed) ? money($prof) : money($pot) ?></b>
+        <?php if (!($isDel||$closed)): ?><span class="dzc-hint">expected</span><?php endif; ?></div></td>
+      <td class="dzc-status">
         <?php if ($perm['edit']): ?>
-        <form method="post" id="f<?= (int)$o['id'] ?>" style="display:flex;gap:5px;align-items:center;flex-wrap:nowrap">
+        <form method="post" id="f<?= (int)$o['id'] ?>" class="dzc-stform">
           <input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="set_row"><?= $R['keep'] ?>
           <input type="hidden" name="id" value="<?= (int)$o['id'] ?>">
-          <select name="status" class="dz-status st-<?= e($o['status']) ?>" onchange="this.className='dz-status st-'+this.value">
+          <span class="dzc-sel st-<?= e($o['status']) ?>"><select name="status" aria-hidden="true" tabindex="-1">
             <?php foreach ($STATUSES as $st): ?><option value="<?= $st ?>"<?= $o['status']===$st?' selected':'' ?>><?= ucfirst($st) ?></option><?php endforeach; ?>
-          </select>
-          <button class="btn btn-sm" title="Save status and fees">💾</button>
+          </select><button type="button" class="dzc-selbtn" aria-haspopup="listbox" aria-label="Status: <?= e(ucfirst($o['status'])) ?>" onclick="dzsStMenu(this,<?= (int)$o['id'] ?>)"><?= e(ucfirst($o['status'])) ?></button></span>
+          <button class="dzc-save" id="sv<?= (int)$o['id'] ?>" title="Save status and fees" aria-label="Save"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg><span>Save</span></button>
         </form>
-        <?php else: ?><span class="dz-status st-<?= e($o['status']) ?>"><?= ucfirst(e($o['status'])) ?></span><?php endif; ?>
+        <?php else: ?><span class="dzc-sel st-<?= e($o['status']) ?> ro"><?= ucfirst(e($o['status'])) ?></span><?php endif; ?>
       </td>
-      <td style="white-space:nowrap"><?php if ($perm['edit']): ?><button type="button" class="btn btn-sm" title="Edit this order" onclick="dzoOpen(this)" data-rec="<?= e(json_encode(['id'=>(int)$o['id'],'code'=>$o['code'],'order_date'=>$o['order_date'],'daraz_order_id'=>$o['daraz_order_id'],'customer'=>$o['customer'],'phone'=>$o['phone'],'address'=>$o['address'],'product_id'=>$o['product_id'],'item_name'=>$o['daraz_item_name'] ?? '','qty'=>(int)$o['qty'],'sell_price'=>(float)$o['sell_price'],'fees'=>(float)$o['delivery_charge'],'payment_type'=>$o['payment_type'],'status'=>$o['status'],'remarks'=>$o['remarks']])) ?>">✏</button><?php endif; ?>
-        <?php if ($perm['delete']): ?><form method="post" style="display:inline" onsubmit="return confirm('Delete order <?= e($o['code']) ?>? Stock is returned if it was delivered.')"><input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="delete_order"><?= $R['keep'] ?><input type="hidden" name="id" value="<?= (int)$o['id'] ?>"><button class="btn btn-sm" title="Delete this order">🗑</button></form><?php endif; ?>
-        <?php if ($dzOid): ?><button type="button" class="btn btn-sm" title="Sync status and charges from Daraz" onclick="dzlOpen('<?= e($dzOid) ?>')">🔄</button><?php if ($perm['edit'] && $o['daraz_order_id']): ?> <a href="#" class="muted" style="font-size:11px" title="Remove the Daraz link" onclick="dzlUnlink(<?= (int)$o['id'] ?>,'<?= e($o['code']) ?>');return false">unlink</a><?php endif; ?>
-        <?php elseif ($perm['edit']): ?><button type="button" class="btn btn-sm btn-primary" title="Link this order to its Daraz order number" onclick="dzlOpenFor(<?= (int)$o['id'] ?>,'<?= e($o['code']) ?>',<?= e(json_encode(($o['customer'] ?: '').' · '.($o['phone'] ?: ''))) ?>)">🔗 Link</button><?php endif; ?></td>
+      <td class="dzc-acts"><div class="dzc-actrow">
+        <?php if ($dzOid): ?><button type="button" class="dzc-ib" title="Sync status and charges from Daraz" aria-label="Sync from Daraz" onclick="dzlOpen('<?= e($dzOid) ?>')"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 0 0-14.9-3.9L4 8.5M4 4v4.5h4.5M4 13a8 8 0 0 0 14.9 3.9l1.1-1.4M20 20v-4.5h-4.5"/></svg></button>
+        <?php elseif ($perm['edit']): ?><button type="button" class="dzc-link" title="Link this order to its Daraz order number" onclick="dzlOpenFor(<?= (int)$o['id'] ?>,'<?= e($o['code']) ?>',<?= e(json_encode(($o['customer'] ?: '').' · '.($o['phone'] ?: ''))) ?>)"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1 1M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1-1"/></svg>Link</button><?php endif; ?>
+        <?php if ($perm['edit']): ?><button type="button" class="dzc-ib" title="Edit this order" aria-label="Edit" onclick="dzoOpen(this)" data-rec="<?= e(json_encode(['id'=>(int)$o['id'],'code'=>$o['code'],'order_date'=>$o['order_date'],'daraz_order_id'=>$o['daraz_order_id'],'customer'=>$o['customer'],'phone'=>$o['phone'],'address'=>$o['address'],'product_id'=>$o['product_id'],'item_name'=>$o['daraz_item_name'] ?? '','qty'=>(int)$o['qty'],'sell_price'=>(float)$o['sell_price'],'fees'=>(float)$o['delivery_charge'],'payment_type'=>$o['payment_type'],'status'=>$o['status'],'remarks'=>$o['remarks']])) ?>"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16v4zM13.5 6.5l4 4"/></svg></button><?php endif; ?>
+        <?php if ($dzOid && $perm['edit'] && $o['daraz_order_id']): ?><button type="button" class="dzc-ib" title="Remove the Daraz link" aria-label="Unlink" onclick="dzlUnlink(<?= (int)$o['id'] ?>,'<?= e($o['code']) ?>')"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 14.5l5-5M11 6.5l1-1a4.5 4.5 0 0 1 6.4 6.4l-1 1M13 17.5l-1 1a4.5 4.5 0 0 1-6.4-6.4l1-1M3 3l18 18"/></svg></button><?php endif; ?>
+        <?php if ($perm['delete']): ?><form method="post" style="display:contents" onsubmit="return confirm('Delete order <?= e($o['code']) ?>? Stock is returned if it was delivered.')"><input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="delete_order"><?= $R['keep'] ?><input type="hidden" name="id" value="<?= (int)$o['id'] ?>"><button class="dzc-ib del" title="Delete this order" aria-label="Delete"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg></button></form><?php endif; ?>
+      </div></td>
     </tr>
   <?php endforeach; if (!$orders): ?>
     <tr><td colspan="9"><div class="empty" style="padding:30px">No Daraz orders in this period. Book Daraz orders in <a href="sales.php">Sales</a> (courier Daraz), then link each one to its Daraz order number here.</div></td></tr>
@@ -586,9 +673,9 @@ function dzsFilter(keepPage){
     var vis=ok&&n<=limit;tr.style.display=vis?'':'none';if(vis)shown++;
     if(!ok){var c=tr.querySelector('.dzs-sel');if(c)c.checked=false;}
   });
-  document.getElementById('dzsShowing').textContent='· '+n+' match'+(shown<n?' (showing '+shown+')':'');
+  document.getElementById('dzsShowing').textContent=n+(shown<n?' · showing '+shown:'');
   document.getElementById('dzsSum').innerHTML='';
-  var s=document.getElementById('dzsSum');s.textContent=n+' line'+(n===1?'':'s')+' · value '+dzsMoney(val)+' · profit ';
+  var s=document.getElementById('dzsSum');s.innerHTML='<span>'+n+' line'+(n===1?'':'s')+'</span><span>Value <b>'+dzsMoney(val)+'</b></span><span>Profit </span>';s=s.lastChild;
   var b=document.createElement('b');b.style.color=prof>=0?'var(--green)':'var(--red)';b.textContent=dzsMoney(prof);s.appendChild(b);
   document.getElementById('dzsMore').style.display=shown<n?'':'none';
   dzsSelChanged();
@@ -605,6 +692,36 @@ function dzsSort(){
   });
   rows.forEach(function(r){tb.appendChild(r);});dzsFilter(true);
 }
+function dzsDirty(id){var b=document.getElementById('sv'+id);if(b)b.classList.add('dirty');}
+/* status picker: a styled menu instead of the browser's plain dropdown; writes to the hidden <select> */
+var dzsMenuEl=null,dzsMenuFor=null;
+function dzsStClose(){if(dzsMenuEl){dzsMenuEl.remove();dzsMenuEl=null;dzsMenuFor=null;}}
+function dzsStMenu(btn,id){
+  if(dzsMenuFor===btn){dzsStClose();return;}
+  dzsStClose();
+  var sel=btn.parentNode.querySelector('select'),m=document.createElement('div');
+  m.className='dzc-menu';m.setAttribute('role','listbox');
+  [].forEach.call(sel.options,function(o){
+    var it=document.createElement('button');it.type='button';it.className='dzc-mi st-'+o.value+(o.value===sel.value?' on':'');
+    it.setAttribute('role','option');it.setAttribute('aria-selected',o.value===sel.value?'true':'false');
+    it.innerHTML='<i></i><span></span>';it.querySelector('span').textContent=o.text;
+    it.onclick=function(){sel.value=o.value;btn.parentNode.className='dzc-sel st-'+o.value;btn.textContent=o.text;btn.setAttribute('aria-label','Status: '+o.text);dzsDirty(id);dzsStClose();btn.focus();};
+    m.appendChild(it);
+  });
+  document.body.appendChild(m);
+  var r=btn.parentNode.getBoundingClientRect(),h=m.offsetHeight,below=window.innerHeight-r.bottom;
+  m.style.left=Math.max(8,Math.min(r.left,window.innerWidth-m.offsetWidth-8))+'px';
+  m.style.top=(below<h+12&&r.top>h+12?r.top-h-6:r.bottom+6)+'px';
+  dzsMenuEl=m;dzsMenuFor=btn;
+  (m.querySelector('.on')||m.firstChild).focus();
+}
+document.addEventListener('click',function(e){if(dzsMenuEl&&!dzsMenuEl.contains(e.target)&&e.target!==dzsMenuFor)dzsStClose();});
+document.addEventListener('keydown',function(e){
+  if(!dzsMenuEl)return;
+  if(e.key==='Escape'){var b=dzsMenuFor;dzsStClose();if(b)b.focus();}
+  if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();var a=document.activeElement,n=e.key==='ArrowDown'?((a&&a.nextSibling)||dzsMenuEl.firstChild):((a&&a.previousSibling)||dzsMenuEl.lastChild);if(n)n.focus();}
+});
+window.addEventListener('scroll',dzsStClose,true);window.addEventListener('resize',dzsStClose);
 function dzsSelIds(oids){return dzsRows().filter(function(tr){var c=tr.querySelector('.dzs-sel');return c&&c.checked;}).map(function(tr){return oids?tr.getAttribute('data-oid'):tr.getAttribute('data-id');}).filter(Boolean);}
 function dzsSelAll(on){dzsRows().forEach(function(tr){var c=tr.querySelector('.dzs-sel');if(c)c.checked=on&&tr.style.display!=='none';});var a=document.getElementById('dzsAll');if(a)a.checked=on;dzsSelChanged();}
 function dzsSelChanged(){var n=dzsSelIds(false).length,b=document.getElementById('dzsBulk');if(b){b.style.display=n?'flex':'none';document.getElementById('dzsSelN').textContent=n;}}

@@ -54,7 +54,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Sign in — <?= e($storeName) ?></title>
-<meta name="theme-color" content="#0f172a">
+<meta name="theme-color" content="#ffffff" id="lgTc">
+<script>try{if(localStorage.getItem("erp_dark")==="1"){document.documentElement.classList.add("dark");document.getElementById("lgTc").content="#0b1220";}}catch(e){}</script>
 <link rel="icon" type="image/png" sizes="32x32" href="assets/luprah-icon-32.png?v=<?= $v('luprah-icon-64.png') ?>">
 <link rel="icon" type="image/png" sizes="64x64" href="assets/luprah-icon-64.png?v=<?= $v('luprah-icon-64.png') ?>">
 <link rel="apple-touch-icon" sizes="180x180" href="assets/luprah-icon-180.png">
@@ -64,25 +65,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <style>
 *{box-sizing:border-box}html,body{height:100%;margin:0}
 :root{--ink:#0f172a;--muted:#64748b;--line:#e2e8f0;--bg:#f8fafc;--card:#fff;--brand:#f85606;--err-bg:#fef2f2;--err:#b91c1c}
-@media(prefers-color-scheme:dark){:root{--ink:#e8edf6;--muted:#8aa0bd;--line:#1e2a44;--bg:#0b1220;--card:#111a2e;--err-bg:#2a0a14;--err:#fca5a5}}
+:root{--side-bg:linear-gradient(150deg,#fff7f1 0%,#ffffff 55%,#f4f7fb 100%);--side-ink:#0f172a;--glow1:rgba(248,86,6,.16);--glow2:rgba(59,130,246,.1);--feat-bg:#fff;--feat-line:#eef1f6;--em:#f85606;--word-filter:none;--side-line:#eef1f6}
+html.dark{--ink:#e8edf6;--muted:#8aa0bd;--line:#1e2a44;--bg:#0b1220;--card:#111a2e;--err-bg:#2a0a14;--err:#fca5a5;--side-bg:linear-gradient(150deg,#0b1220 0%,#111c33 55%,#1e293b 100%);--side-ink:#fff;--glow1:rgba(248,86,6,.38);--glow2:rgba(59,130,246,.22);--feat-bg:rgba(255,255,255,.06);--feat-line:rgba(255,255,255,.08);--em:#ff8a4c;--word-filter:invert(1) brightness(2);--side-line:transparent}
 body{font-family:Inter,system-ui,'Segoe UI',Roboto,Arial,sans-serif;color:var(--ink);background:var(--bg);-webkit-font-smoothing:antialiased}
 .lg{min-height:100%;display:grid;grid-template-columns:1.05fr 1fr}
 /* brand side */
-.lg-side{position:relative;overflow:hidden;background:linear-gradient(150deg,#0b1220 0%,#111c33 55%,#1e293b 100%);color:#fff;padding:48px 56px;display:flex;flex-direction:column;justify-content:space-between}
-.lg-side:before{content:'';position:absolute;width:520px;height:520px;right:-180px;top:-200px;border-radius:50%;background:radial-gradient(circle,rgba(248,86,6,.38),transparent 68%)}
-.lg-side:after{content:'';position:absolute;width:420px;height:420px;left:-160px;bottom:-200px;border-radius:50%;background:radial-gradient(circle,rgba(59,130,246,.22),transparent 68%)}
+.lg-side{position:relative;overflow:hidden;background:var(--side-bg);color:var(--side-ink);border-right:1px solid var(--side-line);padding:48px 56px;display:flex;flex-direction:column;justify-content:space-between}
+.lg-side:before{content:'';position:absolute;width:520px;height:520px;right:-180px;top:-200px;border-radius:50%;background:radial-gradient(circle,var(--glow1),transparent 68%)}
+.lg-side:after{content:'';position:absolute;width:420px;height:420px;left:-160px;bottom:-200px;border-radius:50%;background:radial-gradient(circle,var(--glow2),transparent 68%)}
 .lg-side>*{position:relative;z-index:1}
 .lg-brand{display:flex;align-items:center;gap:14px}
-.lg-tile{width:52px;height:52px;border-radius:16px;background:#fff;display:grid;place-items:center;box-shadow:0 10px 24px rgba(0,0,0,.25)}
+.lg-tile{width:52px;height:52px;border-radius:16px;background:#fff;display:grid;place-items:center;box-shadow:0 10px 24px rgba(15,23,42,.14);border:1px solid var(--side-line)}
 .lg-tile img{width:38px;height:38px}
-.lg-word img{height:22px;display:block;filter:invert(1) brightness(2)}
+.lg-word img{height:22px;display:block;filter:var(--word-filter)}
 .lg-word small{display:block;font-family:Montserrat,Inter,sans-serif;font-size:10px;font-weight:500;letter-spacing:.34em;text-transform:uppercase;opacity:.6;margin-top:7px}
 .lg-hero h1{font-size:40px;line-height:1.12;font-weight:800;letter-spacing:-.025em;margin:0 0 14px;max-width:460px}
-.lg-hero h1 em{font-style:normal;color:#ff8a4c}
+.lg-hero h1 em{font-style:normal;color:var(--em)}
 .lg-hero p{font-size:15px;line-height:1.6;opacity:.7;margin:0;max-width:420px}
 .lg-feats{display:grid;gap:12px;margin-top:30px;max-width:420px}
-.lg-feat{display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:14px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.08);font-size:13.5px;font-weight:600}
-.lg-feat i{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;background:rgba(248,86,6,.16);color:#ff8a4c;flex:none}
+.lg-feat{display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:14px;background:var(--feat-bg);border:1px solid var(--feat-line);box-shadow:0 2px 8px rgba(15,23,42,.04);font-size:13.5px;font-weight:600}
+.lg-feat i{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;background:rgba(248,86,6,.12);color:var(--em);flex:none}
 .lg-foot{font-size:12px;opacity:.45}
 /* form side */
 .lg-main{display:flex;align-items:center;justify-content:center;padding:40px 24px}
@@ -107,20 +109,24 @@ body{font-family:Inter,system-ui,'Segoe UI',Roboto,Arial,sans-serif;color:var(--
 @keyframes lgs{to{transform:rotate(360deg)}}
 .lg-btn.busy .lg-spin{display:block}.lg-btn.busy .lg-arrow{display:none}
 .lg-note{display:flex;align-items:center;gap:8px;justify-content:center;color:var(--muted);font-size:12px;margin-top:22px}
+.lg-theme{position:fixed;top:calc(16px + env(safe-area-inset-top));right:16px;z-index:5;display:inline-flex;align-items:center;gap:8px;height:38px;padding:0 14px;border-radius:99px;border:1px solid var(--line);background:var(--card);color:var(--ink);font:inherit;font-size:12.5px;font-weight:650;cursor:pointer;box-shadow:0 4px 14px rgba(15,23,42,.08)}
+.lg-theme:hover{border-color:var(--muted)}
+.lg-theme .sun{display:none}html.dark .lg-theme .sun{display:block}html.dark .lg-theme .moon{display:none}
 /* phones: brand on top, form as a sheet */
 @media(max-width:860px){
-  .lg{grid-template-columns:1fr;background:linear-gradient(160deg,#0b1220,#1e293b)}
+  .lg{grid-template-columns:1fr;background:var(--side-bg)}
   .lg-side{display:none}
   .lg-main{align-items:stretch;padding:0;flex-direction:column}
-  .lg-mob{display:flex;flex-direction:column;align-items:center;gap:14px;padding:calc(48px + env(safe-area-inset-top)) 24px 34px;color:#fff;position:relative;overflow:hidden;text-align:center}
-  .lg-mob:before{content:'';position:absolute;width:360px;height:360px;right:-140px;top:-160px;border-radius:50%;background:radial-gradient(circle,rgba(248,86,6,.4),transparent 68%)}
+  .lg-mob{display:flex;flex-direction:column;align-items:center;gap:14px;padding:calc(48px + env(safe-area-inset-top)) 24px 34px;color:var(--side-ink);position:relative;overflow:hidden;text-align:center}
+  .lg-mob:before{content:'';position:absolute;width:360px;height:360px;right:-140px;top:-160px;border-radius:50%;background:radial-gradient(circle,var(--glow1),transparent 68%)}
   .lg-mob>*{position:relative}
   .lg-mob .lg-tile{width:64px;height:64px;border-radius:20px}.lg-mob .lg-tile img{width:46px;height:46px}
   .lg-mob .lg-word img{height:20px;margin:0 auto}
-  .lg-card{max-width:none;flex:1;background:var(--bg);border-radius:28px 28px 0 0;padding:30px 22px calc(28px + env(safe-area-inset-bottom))}
+  .lg-card{max-width:none;flex:1;background:var(--bg);box-shadow:0 -10px 30px rgba(15,23,42,.07);border-radius:28px 28px 0 0;padding:30px 22px calc(28px + env(safe-area-inset-bottom))}
 }
 </style></head>
 <body>
+<button type="button" class="lg-theme" id="lgTheme" aria-label="Switch light or dark theme"><svg class="moon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z"/></svg><svg class="sun" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><span id="lgThemeTxt">Dark</span></button>
 <div class="lg">
   <aside class="lg-side">
     <div class="lg-brand"><span class="lg-tile"><img src="assets/luprah-mark.png" alt=""></span>
@@ -162,6 +168,9 @@ body{font-family:Inter,system-ui,'Segoe UI',Roboto,Arial,sans-serif;color:var(--
 </div>
 <script>
 (function(){
+  var th=document.getElementById("lgTheme"),tt=document.getElementById("lgThemeTxt");
+  function thLabel(){tt.textContent=document.documentElement.classList.contains("dark")?"Light":"Dark";}thLabel();
+  th.onclick=function(){var d=document.documentElement.classList.toggle("dark");try{localStorage.setItem("erp_dark",d?"1":"0");}catch(e){}document.getElementById("lgTc").content=d?"#0b1220":"#ffffff";thLabel();};
   var p=document.getElementById('lgP'),eye=document.getElementById('lgEye'),caps=document.getElementById('lgCaps'),f=document.getElementById('lgForm'),b=document.getElementById('lgBtn');
   eye.onclick=function(){var show=p.type==='password';p.type=show?'text':'password';eye.setAttribute('aria-label',show?'Hide password':'Show password');eye.title=eye.getAttribute('aria-label');eye.style.color=show?'var(--brand)':'';p.focus();};
   function capsCheck(e){if(e.getModifierState)caps.style.display=e.getModifierState('CapsLock')?'block':'none';}

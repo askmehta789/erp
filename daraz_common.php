@@ -555,12 +555,11 @@ function daraz_tabs(string $current): string {
 }
 
 /* ---------- 7) LIVE SYNC (cron every 10–15 min, or "⟳ Sync now") ----------
-   a) imports new Daraz orders — only ones created after live sync was first switched on,
-      so the history staff booked by hand is never re-imported; a hand-booked order with
-      the same phone is linked instead of duplicated
-   b) re-checks open linked orders (status → stock, price, Daraz charges) — oldest-checked
-      first, each order at most once an hour; delivered ones keep being checked for 30 days
-      until Daraz's finance fees land */
+   Status sync ONLY for orders already in the ERP. New Daraz orders are never imported
+   here — staff filter them on Daraz and import them with Paste Import. Each run re-checks
+   imported orders that are still open (status → stock, price, Daraz charges), oldest-checked
+   first, each order at most once an hour; delivered ones keep being checked for 30 days
+   until Daraz's finance fees land. */
 function daraz_auto_enabled(): bool { return strtolower((string)setting('daraz_auto_sync','yes')) !== 'no'; }
 function daraz_auto_sync(int $maxCheck = 25): array {
   $log = [];
@@ -568,15 +567,7 @@ function daraz_auto_sync(int $maxCheck = 25): array {
   if (!(new Daraz())->connected()) return ['Daraz live sync skipped: Daraz API not connected.'];
   if (function_exists('set_time_limit')) @set_time_limit(240);
   daraz_ensure_cols();
-  $since = (string)setting('daraz_auto_since', '');
-  if ($since === '') { $since = date('Y-m-d H:i:s'); set_setting('daraz_auto_since', $since); }
-  $sum = ['at'=>date('Y-m-d H:i:s'), 'created'=>0, 'linked'=>0, 'checked'=>0, 'changed'=>0, 'errors'=>0, 'error'=>''];
-
-  try {
-    $r = daraz_sync_orders(5, $since);
-    $sum['created'] = (int)($r['created'] ?? 0); $sum['linked'] = (int)($r['linked'] ?? 0);
-    $log[] = "Daraz import: {$sum['created']} new line(s), {$sum['linked']} hand-booked order(s) linked".(!empty($r['unmatched']) ? ", {$r['unmatched']} unmatched SKU(s)" : '');
-  } catch (Exception $e) { $sum['errors']++; $sum['error'] = $e->getMessage(); $log[] = 'Daraz import error: '.$e->getMessage(); }
+  $sum = ['at'=>date('Y-m-d H:i:s'), 'checked'=>0, 'changed'=>0, 'errors'=>0, 'error'=>''];
 
   $dzId = daraz_courier_id();
   $open = rows("SELECT daraz_order_id, MIN(COALESCE(daraz_checked_at,'2000-01-01')) AS chk FROM orders

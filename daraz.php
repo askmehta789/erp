@@ -137,7 +137,7 @@ body.dark .dz-map-head h2{color:#fbbf24}
 <div class="ncm-hero">
   <div class="nh-left">
     <h1><img src="assets/daraz-icon.ico" alt="Daraz" style="height:28px;vertical-align:-6px;margin-right:6px"><span class="grad">Daraz Dashboard</span></h1>
-    <p>Today at a glance · new Daraz orders come in automatically, and status, price &amp; Daraz charges keep syncing on their own</p>
+    <p>Today at a glance · import Daraz orders with Paste Import — then their status, price &amp; Daraz charges keep syncing on their own</p>
     <div class="nh-status">
       <?php if ($darazConnected): ?><span class="live"><span class="d"></span> LIVE · Connected as <?= e($darazAccount) ?></span>
       <?php else: ?><span class="live off"><span class="d"></span> Not connected — <a href="settings.php">authorize in Settings → Channel / Daraz API</a></span><?php endif; ?>
@@ -147,12 +147,12 @@ body.dark .dz-map-head h2{color:#fbbf24}
       <?php elseif ($alAge === null): ?>
         <span class="live off" style="margin-left:6px" title="Runs from the cPanel cron job (Settings → Automation Setup)"><span class="d"></span> Auto sync: not run yet</span>
       <?php else: $mins = (int)floor($alAge / 60); ?>
-        <span class="live<?= $alAge > 3600 ? ' off' : '' ?>" style="margin-left:6px" title="<?= e("Last run ".$AL['at']." — {$AL['created']} new line(s), {$AL['linked']} linked, {$AL['checked']} checked, {$AL['changed']} updated".(!empty($AL['error']) ? ' · last error: '.$AL['error'] : '')) ?>"><span class="d"></span> Auto sync <?= $mins < 1 ? 'just now' : ($mins < 60 ? "$mins min ago" : (int)floor($mins/60).' h ago') ?><?= $alAge > 3600 ? ' — check the cron job' : '' ?></span>
+        <span class="live<?= $alAge > 3600 ? ' off' : '' ?>" style="margin-left:6px" title="<?= e("Last run ".$AL['at']." — {$AL['checked']} order(s) checked, {$AL['changed']} updated".(!empty($AL['error']) ? ' · last error: '.$AL['error'] : '')) ?>"><span class="d"></span> Auto sync <?= $mins < 1 ? 'just now' : ($mins < 60 ? "$mins min ago" : (int)floor($mins/60).' h ago') ?><?= $alAge > 3600 ? ' — check the cron job' : '' ?></span>
       <?php endif; ?>
     </div>
   </div>
   <div class="nh-actions">
-    <?php if ($darazConnected): ?><form method="post" style="display:inline"><input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="sync_now"><button class="btn" title="Import new Daraz orders and re-check open ones right now">⟳ Sync now</button></form><?php endif; ?>
+    <?php if ($darazConnected): ?><form method="post" style="display:inline"><input type="hidden" name="csrf" value="<?= csrf() ?>"><input type="hidden" name="_action" value="sync_now"><button class="btn" title="Re-check the status of Daraz orders already in the ERP right now">⟳ Sync status now</button></form><?php endif; ?>
     <button type="button" class="btn nh-cta" onclick="dzlOpen('')">🔗 Check a Daraz order by ID</button>
   </div>
 </div>

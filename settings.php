@@ -64,7 +64,7 @@ $groups = [
   ],
   'Automation (cron, backups, weekly email)' => [
     'cron_token'   => ['Cron Secret Token (auto-generated)','text'],
-    'daraz_auto_sync' => ['Daraz live sync (auto-import new orders, update status & fees)','select',['yes','no']],
+    'daraz_auto_sync' => ['Daraz status sync (updates status & fees of orders already in the ERP — never imports new orders)','select',['yes','no']],
     'report_email' => ['Weekly Report Email (blank = Business Email)','text'],
     'cod_alert_threshold' => ['COD Alert — warn when a courier holds more than (Rs., 0 = off)','number'],
     'reorder_lead_days'   => ['Reorder Alert — warn when stock covers fewer than (days)','number'],

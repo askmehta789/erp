@@ -152,7 +152,7 @@ try {
 } catch (Exception $e) { csay("Pick & Drop sync error: ".$e->getMessage()); }
 
 /* ============ 1d) DARAZ LIVE SYNC (every run) ============
-   imports new Daraz orders + re-checks open ones (status, price, Daraz charges) —
+   re-checks Daraz orders already in the ERP (status, price, Daraz charges) — never imports —
    see daraz_auto_sync() in daraz_common.php */
 try {
   require_once __DIR__.'/daraz_common.php';

@@ -1569,6 +1569,7 @@ window.addEventListener('keydown',function(e){
 (function(){
   try{
     var qs=new URLSearchParams(window.location.search);
+    if(qs.get('new')==='1'){ setTimeout(openOrderForm,150); }   /* the phone bar's + button */
     if(qs.get('new')==='hh'){
       setTimeout(function(){
         openOrderForm();

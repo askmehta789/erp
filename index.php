@@ -335,8 +335,123 @@ body.dark .db-ch .db-pill.on{background:#e2e8f0;color:#0f172a}
   .db .info-row{font-size:12.5px}
   .db .grid.cols-2{grid-template-columns:1fr}
 }
+/* ---------- mobile app home ---------- */
+.ah{display:none}
+@media(max-width:640px){
+  .ah{display:flex;flex-direction:column;gap:14px;margin-bottom:14px}
+  .page-head,.db > form.panel{display:none !important}
+  .ah-hero{border-radius:22px;padding:18px 18px 16px;color:#fff;background:linear-gradient(140deg,#0f172a 0%,#1e293b 60%,#334155 100%);box-shadow:0 14px 30px rgba(15,23,42,.25);position:relative;overflow:hidden}
+  .ah-hero:before{content:'';position:absolute;right:-40px;top:-60px;width:190px;height:190px;border-radius:50%;background:radial-gradient(circle,rgba(248,86,6,.35),transparent 70%)}
+  .ah-hero>*{position:relative}
+  .ah-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+  .ah-hi{font-size:19px;font-weight:800;letter-spacing:-.01em}
+  .ah-date{font-size:12.5px;opacity:.65;margin-top:2px}
+  .ah-new{width:42px;height:42px;border-radius:14px;display:grid;place-items:center;background:#f85606;color:#fff;box-shadow:0 6px 16px rgba(248,86,6,.45);flex:none}
+  .ah-today{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:16px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.1);border-radius:16px;padding:10px 4px}
+  .ah-today a{display:flex;flex-direction:column;align-items:center;gap:2px;color:#fff;text-decoration:none;min-width:0}
+  .ah-today a+a{border-left:1px solid rgba(255,255,255,.1)}
+  .ah-today b{font-size:19px;font-weight:800;font-variant-numeric:tabular-nums}
+  .ah-today span{font-size:10px;opacity:.65;white-space:nowrap;font-weight:600}
+  .ah-search{display:flex;align-items:center;gap:10px;height:48px;padding:0 16px;border-radius:16px;background:var(--surface);border:1px solid var(--border);color:var(--muted);box-shadow:0 2px 8px rgba(15,23,42,.04)}
+  .ah-search:focus-within{border-color:#f85606;box-shadow:0 0 0 3px rgba(248,86,6,.12)}
+  .ah-search input{flex:1;min-width:0;border:0 !important;outline:0;background:transparent !important;box-shadow:none !important;padding:0 !important;font-size:14.5px;color:var(--ink)}
+  .ah-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px 6px;padding:14px 8px;border-radius:20px;background:var(--surface);border:1px solid var(--border)}
+  .ah-q{display:flex;flex-direction:column;align-items:center;gap:7px;text-decoration:none;color:var(--ink);-webkit-tap-highlight-color:transparent}
+  .ah-qi{width:50px;height:50px;border-radius:16px;display:grid;place-items:center;color:var(--c);background:color-mix(in srgb,var(--c) 12%,transparent);transition:transform .12s}
+  .ah-q:active .ah-qi{transform:scale(.92)}
+  .ah-ql{font-size:11.5px;font-weight:650;text-align:center}
+  .ah-sec{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:4px 2px -4px}
+  .ah-sec h3{margin:0;font-size:15px;font-weight:800;color:var(--ink);letter-spacing:-.01em}
+  .ah-sec a{font-size:12.5px;font-weight:700;color:#f85606;text-decoration:none}
+  .ah-badge{font-size:11px;font-weight:800;color:#fff;background:#f85606;border-radius:99px;padding:1px 8px;margin-right:auto;margin-left:8px}
+  .ah-over{margin-top:10px;margin-bottom:-2px}
+  .ah-list{display:flex;flex-direction:column;border-radius:18px;background:var(--surface);border:1px solid var(--border);overflow:hidden}
+  .ah-list>a{display:flex;align-items:center;gap:12px;padding:13px 14px;text-decoration:none;color:var(--ink);-webkit-tap-highlight-color:transparent}
+  .ah-list>a+a{border-top:1px solid var(--border)}
+  .ah-list>a:active{background:var(--surface-2)}
+  .ah-dot{width:9px;height:9px;border-radius:99px;flex:none}
+  .ah-att-t{flex:1;font-size:13.5px;font-weight:600;line-height:1.35}
+  .ah-att svg{color:var(--muted-2);flex:none}
+  .ah-av{width:38px;height:38px;border-radius:12px;display:grid;place-items:center;font-weight:800;font-size:14px;color:#2563eb;background:rgba(37,99,235,.1);flex:none}
+  .ah-om{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+  .ah-om b{font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ah-om small{font-size:11.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ah-or{display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex:none}
+  .ah-or b{font-size:13px;font-variant-numeric:tabular-nums}
+  .ah-or .pill{font-size:10px;padding:1px 7px}
+  body.dark .ah-hero{background:linear-gradient(140deg,#0b1220 0%,#111a2e 60%,#1e293b 100%);border:1px solid var(--border)}
+  body.dark .ah-av{color:#93c5fd;background:rgba(96,165,250,.14)}
+}
 </style>
 
+<?php
+/* ===== mobile app home (phones only) — greeting, today, quick actions, attention, recent orders.
+   Everything below it (period, KPIs, charts …) is the normal dashboard. ===== */
+$hr = (int)date('G');
+$greet = $hr < 12 ? 'Good morning' : ($hr < 17 ? 'Good afternoon' : 'Good evening');
+$firstName = trim(explode(' ', (string)(current_user()['name'] ?? ''))[0]) ?: 'there';
+$svg = function($d) { return '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">'.$d.'</svg>'; };
+$quick = [
+  ['sales.php',        'New order', '#2563eb', '<path d="M12 5v14M5 12h14"/>'],
+  ['daraz_sales.php',  'Daraz',     '#f85606', '<path d="M6 7h12l-1 12H7L6 7z"/><path d="M9 7a3 3 0 0 1 6 0"/>'],
+  ['couriers.php',     'Courier',   '#0891b2', '<path d="M3 7h11v9H3zM14 10h4l3 3v3h-7"/><circle cx="7" cy="17.5" r="1.6"/><circle cx="17" cy="17.5" r="1.6"/>'],
+  ['expenses.php',     'Expense',   '#ea580c', '<rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 10h18M7 15h3"/>'],
+  ['products.php',     'Stock',     '#7c3aed', '<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/>'],
+  ['cod.php',          'COD',       '#16a34a', '<rect x="3" y="6" width="18" height="12" rx="2"/><circle cx="12" cy="12" r="2.6"/><path d="M6.5 9.5v.01M17.5 14.5v.01"/>'],
+  ['money_dashboard.php','Money',   '#0f766e', '<path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/>'],
+  ['salary.php',       'Staff',     '#db2777', '<circle cx="9" cy="8" r="3.2"/><path d="M3 19a6 6 0 0 1 12 0M16 4.5a3 3 0 0 1 0 6M18 19a5 5 0 0 0-2.5-4.3"/>'],
+];
+$quick = array_values(array_filter($quick, fn($q) => can_see($q[0])));
+?>
+<section class="ah">
+  <div class="ah-hero">
+    <div class="ah-top">
+      <div><div class="ah-hi"><?= e($greet) ?>, <?= e($firstName) ?> 👋</div><div class="ah-date"><?= e(date('l, j F')) ?></div></div>
+      <a class="ah-new" href="sales.php" aria-label="New order"><?= $svg('<path d="M12 5v14M5 12h14"/>') ?></a>
+    </div>
+    <div class="ah-today">
+      <a href="sales.php"><b><?= (int)$tOrders ?></b><span>Orders today</span></a>
+      <a href="sales.php?status=delivered"><b><?= (int)$tDelivered ?></b><span>Delivered</span></a>
+      <a href="sales.php?status=shipped"><b><?= (int)$inDelivery ?></b><span>In delivery</span></a>
+      <a href="sales.php?status=pending,processing"><b><?= (int)$pending ?></b><span>Pending</span></a>
+    </div>
+  </div>
+
+  <form method="get" action="search.php" class="ah-search">
+    <?= $svg('<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>') ?>
+    <input name="q" placeholder="Search orders, customers, phone…" aria-label="Search">
+  </form>
+
+  <?php if ($quick): ?>
+  <div class="ah-grid">
+    <?php foreach ($quick as $q): ?><a href="<?= e($q[0]) ?>" class="ah-q" style="--c:<?= $q[2] ?>"><span class="ah-qi"><?= $svg($q[3]) ?></span><span class="ah-ql"><?= e($q[1]) ?></span></a><?php endforeach; ?>
+  </div>
+  <?php endif; ?>
+
+  <?php if ($todo): ?>
+  <div class="ah-sec"><h3>Needs attention</h3><span class="ah-badge"><?= count($todo) ?></span></div>
+  <div class="ah-list">
+    <?php foreach (array_slice($todo, 0, 4) as $t): ?>
+      <a class="ah-att" href="<?= e($t[3]) ?>"><span class="ah-dot" style="background:<?= $t[1] ?>"></span><span class="ah-att-t"><?= e($t[2]) ?></span><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></a>
+    <?php endforeach; ?>
+  </div>
+  <?php endif; ?>
+
+  <?php if ($recent): ?>
+  <div class="ah-sec"><h3>Recent orders</h3><a href="sales.php">See all</a></div>
+  <div class="ah-list">
+    <?php foreach (array_slice($recent, 0, 5) as $o): ?>
+      <a class="ah-ord" href="sales.php?q=<?= urlencode($o['code'] ?: ('#'.$o['id'])) ?>">
+        <?php $ini = mb_strtoupper(mb_substr(trim((string)$o['customer']), 0, 1)); ?><span class="ah-av"><?= $ini !== '' ? e($ini) : '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/></svg>' ?></span>
+        <span class="ah-om"><b><?= e($o['customer'] ?: 'Walk-in') ?></b><small><?= e($o['product_name'] ?: '—') ?><?= (int)$o['qty'] > 1 ? ' ×'.(int)$o['qty'] : '' ?> · <?= e(date('j M', strtotime($o['order_date']))) ?></small></span>
+        <span class="ah-or"><b><?= money($o['sell_price'] * $o['qty']) ?></b><?= pill($o['status']) ?></span>
+      </a>
+    <?php endforeach; ?>
+  </div>
+  <?php endif; ?>
+
+  <div class="ah-sec ah-over"><h3>Business overview</h3></div>
+</section>
 <div class="page-head">
   <div><h1>📊 Dashboard</h1><p>Welcome back, <?= e(current_user()['name']) ?> — your store at a glance · <b><?= e($chLabel) ?></b> · <b><?= e($rangeLabel) ?></b><?= $isLifetime ? '' : ' <span class="muted">vs '.e($prevLabel).'</span>' ?></p></div>
   <a class="btn btn-primary" href="sales.php">+ New Order</a>

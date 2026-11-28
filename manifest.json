@@ -1,15 +1,23 @@
 {
-  "name": "Luprah Trading ERP",
-  "short_name": "Luprah ERP",
-  "description": "Luprah Trading store management",
+  "name": "Luprah ERP",
+  "short_name": "Luprah",
+  "description": "Luprah Trading — orders, Daraz, stock, money and staff in one app",
+  "id": "./index.php",
   "start_url": "index.php",
   "scope": ".",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#f4f6f9",
+  "background_color": "#ffffff",
   "theme_color": "#3b82f6",
   "icons": [
+    { "src": "assets/luprah-icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
     { "src": "assets/luprah-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
-    { "src": "assets/luprah-icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" }
+    { "src": "assets/luprah-icon-maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "assets/luprah-icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "New order", "short_name": "New order", "url": "sales.php", "icons": [{ "src": "assets/luprah-icon-192.png", "sizes": "192x192" }] },
+    { "name": "Daraz orders", "short_name": "Daraz", "url": "daraz_sales.php", "icons": [{ "src": "assets/luprah-icon-192.png", "sizes": "192x192" }] },
+    { "name": "Expenses", "short_name": "Expenses", "url": "expenses.php", "icons": [{ "src": "assets/luprah-icon-192.png", "sizes": "192x192" }] }
   ]
 }

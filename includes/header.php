@@ -20,10 +20,14 @@ $helpLine  = setting('help_line', '01-5970736');
 <link rel="icon" type="image/png" sizes="32x32" href="assets/luprah-icon-32.png?v=<?= @filemtime(__DIR__."/../assets/luprah-icon-64.png") ?>">
 <link rel="icon" type="image/png" sizes="64x64" href="assets/luprah-icon-64.png?v=<?= @filemtime(__DIR__."/../assets/luprah-icon-64.png") ?>">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500&display=swap" rel="stylesheet">
-<link rel="manifest" href="manifest.json">
+<link rel="manifest" href="manifest.json?v=<?= @filemtime(__DIR__.'/../manifest.json') ?>">
 <meta name="theme-color" content="#3b82f6">
 <link rel="apple-touch-icon" sizes="180x180" href="assets/luprah-icon-180.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Luprah">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="application-name" content="Luprah">
 <link rel="stylesheet" href="assets/style.css?v=<?= @filemtime(__DIR__.'/../assets/style.css') ?>">
 <?php $brandColor = trim(setting('brand_color','')); if ($brandColor !== ''): ?>
 <style>:root{--brand:<?= e($brandColor) ?>;--topbar:<?= e($brandColor) ?>;}</style>
